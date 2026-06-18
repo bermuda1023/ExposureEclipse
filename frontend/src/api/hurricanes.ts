@@ -66,10 +66,22 @@ export interface ImpactedCounty {
   maxCategory: number;
   closestDistanceNm: number;
   rmaxAtClosestNm: number;
+  /** Provenance of the Rmax used at closest approach: IBTrACS recon
+   * measurement or the Willoughby parametric fallback. */
+  rmaxSource: "ibtracs" | "willoughby";
   tiv: number;
   locationCount: number;
   hasData: boolean;
   byProgramme: ImpactProgrammeContribution[];
+}
+
+export interface FootprintPoint {
+  lat: number;
+  lon: number;
+  windKt: number;
+  rmaxNm: number;
+  radiusNm: number;
+  rmaxSource: "ibtracs" | "willoughby";
 }
 
 export interface ImpactSummary {
@@ -87,6 +99,10 @@ export interface HurricaneImpactResponse {
   multiplier: number;
   /** [west, south, east, north] of the impacted-county centroids; null if no impact. */
   bbox: [number, number, number, number] | null;
+  /** Contributing track points (each ≥ 64 kt sustained wind, US bbox) with
+   * the Rmax used. Frontend renders the visible wind buffer from these so it
+   * uses IBTrACS-measured Rmax wherever recon data is available. */
+  footprint: FootprintPoint[];
   summary: ImpactSummary;
   counties: ImpactedCounty[];
 }

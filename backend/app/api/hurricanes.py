@@ -180,7 +180,7 @@ def _compute_impact_payload(
     facts = _apply_peril_filter(resolved.facts, payload.perils)
     facts = apply_filters(facts, payload.filters)
 
-    impacts = compute_impact(storm, multiplier=multiplier)
+    impacts, footprint = compute_impact(storm, multiplier=multiplier)
     impacts = join_tiv(impacts, facts)
 
     total_tiv = sum(i.tiv for i in impacts)
@@ -202,6 +202,17 @@ def _compute_impact_payload(
         "currency": resolved.currency,
         "multiplier": multiplier,
         "bbox": bbox,  # [west, south, east, north] or null when no impact
+        "footprint": [
+            {
+                "lat": fp.lat,
+                "lon": fp.lon,
+                "windKt": fp.wind_kt,
+                "rmaxNm": round(fp.rmax_nm, 1),
+                "radiusNm": round(fp.radius_nm, 1),
+                "rmaxSource": fp.rmax_source,
+            }
+            for fp in footprint
+        ],
         "summary": {
             "countiesImpacted": len(impacts),
             "countiesWithData": counties_with_data,
@@ -220,6 +231,7 @@ def _compute_impact_payload(
                 "maxCategory": i.max_category,
                 "closestDistanceNm": round(i.closest_distance_nm, 1),
                 "rmaxAtClosestNm": round(i.rmax_at_closest_nm, 1),
+                "rmaxSource": i.rmax_source,
                 "tiv": i.tiv,
                 "locationCount": i.location_count,
                 "hasData": i.has_data,

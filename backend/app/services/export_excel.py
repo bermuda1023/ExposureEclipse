@@ -365,6 +365,7 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         "Saffir-Simpson",
         "Closest Eye Distance (nm)",
         "Rmax at Closest (nm)",
+        "Rmax Source",
         "TIV",
         "Location Count",
         "Has Portfolio Data",
@@ -381,11 +382,12 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         ws.cell(row=r, column=6, value=c.get("maxCategory"))
         ws.cell(row=r, column=7, value=c.get("closestDistanceNm"))
         ws.cell(row=r, column=8, value=c.get("rmaxAtClosestNm"))
-        ws.cell(row=r, column=9, value=c.get("tiv"))
-        ws.cell(row=r, column=10, value=c.get("locationCount"))
-        ws.cell(row=r, column=11, value=c.get("hasData"))
-        ws.cell(row=r, column=12, value=c.get("centroidLat"))
-        ws.cell(row=r, column=13, value=c.get("centroidLon"))
+        ws.cell(row=r, column=9, value=c.get("rmaxSource"))
+        ws.cell(row=r, column=10, value=c.get("tiv"))
+        ws.cell(row=r, column=11, value=c.get("locationCount"))
+        ws.cell(row=r, column=12, value=c.get("hasData"))
+        ws.cell(row=r, column=13, value=c.get("centroidLat"))
+        ws.cell(row=r, column=14, value=c.get("centroidLon"))
 
     buf = io.BytesIO()
     wb.save(buf)

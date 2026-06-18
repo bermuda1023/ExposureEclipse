@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from .hurdat2 import Storm, TrackPoint, category_for_wind
+from .ibtracs import lookup_rmax_nm
 
 COUNTIES_TOPO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json"
 FETCH_TIMEOUT_S = 30
@@ -33,6 +34,13 @@ DAMAGING_WIND_MULTIPLIER = 2.5  # radius of damaging winds = multiplier × Rmax
 # Counties only count as impacted if exposed to at least this sustained wind
 # (knots). 85 kt sits inside Cat 2 — anything below is treated as noise.
 MIN_IMPACT_WIND_KT = 85
+
+# The wind-footprint VISUALISATION (translucent buffer on the map) spans the
+# entire hurricane-strength lifecycle, including post-landfall track when the
+# storm is still ≥ Cat 1. Counties only show in the impact set above
+# MIN_IMPACT_WIND_KT, but the user wants to see how the wind field grew/shrank
+# across the whole hurricane life.
+MIN_FOOTPRINT_WIND_KT = 64  # Saffir-Simpson Cat 1 threshold
 
 # Conterminous US + PR bounding box. Track points outside this never touch
 # counties we care about — saves doing 3,000 distance checks per point.
@@ -202,20 +210,36 @@ def haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r_nm * math.asin(math.sqrt(a))
 
 
-def rmax_nm(wind_kt: int, lat: float) -> float:
-    """Radius of maximum winds in nautical miles via Willoughby et al. (2006):
+def rmax_nm(
+    wind_kt: int,
+    lat: float,
+    *,
+    storm_id: str | None = None,
+    datetime_utc: str | None = None,
+) -> tuple[float, str]:
+    """Radius of maximum winds in nautical miles + the source we used.
 
-        Rmax(km) = 46.6 · exp(-0.0155 · Vmax(m/s) + 0.0169 · |lat|)
+    1. **IBTrACS** measured recon Rmax, if available for this (storm_id, time).
+       Returned source ``"ibtracs"``.
+    2. **Willoughby et al. (2006)** parametric estimate as fallback:
 
-    Returns a sane floor of 8 nm so very-weak/missing-wind points still get a
-    non-zero radius for visualisation continuity.
+           Rmax(km) = 46.6 · exp(-0.0155 · Vmax(m/s) + 0.0169 · |lat|)
+
+       Returned source ``"willoughby"``. Pre-1988 storms and missing fixes
+       always fall back here since recon data is sparse before the modern era.
+
+    Floors to 8 nm so very-weak/missing-wind points still get a non-zero
+    radius for visualisation continuity.
     """
+    observed = lookup_rmax_nm(storm_id, datetime_utc)
+    if observed is not None and observed > 0:
+        return max(8.0, observed), "ibtracs"
     if wind_kt <= 0:
-        return 0.0
+        return 0.0, "willoughby"
     v_ms = wind_kt * 0.5144  # kt → m/s
     rmax_km = 46.6 * math.exp(-0.0155 * v_ms + 0.0169 * abs(lat))
     rmax = rmax_km / 1.852  # km → nm
-    return max(8.0, rmax)
+    return max(8.0, rmax), "willoughby"
 
 
 def _within_us_bbox(pt: TrackPoint) -> bool:
@@ -249,6 +273,7 @@ class CountyImpact:
     max_category: int          # Saffir-Simpson of max_wind_kt
     closest_distance_nm: float  # closest approach of the storm's eye
     rmax_at_closest_nm: float   # the Rmax we used for that point
+    rmax_source: str            # 'ibtracs' (recon) | 'willoughby' (formula)
     tiv: float                  # joined from the user's selection
     location_count: int
     has_data: bool             # true if any fact row exists for this county
@@ -259,29 +284,65 @@ class CountyImpact:
             self.by_programme = []
 
 
+@dataclass(slots=True, frozen=True)
+class FootprintPoint:
+    """One contributing track point in the impact footprint — the same Rmax
+    we used to test counties, exposed so the frontend draws the visible
+    wind-buffer from real IBTrACS-aware radii instead of recomputing."""
+
+    lat: float
+    lon: float
+    wind_kt: int
+    rmax_nm: float
+    radius_nm: float
+    rmax_source: str  # 'ibtracs' | 'willoughby'
+
+
 def compute_impact(
     storm: Storm,
     *,
     multiplier: float = DAMAGING_WIND_MULTIPLIER,
-) -> list[CountyImpact]:
+) -> tuple[list[CountyImpact], list[FootprintPoint]]:
     """Walk the storm's track and return every US county whose centroid falls
-    within ``multiplier × Rmax`` of any on-land point.
+    within ``multiplier × Rmax`` of any on-land point, plus the list of
+    contributing footprint points (one per >=85kt track fix in the US bbox).
 
     Returned counties carry NO TIV yet — that's joined in by the router from
     the user's current selection.
     """
     centroids = county_centroids()
     impacts: dict[str, CountyImpact] = {}
+    footprint: list[FootprintPoint] = []
 
     for pt in storm.track:
         if not _within_us_bbox(pt):
             continue
-        # Skip weak track points entirely: they wouldn't drive a county into
-        # the impact set anyway and let us avoid 3000 distance checks per leg.
+        if pt.wind_kt < MIN_FOOTPRINT_WIND_KT:
+            # Sub-hurricane-strength fix: skip entirely; doesn't enter footprint
+            # OR county checks.
+            continue
+        rmax, rmax_src = rmax_nm(
+            pt.wind_kt,
+            pt.lat,
+            storm_id=storm.storm_id,
+            datetime_utc=pt.datetime_utc,
+        )
+        radius = rmax * multiplier
+        footprint.append(
+            FootprintPoint(
+                lat=pt.lat,
+                lon=pt.lon,
+                wind_kt=pt.wind_kt,
+                rmax_nm=rmax,
+                radius_nm=radius,
+                rmax_source=rmax_src,
+            )
+        )
+        # County membership: only the more intense subset triggers a county hit.
+        # The weaker hurricane points still appear in the visible footprint so
+        # the user can see the full hurricane lifecycle.
         if pt.wind_kt < MIN_IMPACT_WIND_KT:
             continue
-        rmax = rmax_nm(pt.wind_kt, pt.lat)
-        radius = rmax * multiplier
         # Pre-filter by a generous lat/lon box (~1 deg ≈ 60 nm) to avoid 3,000
         # haversines per track point.
         deg = radius / 50.0  # over-generous so we never miss border counties
@@ -306,6 +367,7 @@ def compute_impact(
                     max_category=category_for_wind(pt.wind_kt),
                     closest_distance_nm=d,
                     rmax_at_closest_nm=rmax,
+                    rmax_source=rmax_src,
                     tiv=0.0,
                     location_count=0,
                     has_data=False,
@@ -317,8 +379,9 @@ def compute_impact(
                 if d < existing.closest_distance_nm:
                     existing.closest_distance_nm = d
                     existing.rmax_at_closest_nm = rmax
+                    existing.rmax_source = rmax_src
 
-    return sorted(impacts.values(), key=lambda i: -i.max_wind_kt)
+    return sorted(impacts.values(), key=lambda i: -i.max_wind_kt), footprint
 
 
 def join_tiv(

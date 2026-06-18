@@ -191,7 +191,20 @@ function FragmentRow({
             {c.name} <span style={{ color: "var(--ink-500)" }}>· {c.state}</span>
           </div>
           <div style={{ fontSize: "0.66rem", color: "var(--ink-500)" }}>
-            eye {c.closestDistanceNm.toFixed(1)} nm · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm
+            eye {c.closestDistanceNm.toFixed(1)} nm · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm{" "}
+            <span
+              title={
+                c.rmaxSource === "ibtracs"
+                  ? "IBTrACS recon-measured Rmax at closest approach"
+                  : "Willoughby (2006) parametric estimate"
+              }
+              style={{
+                fontWeight: 700,
+                color: c.rmaxSource === "ibtracs" ? "#066c2f" : "#7d5400",
+              }}
+            >
+              ({c.rmaxSource === "ibtracs" ? "IBTrACS" : "Willoughby est."})
+            </span>
           </div>
         </td>
         <td style={{ ...td, textAlign: "center" }}>

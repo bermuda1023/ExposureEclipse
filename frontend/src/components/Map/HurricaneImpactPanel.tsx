@@ -184,6 +184,9 @@ export function HurricaneImpactPanel() {
                 value={formatCount(data.summary.totalLocationCount)}
               />
             </div>
+            {data.footprint.length > 0 && (
+              <RmaxSourceLine footprint={data.footprint} />
+            )}
 
             <div
               style={{
@@ -241,6 +244,10 @@ export function HurricaneImpactPanel() {
                     </td>
                     <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
                       {c.hasData ? formatMoneyCompact(c.tiv, data.currency) : "—"}
+                      <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
+                        Rmax {c.rmaxAtClosestNm.toFixed(0)}nm ·{" "}
+                        <SourceTag source={c.rmaxSource} />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -273,6 +280,49 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div style={{ fontWeight: 700, color: "var(--ink-900)", marginTop: 1 }}>{value}</div>
+    </div>
+  );
+}
+
+function SourceTag({ source }: { source: "ibtracs" | "willoughby" }) {
+  const isIbt = source === "ibtracs";
+  return (
+    <span
+      title={
+        isIbt
+          ? "IBTrACS: NOAA recon-measured radius of maximum winds at this fix"
+          : "Willoughby (2006) parametric estimate — IBTrACS had no recon measurement for this fix"
+      }
+      style={{
+        fontWeight: 700,
+        color: isIbt ? "#066c2f" : "#7d5400",
+      }}
+    >
+      {isIbt ? "IBTrACS" : "Willoughby est."}
+    </span>
+  );
+}
+
+function RmaxSourceLine({
+  footprint,
+}: {
+  footprint: import("../../api/hurricanes").FootprintPoint[];
+}) {
+  const ibt = footprint.filter((f) => f.rmaxSource === "ibtracs").length;
+  const total = footprint.length;
+  const pct = total === 0 ? 0 : Math.round((ibt / total) * 100);
+  return (
+    <div
+      style={{
+        fontSize: "0.66rem",
+        color: "var(--ink-600)",
+        textAlign: "center",
+        padding: "4px 0 0",
+      }}
+      title="Recon-measured Rmax (IBTrACS) takes priority; Willoughby (2006) parametric estimate fills the gaps."
+    >
+      Rmax source: <strong style={{ color: "#066c2f" }}>{ibt}</strong> /{" "}
+      {total} ({pct}%) recon-measured
     </div>
   );
 }

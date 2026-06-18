@@ -33,19 +33,8 @@ const FOOTPRINT_LINE = "hurricane-footprint-line";
 const SOURCE = "hurricane-source";
 const FOOTPRINT_SOURCE = "hurricane-footprint";
 
-// Same physics as backend/services/hurricane_impact.py — Willoughby (2006) Rmax.
-const MIN_FOOTPRINT_WIND_KT = 85;
-const FOOTPRINT_MULTIPLIER = 2.5;
-const NM_PER_DEG_LAT = 60;
-
-function rmaxNm(windKt: number, lat: number): number {
-  if (windKt <= 0) return 0;
-  const vMs = windKt * 0.5144;
-  const rmaxKm = 46.6 * Math.exp(-0.0155 * vMs + 0.0169 * Math.abs(lat));
-  return Math.max(8, rmaxKm / 1.852);
-}
-
 /** Build a 48-vertex polygon ring approximating a circle of radius (nm) around (lat, lon). */
+const NM_PER_DEG_LAT = 60;
 function ringAround(lat: number, lon: number, radiusNm: number, steps = 48): number[][] {
   const ring: number[][] = [];
   const cosLat = Math.cos((lat * Math.PI) / 180);
@@ -58,16 +47,21 @@ function ringAround(lat: number, lon: number, radiusNm: number, steps = 48): num
   return ring;
 }
 
-function buildFootprintFC(storm: HurricaneStorm | undefined) {
+/** Build a FeatureCollection from the backend-supplied footprint points so
+ * the visible buffer uses IBTrACS-measured Rmax wherever recon data exists
+ * (and Willoughby for everything else). */
+function buildFootprintFC(footprint: import("../../api/hurricanes").FootprintPoint[] | undefined) {
   const features: GeoJSON.Feature[] = [];
-  if (!storm) return { type: "FeatureCollection" as const, features };
-  for (const pt of storm.track) {
-    if (pt.windKt < MIN_FOOTPRINT_WIND_KT) continue;
-    const r = rmaxNm(pt.windKt, pt.lat) * FOOTPRINT_MULTIPLIER;
+  if (!footprint) return { type: "FeatureCollection" as const, features };
+  for (const pt of footprint) {
     features.push({
       type: "Feature",
-      geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, r)] },
-      properties: { windKt: pt.windKt, cat: pt.category },
+      geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, pt.radiusNm)] },
+      properties: {
+        windKt: pt.windKt,
+        rmaxNm: pt.rmaxNm,
+        rmaxSource: pt.rmaxSource,
+      },
     });
   }
   return { type: "FeatureCollection" as const, features };
@@ -288,13 +282,14 @@ export function HurricaneLayer({ map }: Props) {
   }, [map, enabled, query.data]);
 
   // ── Wind-footprint overlay for the actively-clicked storm ──
+  // Uses the backend-supplied footprint (IBTrACS-measured Rmax where recon
+  // data exists, Willoughby fallback otherwise) so the visible buffer matches
+  // the same physics the county-impact set was tested against.
+  const impactFootprint = useHurricaneImpactStore((s) => s.data?.footprint);
   useEffect(() => {
     if (!map) return;
     const apply = () => {
-      const storm = activeImpactStormId
-        ? query.data?.storms.find((s) => s.stormId === activeImpactStormId)
-        : undefined;
-      const fc = buildFootprintFC(storm);
+      const fc = buildFootprintFC(activeImpactStormId ? impactFootprint : undefined);
       const existing = map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource | undefined;
       if (existing) {
         existing.setData(fc as never);
@@ -329,7 +324,7 @@ export function HurricaneLayer({ map }: Props) {
     };
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, activeImpactStormId, query.data]);
+  }, [map, activeImpactStormId, impactFootprint]);
 
   // ── Spotlight the clicked storm: fade every other path almost to nothing ──
   useEffect(() => {
