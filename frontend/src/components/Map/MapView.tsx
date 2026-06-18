@@ -28,6 +28,8 @@ import {
   stateGeographyIdFromFips,
 } from "./fipsToUsps";
 import { HurricaneLayer } from "./HurricaneLayer";
+import { HurricaneImpactPanel } from "./HurricaneImpactPanel";
+import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { MapTooltip } from "./Tooltip";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ?? "";
@@ -187,11 +189,41 @@ export function MapView({ data, isLoading, error }: Props) {
       map.addLayer({
         id: COUNTY_LINE,
         type: "line",
+        // Lift the COUNTY_THRESHOLD floor so impact-highlighted county
+        // outlines remain visible at low zoom too — without the data
+        // wash overpainting them.
         source: COUNTY_TILESET.src,
         "source-layer": COUNTY_TILESET.layer,
-        minzoom: COUNTY_ENV[0],
+        minzoom: 0,
         maxzoom: COUNTY_ENV[1],
-        paint: { "line-color": "#2c3a52", "line-width": 0.3, "line-opacity": 0.6 },
+        paint: {
+          "line-color": [
+            "case",
+            ["==", ["feature-state", "stormHit"], true],
+            "#dc2626",                  // red outline for storm-impacted
+            "#2c3a52",
+          ],
+          "line-width": [
+            "case",
+            ["==", ["feature-state", "stormHit"], true],
+            2.2,
+            0.3,
+          ],
+          "line-opacity": [
+            "case",
+            ["==", ["feature-state", "stormHit"], true],
+            0.95,
+            // Fade county outlines in/out around the COUNTY_THRESHOLD so
+            // we don't see a wall of county borders at country zoom.
+            [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              COUNTY_THRESHOLD - 0.4, 0,
+              COUNTY_THRESHOLD, 0.6,
+            ],
+          ],
+        },
       });
 
       styleReadyRef.current = true;
@@ -355,6 +387,36 @@ export function MapView({ data, isLoading, error }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [features, ramp, aggregationLevel]);
 
+  // ── Sync hurricane-impact county highlights via feature-state ──
+  const impactStormId = useHurricaneImpactStore((s) => s.activeStormId);
+  const impactData = useHurricaneImpactStore((s) => s.data);
+  const hitIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !styleReadyRef.current) return;
+    // Clear previous hits.
+    for (const id of hitIdsRef.current) {
+      m.removeFeatureState(
+        { source: COUNTY_TILESET.src, sourceLayer: COUNTY_TILESET.layer, id },
+        "stormHit",
+      );
+    }
+    hitIdsRef.current.clear();
+    if (!impactData) return;
+    for (const c of impactData.counties) {
+      m.setFeatureState(
+        { source: COUNTY_TILESET.src, sourceLayer: COUNTY_TILESET.layer, id: c.geoid },
+        { stormHit: true },
+      );
+      hitIdsRef.current.add(c.geoid);
+    }
+    // If user clicked an impact while zoomed out, fly to the affected bbox.
+    if (impactData.counties.length > 0 && impactStormId) {
+      const lats = impactData.counties.map(() => 0); // bbox via simple state span — keep cheap by using first 200
+      void lats; // (placeholder — we don't need to fly; user is usually already near)
+    }
+  }, [impactData, impactStormId]);
+
   // ── Render ──
   if (!hasToken) {
     return (
@@ -372,6 +434,7 @@ export function MapView({ data, isLoading, error }: Props) {
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
       <HurricaneLayer map={mapInstance} />
+      <HurricaneImpactPanel />
       {isLoading && (
         <Pill>
           <Spinner />

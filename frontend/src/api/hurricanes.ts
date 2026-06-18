@@ -46,3 +46,48 @@ export interface HurricaneFiltersParams {
 
 export const listHurricanes = (params: HurricaneFiltersParams = {}) =>
   apiGet<HurricaneListResponse>("/hurricanes", { ...params });
+
+// ───────────────────────── impact ─────────────────────────
+
+export interface ImpactedCounty {
+  geographyId: string;        // "US-FL-12086"
+  geoid: string;              // "12086"
+  name: string;               // "Charlotte"
+  state: string;              // "FL"
+  maxWindKt: number;
+  maxCategory: number;
+  closestDistanceNm: number;
+  rmaxAtClosestNm: number;
+  tiv: number;
+  locationCount: number;
+  hasData: boolean;
+}
+
+export interface ImpactSummary {
+  countiesImpacted: number;
+  countiesWithData: number;
+  totalTiv: number;
+  totalLocationCount: number;
+}
+
+export interface HurricaneImpactResponse {
+  stormId: string;
+  stormName: string;
+  year: number;
+  currency: string;
+  multiplier: number;
+  summary: ImpactSummary;
+  counties: ImpactedCounty[];
+}
+
+import { apiPost } from "./client";
+
+export const fetchHurricaneImpact = (
+  stormId: string,
+  selection: Record<string, unknown>,
+  multiplier = 2.5,
+) =>
+  apiPost<HurricaneImpactResponse>(
+    `/hurricanes/${encodeURIComponent(stormId)}/impact?multiplier=${multiplier}`,
+    selection,
+  );

@@ -13,8 +13,17 @@
 import type { GeoJSONSource, Map as MbMap, MapMouseEvent } from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { listHurricanes, type HurricaneStorm } from "../../api/hurricanes";
+import {
+  fetchHurricaneImpact,
+  listHurricanes,
+  type HurricaneStorm,
+} from "../../api/hurricanes";
 import { useHurricaneStore } from "../../state/hurricanes";
+import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
+import { useSelectionStore } from "../../state/selection";
+import { useViewStore } from "../../state/view";
+import { useFiltersStore } from "../../state/filters";
+import { useCedents } from "../../api/hooks";
 import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
 
 const LINE_LAYER = "hurricane-lines";
@@ -38,6 +47,12 @@ interface HoveredSegment {
 
 export function HurricaneLayer({ map }: Props) {
   const { enabled, yearMin, yearMax, minCategory, landfallOnly } = useHurricaneStore();
+  const startImpact = useHurricaneImpactStore((s) => s.start);
+  const setImpactData = useHurricaneImpactStore((s) => s.setData);
+  const setImpactError = useHurricaneImpactStore((s) => s.setError);
+  // Read selection + view state via getState() inside the click handler to
+  // avoid re-registering the listener every time something changes.
+  const cedentsQuery = useCedents();
   const [hovered, setHovered] = useState<HoveredSegment | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -146,12 +161,76 @@ export function HurricaneLayer({ map }: Props) {
           map.getCanvas().style.cursor = "";
         };
 
+        const onClick = (e: MapMouseEvent) => {
+          const feats = map.queryRenderedFeatures(e.point, { layers: [LINE_LAYER] });
+          const props = feats[0]?.properties as Record<string, unknown> | undefined;
+          const stormId = props?.stormId as string | undefined;
+          if (!stormId) return;
+
+          // Build the selection payload from current stores. Empty selection
+          // = still fire the request — the impact panel will show 0 TIV but
+          // the user can still see which counties got wind.
+          const sel = useSelectionStore.getState();
+          const view = useViewStore.getState();
+          const filters = useFiltersStore.getState();
+          const officeChainIds = (() => {
+            if (!sel.officeKey || !cedentsQuery.data) return [];
+            const cedent = cedentsQuery.data.cedents.find(
+              (c) => c.cedentId === sel.officeKey!.cedentId,
+            );
+            return cedent
+              ? cedent.chains
+                  .filter((ch) => ch.office === sel.officeKey!.office)
+                  .map((ch) => ch.chainId)
+              : [];
+          })();
+          const selectionPayload = {
+            cedentId: sel.cedentId,
+            chainId: sel.chainId,
+            chainIds: officeChainIds.length > 0 ? officeChainIds : undefined,
+            programmeId: sel.programmeId,
+            // Force COUNTY level for the impact request — that's what the
+            // panel renders against.
+            aggregationLevel: "COUNTY",
+            metric: "TIV",
+            perils: view.perils,
+            filters: {
+              peril: filters.peril,
+              occupancy: filters.occupancy,
+              distanceToCoast: filters.distanceToCoast,
+              geocoding: filters.geocoding,
+              construction: filters.construction,
+              numberOfStories: filters.numberOfStories,
+              yearBuilt: filters.yearBuilt,
+            },
+          };
+          // If no selection, fall back to a harmless dummy so the endpoint's
+          // require-exactly-one doesn't 422. Pick the legacy datasetId path.
+          if (
+            !selectionPayload.cedentId &&
+            !selectionPayload.chainId &&
+            !selectionPayload.chainIds &&
+            !selectionPayload.programmeId
+          ) {
+            // No selection — open the panel anyway with no TIV.
+            (selectionPayload as Record<string, unknown>).datasetId =
+              "ds-farmers-bda-2027";
+          }
+
+          startImpact(stormId);
+          fetchHurricaneImpact(stormId, selectionPayload)
+            .then((data) => setImpactData(data))
+            .catch((err) => setImpactError(String((err as Error)?.message ?? err)));
+        };
+
         map.on("mousemove", LINE_LAYER, onMove);
         map.on("mouseleave", LINE_LAYER, onLeave);
+        map.on("click", LINE_LAYER, onClick);
 
         cleanupRef.current = () => {
           map.off("mousemove", LINE_LAYER, onMove);
           map.off("mouseleave", LINE_LAYER, onLeave);
+          map.off("click", LINE_LAYER, onClick);
         };
       }
     };

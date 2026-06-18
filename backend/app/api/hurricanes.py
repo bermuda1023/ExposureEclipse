@@ -14,8 +14,11 @@ Response is shaped for direct rendering as a Mapbox source.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from ..models.exposure import MapRequest
+from ..providers import ExposureDataProvider, get_provider
+from ..services.calculations import apply_filters
 from ..services.hurdat2 import (
     Storm,
     category_for_wind,
@@ -23,6 +26,7 @@ from ..services.hurdat2 import (
     landfall_summary,
     peak_wind,
 )
+from ..services.hurricane_impact import compute_impact, join_tiv
 
 
 def _effective_category(landfall_cat: int, peak_cat: int) -> int:
@@ -120,4 +124,93 @@ def list_hurricanes(
             "minCategory": min_category,
             "landfallOnly": landfall_only,
         },
+    }
+
+
+# ───────────────────────── impact endpoint ─────────────────────────
+#
+# POST /api/hurricanes/{storm_id}/impact
+#
+# Body shape mirrors MapRequest (programmeId | chainId | chainIds[] | cedentId
+# | datasetId | datasetGroupId + filters + perils). Returns the set of US
+# counties whose centroid falls within `multiplier × Rmax` of any on-land
+# point in the storm's track, joined to TIV from the user's current selection.
+
+
+@router.post("/{storm_id}/impact")
+def hurricane_impact(
+    storm_id: str,
+    payload: MapRequest,
+    multiplier: float = Query(2.5, ge=1.0, le=6.0, alias="multiplier"),
+    provider: ExposureDataProvider = Depends(get_provider),
+) -> dict:
+    # Import here to avoid a circular dep with exposures router at module load.
+    from .exposures import _apply_peril_filter, _resolve_view, _require_exactly_one_target
+
+    _require_exactly_one_target(payload)
+    try:
+        storms = fetch_and_parse()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "INTERNAL_ERROR",
+                "message": "Failed to fetch HURDAT2 data from NOAA.",
+                "details": {"error": str(exc)},
+            },
+        ) from exc
+
+    storm = next((s for s in storms if s.storm_id == storm_id), None)
+    if storm is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "DATASET_NOT_FOUND",
+                "message": f"Storm '{storm_id}' not found in HURDAT2 set.",
+                "details": {"stormId": storm_id},
+            },
+        )
+
+    # Resolve the user's selection → fact rows, apply peril multi-select +
+    # filter block (so the TIV in the impact panel matches the rest of the
+    # workbench).
+    resolved = _resolve_view(provider, payload)
+    facts = _apply_peril_filter(resolved.facts, payload.perils)
+    facts = apply_filters(facts, payload.filters)
+
+    impacts = compute_impact(storm, multiplier=multiplier)
+    impacts = join_tiv(impacts, facts)
+
+    total_tiv = sum(i.tiv for i in impacts)
+    total_loc = sum(i.location_count for i in impacts)
+    counties_with_data = sum(1 for i in impacts if i.has_data)
+
+    return {
+        "stormId": storm.storm_id,
+        "stormName": storm.name,
+        "year": storm.year,
+        "currency": resolved.currency,
+        "multiplier": multiplier,
+        "summary": {
+            "countiesImpacted": len(impacts),
+            "countiesWithData": counties_with_data,
+            "totalTiv": total_tiv,
+            "totalLocationCount": total_loc,
+        },
+        "counties": [
+            {
+                "geographyId": i.geography_id,
+                "geoid": i.geoid,
+                "name": i.name,
+                "state": i.state_usps,
+                "maxWindKt": i.max_wind_kt,
+                "maxCategory": i.max_category,
+                "closestDistanceNm": round(i.closest_distance_nm, 1),
+                "rmaxAtClosestNm": round(i.rmax_at_closest_nm, 1),
+                "tiv": i.tiv,
+                "locationCount": i.location_count,
+                "hasData": i.has_data,
+            }
+            for i in impacts
+        ],
     }

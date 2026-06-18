@@ -12,6 +12,7 @@
  */
 
 import { create } from "zustand";
+import { useHurricaneImpactStore } from "./hurricaneImpact";
 
 export type SelectionKind = "cedent" | "office" | "chain" | "programme" | null;
 
@@ -43,10 +44,22 @@ const empty = {
 export const useSelectionStore = create<SelectionState>((set, get) => ({
   ...empty,
 
-  selectCedent: (id) => set({ ...empty, cedentId: id }),
-  selectOffice: (cedentId, office) => set({ ...empty, officeKey: { cedentId, office } }),
-  selectChain: (id) => set({ ...empty, chainId: id }),
-  selectProgramme: (id) => set({ ...empty, programmeId: id }),
+  selectCedent: (id) => {
+    set({ ...empty, cedentId: id });
+    useHurricaneImpactStore.getState().clear();
+  },
+  selectOffice: (cedentId, office) => {
+    set({ ...empty, officeKey: { cedentId, office } });
+    useHurricaneImpactStore.getState().clear();
+  },
+  selectChain: (id) => {
+    set({ ...empty, chainId: id });
+    useHurricaneImpactStore.getState().clear();
+  },
+  selectProgramme: (id) => {
+    set({ ...empty, programmeId: id });
+    useHurricaneImpactStore.getState().clear();
+  },
   setComparisonProgramme: (id) => set({ comparisonProgrammeId: id }),
   clear: () => set({ ...empty }),
 
