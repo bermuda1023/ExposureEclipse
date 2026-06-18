@@ -36,14 +36,14 @@ const FOOTPRINT_SOURCE = "hurricane-footprint";
 const CONE_SOURCE = "hurricane-cone";
 
 // Saffir-Simpson color stops keyed by midpoint wind speed (knots). Below 64
-// the cone never paints; ≥137 is Cat 5. Same palette family as the line
-// ramp in hurricaneColors.ts so the cone reads as a thickened track.
+// the cone never paints; ≥137 is Cat 5. Vivid palette so the fill reads
+// through the underlying county choropleth without an outline.
 const CONE_COLOR_STOPS: (string | number)[] = [
-  "#fbbf24", // 65 kt — Cat 1 yellow
+  "#fde047", // 65 kt — Cat 1 bright yellow
   83, "#fb923c", // Cat 2 orange
-  96, "#f97316", // Cat 3 darker orange
-  113, "#dc2626", // Cat 4 red
-  137, "#7f1d1d", // Cat 5 dark red
+  96, "#ea580c", // Cat 3 deep orange
+  113, "#b91c1c", // Cat 4 deep red
+  137, "#581c87", // Cat 5 purple — distinct from Cat 4
 ];
 
 /** Build a 48-vertex polygon ring approximating a circle of radius (nm) around (lat, lon). */
@@ -304,41 +304,10 @@ export function HurricaneLayer({ map }: Props) {
       const footprintFC = buildFootprintFC(activeImpactStormId ? impactFootprint : undefined);
       const coneFC = buildConeFC(activeImpactStormId ? impactCone : undefined);
 
-      const footExisting = map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource | undefined;
-      if (footExisting) {
-        footExisting.setData(footprintFC as never);
-      } else {
-        map.addSource(FOOTPRINT_SOURCE, { type: "geojson", data: footprintFC as never });
-        map.addLayer(
-          {
-            id: FOOTPRINT_FILL,
-            type: "fill",
-            source: FOOTPRINT_SOURCE,
-            paint: {
-              "fill-color": [
-                "interpolate", ["linear"], ["get", "windKt"],
-                ...CONE_COLOR_STOPS,
-              ] as unknown as never,
-              "fill-opacity": 0.35,
-            },
-          },
-          LINE_LAYER,
-        );
-        map.addLayer(
-          {
-            id: FOOTPRINT_LINE,
-            type: "line",
-            source: FOOTPRINT_SOURCE,
-            paint: {
-              "line-color": "#dc2626",
-              "line-width": 0.6,
-              "line-opacity": 0.55,
-            },
-          },
-          LINE_LAYER,
-        );
-      }
-
+      // Cone fill goes down FIRST (under the circles) so the per-point caps
+      // sit on top, smoothing the bearing turns. Both layers share the same
+      // wind-driven interpolate so the fills read as one continuous swath
+      // and no outline strokes break it up into discrete shapes.
       const coneExisting = map.getSource(CONE_SOURCE) as GeoJSONSource | undefined;
       if (coneExisting) {
         coneExisting.setData(coneFC as never);
@@ -354,20 +323,29 @@ export function HurricaneLayer({ map }: Props) {
                 "interpolate", ["linear"], ["get", "windKt"],
                 ...CONE_COLOR_STOPS,
               ] as unknown as never,
-              "fill-opacity": 0.40,
+              "fill-opacity": 0.55,
             },
           },
           LINE_LAYER,
         );
+      }
+
+      const footExisting = map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource | undefined;
+      if (footExisting) {
+        footExisting.setData(footprintFC as never);
+      } else {
+        map.addSource(FOOTPRINT_SOURCE, { type: "geojson", data: footprintFC as never });
         map.addLayer(
           {
-            id: CONE_LINE,
-            type: "line",
-            source: CONE_SOURCE,
+            id: FOOTPRINT_FILL,
+            type: "fill",
+            source: FOOTPRINT_SOURCE,
             paint: {
-              "line-color": "#7f1d1d",
-              "line-width": 0.4,
-              "line-opacity": 0.35,
+              "fill-color": [
+                "interpolate", ["linear"], ["get", "windKt"],
+                ...CONE_COLOR_STOPS,
+              ] as unknown as never,
+              "fill-opacity": 0.55,
             },
           },
           LINE_LAYER,
@@ -383,13 +361,12 @@ export function HurricaneLayer({ map }: Props) {
     if (!map) return;
     if (!map.getLayer(LINE_LAYER)) return;
     if (activeImpactStormId) {
-      // Selected storm: keep the line visible but dim, so it reads as the
-      // spine of the cone. Other storms fade to a hint so the user isn't
-      // distracted.
+      // Selected storm: line stays as a thin spine on top of the cone fill.
+      // Non-selected storms fade to a hint so the chosen event stands out.
       const hl = [
         "case",
         ["==", ["get", "stormId"], activeImpactStormId],
-        0.35,
+        0.55,
         0.04,
       ] as unknown as never;
       const widthHl = [
