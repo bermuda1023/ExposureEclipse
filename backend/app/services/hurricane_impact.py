@@ -25,7 +25,13 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from .hurdat2 import category_for_wind
-from .ibtracs import Storm, TrackPoint, lookup_r64_nm, lookup_rmax_nm
+from .ibtracs import (
+    Storm,
+    TrackPoint,
+    lookup_r64_nm,
+    lookup_r64_quads_nm,
+    lookup_rmax_nm,
+)
 
 COUNTIES_TOPO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json"
 FETCH_TIMEOUT_S = 30
@@ -288,12 +294,16 @@ class CountyImpact:
 class FootprintPoint:
     """One contributing track point in the impact footprint.
 
-    Carries BOTH radii so the frontend can render an inner cone (Rmax
-    eyewall) and a softer outer cone (R64 hurricane-wind extent):
+    Carries the eyewall radius (Rmax) plus the asymmetric R64 wind field
+    (per-quadrant radii of 64-kt winds, NE/SE/SW/NW). The outer cone uses
+    the quadrants to draw a lopsided wind footprint and to capture counties
+    using the actual measured wind extent at the bearing to the county.
 
       - ``rmax_nm``       — radius of maximum winds (eyewall)
-      - ``r64_nm``        — mean radius of 64-kt winds, or 2.5×Rmax fallback
-      - ``r64_source``    — 'ibtracs' when measured, 'fallback' when synthetic
+      - ``r64_nm``        — mean R64 across non-zero quadrants (symmetric)
+      - ``r64_quads_nm``  — (NE, SE, SW, NW) measured R64; None when no
+                            IBTrACS data and we fall back to symmetric
+      - ``r64_source``    — 'ibtracs' (measured) | 'fallback' (2.5×Rmax)
     """
 
     lat: float
@@ -304,6 +314,7 @@ class FootprintPoint:
     rmax_source: str        # 'ibtracs' | 'willoughby'
     r64_nm: float
     r64_source: str         # 'ibtracs' (measured) | 'fallback' (2.5×Rmax)
+    r64_quads_nm: tuple[float, float, float, float] | None  # NE, SE, SW, NW
 
 
 @dataclass(slots=True, frozen=True)
@@ -341,6 +352,31 @@ def _offset_latlon(
     return lat + d_lat, lon + d_lon
 
 
+def r64_at_bearing(
+    quads: tuple[float, float, float, float] | None,
+    bearing_deg: float,
+    *,
+    fallback_nm: float,
+) -> float:
+    """Linearly interpolate R64 across IBTrACS quadrants at a compass bearing.
+
+    Quadrant centers (NHC convention): NE=45°, SE=135°, SW=225°, NW=315°.
+    For an arbitrary bearing we find the two adjacent quadrants and weight
+    them by angular distance, giving a smooth lopsided wind footprint
+    instead of an abrupt boundary at the quadrant edges.
+
+    Zero quadrants stay zero (correct: "no 64-kt winds in this direction"),
+    so the cone tapers naturally to nothing where the storm wasn't a
+    hurricane in that direction.
+    """
+    if quads is None:
+        return fallback_nm
+    shifted = (bearing_deg - 45.0) % 360.0  # 0=NE, 90=SE, 180=SW, 270=NW
+    idx = int(shifted // 90.0) % 4
+    frac = (shifted % 90.0) / 90.0
+    return quads[idx] * (1 - frac) + quads[(idx + 1) % 4] * frac
+
+
 def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Initial compass bearing from point 1 to point 2 (degrees, 0=N, 90=E)."""
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -350,21 +386,19 @@ def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
 
 
-def _quads_along_track(
+def _quads_symmetric(
     footprint: list[FootprintPoint],
     half_width: Callable[[FootprintPoint], float],
 ) -> list[ConeQuad]:
-    """Tapered quads between consecutive footprint points. Half-width per
-    point is the value returned by ``half_width(point)`` so the same
-    machinery builds the inner Rmax cone and the outer R64 cone."""
+    """Tapered quads using a single half-width per point (symmetric cone).
+    Used for the inner Rmax cone where Rmax is by definition isotropic."""
     quads: list[ConeQuad] = []
     for i in range(len(footprint) - 1):
         a = footprint[i]
         b = footprint[i + 1]
         if a.lat == b.lat and a.lon == b.lon:
             continue
-        gap = haversine_nm(a.lat, a.lon, b.lat, b.lon)
-        if gap > 300:
+        if haversine_nm(a.lat, a.lon, b.lat, b.lon) > 300:
             continue
         bearing = _bearing_deg(a.lat, a.lon, b.lat, b.lon)
         left_bearing = (bearing - 90.0) % 360.0
@@ -392,12 +426,81 @@ def _quads_along_track(
     return quads
 
 
+def _quads_asymmetric_r64(footprint: list[FootprintPoint]) -> list[ConeQuad]:
+    """Outer cone quads with PER-SIDE width: each side of the track polygon
+    uses the R64 value at THAT side's perpendicular bearing, interpolated
+    between IBTrACS quadrants. Storms with no measured R64 fall back to
+    the symmetric mean (which equals the synthetic 2.5×Rmax for those)."""
+    quads: list[ConeQuad] = []
+    for i in range(len(footprint) - 1):
+        a = footprint[i]
+        b = footprint[i + 1]
+        if a.lat == b.lat and a.lon == b.lon:
+            continue
+        if haversine_nm(a.lat, a.lon, b.lat, b.lon) > 300:
+            continue
+        bearing = _bearing_deg(a.lat, a.lon, b.lat, b.lon)
+        left_bearing = (bearing - 90.0) % 360.0
+        right_bearing = (bearing + 90.0) % 360.0
+        wa_left = r64_at_bearing(a.r64_quads_nm, left_bearing, fallback_nm=a.r64_nm)
+        wa_right = r64_at_bearing(a.r64_quads_nm, right_bearing, fallback_nm=a.r64_nm)
+        wb_left = r64_at_bearing(b.r64_quads_nm, left_bearing, fallback_nm=b.r64_nm)
+        wb_right = r64_at_bearing(b.r64_quads_nm, right_bearing, fallback_nm=b.r64_nm)
+        if max(wa_left, wa_right, wb_left, wb_right) <= 0:
+            continue
+        # Tiny epsilon so a zero-quadrant doesn't draw a degenerate spike.
+        wa_left = max(wa_left, 0.1)
+        wa_right = max(wa_right, 0.1)
+        wb_left = max(wb_left, 0.1)
+        wb_right = max(wb_right, 0.1)
+        la_lat, la_lon = _offset_latlon(a.lat, a.lon, wa_left, left_bearing)
+        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, wa_right, right_bearing)
+        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, wb_left, left_bearing)
+        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, wb_right, right_bearing)
+        quads.append(
+            ConeQuad(
+                corners=(
+                    (la_lon, la_lat),
+                    (lb_lon, lb_lat),
+                    (rb_lon, rb_lat),
+                    (ra_lon, ra_lat),
+                ),
+                wind_kt=(a.wind_kt + b.wind_kt) // 2,
+                start_wind_kt=a.wind_kt,
+                end_wind_kt=b.wind_kt,
+            )
+        )
+    return quads
+
+
+def _asymmetric_ring(
+    lat: float,
+    lon: float,
+    quads: tuple[float, float, float, float] | None,
+    fallback_nm: float,
+    steps: int = 48,
+) -> list[list[float]]:
+    """Build a closed (lon, lat) polygon ring whose distance from (lat, lon)
+    follows the per-bearing R64 — an asymmetric "egg" around each fix that
+    blends with the asymmetric cone quads into a single seamless footprint.
+    """
+    ring: list[list[float]] = []
+    for i in range(steps + 1):
+        bearing = (360.0 * i) / steps
+        r = r64_at_bearing(quads, bearing, fallback_nm=fallback_nm)
+        if r < 0.1:
+            r = 0.1
+        pt_lat, pt_lon = _offset_latlon(lat, lon, r, bearing)
+        ring.append([round(pt_lon, 4), round(pt_lat, 4)])
+    return ring
+
+
 def _build_cones(
     footprint: list[FootprintPoint],
 ) -> tuple[list[ConeQuad], list[ConeQuad]]:
-    """(inner cone @ Rmax eyewall, outer cone @ R64 hurricane-wind extent)."""
-    inner = _quads_along_track(footprint, lambda p: p.rmax_nm)
-    outer = _quads_along_track(footprint, lambda p: p.r64_nm)
+    """(inner cone @ Rmax eyewall, outer cone @ asymmetric R64)."""
+    inner = _quads_symmetric(footprint, lambda p: p.rmax_nm)
+    outer = _quads_asymmetric_r64(footprint)
     return inner, outer
 
 
@@ -437,19 +540,18 @@ def compute_impact(
             datetime_utc=pt.datetime_utc,
         )
         radius = rmax * multiplier
-        # R64 is the measured radius of 64-kt winds (mean across the four
-        # IBTrACS quadrants). When available it's a far better "is this
-        # county inside the hurricane wind field?" test than 2.5×Rmax,
-        # which is just a heuristic. NHC didn't systematically record R64
-        # before ~2004 so we fall back to 2.5×Rmax in that case.
+        # R64 — radius of 64-kt winds, per quadrant (NE, SE, SW, NW). When
+        # IBTrACS has the measurement (post-2004 storms mostly) we use the
+        # quadrants to do asymmetric county capture; otherwise fall back to
+        # the symmetric 2.5×Rmax heuristic.
         measured_r64 = lookup_r64_nm(storm.storm_id, pt.datetime_utc)
+        measured_quads = lookup_r64_quads_nm(storm.storm_id, pt.datetime_utc)
         if measured_r64 and measured_r64 > 0:
             r64 = measured_r64
             r64_src = "ibtracs"
         else:
             r64 = radius  # 2.5×Rmax fallback
             r64_src = "fallback"
-        capture_radius = r64  # what we test counties against
         footprint.append(
             FootprintPoint(
                 lat=pt.lat,
@@ -460,6 +562,7 @@ def compute_impact(
                 rmax_source=rmax_src,
                 r64_nm=r64,
                 r64_source=r64_src,
+                r64_quads_nm=measured_quads,
             )
         )
         # County membership: only the more intense subset triggers a county hit.
@@ -467,15 +570,26 @@ def compute_impact(
         # the user can see the full hurricane lifecycle.
         if pt.wind_kt < MIN_IMPACT_WIND_KT:
             continue
-        # Pre-filter by a generous lat/lon box (~1 deg ≈ 60 nm) to avoid 3,000
-        # haversines per track point.
-        deg = capture_radius / 50.0  # over-generous so we never miss border counties
+        # Bounding-box pre-filter uses the max possible R64 (any quadrant) so
+        # we never miss a county in the storm's strongest direction.
+        max_quad_r = (
+            max(measured_quads) if measured_quads else r64
+        )
+        deg = max_quad_r / 50.0  # over-generous so we never miss border counties
         lat_lo, lat_hi = pt.lat - deg, pt.lat + deg
         lon_lo, lon_hi = pt.lon - deg, pt.lon + deg
         for c in centroids.values():
             if not (lat_lo <= c.centroid_lat <= lat_hi and lon_lo <= c.centroid_lon <= lon_hi):
                 continue
             d = haversine_nm(pt.lat, pt.lon, c.centroid_lat, c.centroid_lon)
+            # Asymmetric capture: the threshold is R64 in the direction OF
+            # the county. If the storm's wind field doesn't reach hurricane
+            # strength in that direction, the county isn't captured even
+            # when it's inside the storm's average R64.
+            bearing_to_county = _bearing_deg(pt.lat, pt.lon, c.centroid_lat, c.centroid_lon)
+            capture_radius = r64_at_bearing(
+                measured_quads, bearing_to_county, fallback_nm=r64
+            )
             if d > capture_radius:
                 continue
             existing = impacts.get(c.geoid)
@@ -506,11 +620,25 @@ def compute_impact(
                     existing.rmax_source = rmax_src
 
     inner_cone, outer_cone = _build_cones(footprint)
+    # Asymmetric "egg" polygons around each footprint point — the caps that
+    # blend with the asymmetric cone quads into a seamless wind field.
+    outer_rings: list[dict] = []
+    for pt in footprint:
+        ring = _asymmetric_ring(pt.lat, pt.lon, pt.r64_quads_nm, fallback_nm=pt.r64_nm)
+        outer_rings.append(
+            {
+                "ring": ring,
+                "wind_kt": pt.wind_kt,
+                "r64_nm": pt.r64_nm,
+                "r64_source": pt.r64_source,
+            }
+        )
     return (
         sorted(impacts.values(), key=lambda i: -i.max_wind_kt),
         footprint,
         inner_cone,
         outer_cone,
+        outer_rings,
     )
 
 

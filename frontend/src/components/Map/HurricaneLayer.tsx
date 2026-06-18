@@ -79,17 +79,23 @@ function buildFootprintFC(footprint: import("../../api/hurricanes").FootprintPoi
   return { type: "FeatureCollection" as const, features };
 }
 
-function buildOuterFootprintFC(footprint: import("../../api/hurricanes").FootprintPoint[] | undefined) {
+function buildOuterFootprintFC(
+  outerFootprint: import("../../api/hurricanes").OuterFootprintRing[] | undefined,
+) {
+  // The backend now ships asymmetric outer-footprint rings sampled from the
+  // per-bearing IBTrACS R64 (or symmetric fallback for pre-2004 storms), so
+  // the cap shape matches the asymmetric outer cone exactly and there's no
+  // visible seam where the disc meets the quad.
   const features: GeoJSON.Feature[] = [];
-  if (!footprint) return { type: "FeatureCollection" as const, features };
-  for (const pt of footprint) {
+  if (!outerFootprint) return { type: "FeatureCollection" as const, features };
+  for (const r of outerFootprint) {
     features.push({
       type: "Feature",
-      geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, pt.r64Nm)] },
+      geometry: { type: "Polygon", coordinates: [r.corners] },
       properties: {
-        windKt: pt.windKt,
-        r64Nm: pt.r64Nm,
-        r64Source: pt.r64Source,
+        windKt: r.windKt,
+        r64Nm: r.r64Nm,
+        r64Source: r.r64Source,
       },
     });
   }
@@ -315,11 +321,14 @@ export function HurricaneLayer({ map }: Props) {
   const impactFootprint = useHurricaneImpactStore((s) => s.data?.footprint);
   const impactCone = useHurricaneImpactStore((s) => s.data?.cone);
   const impactOuterCone = useHurricaneImpactStore((s) => s.data?.outerCone);
+  const impactOuterFootprint = useHurricaneImpactStore((s) => s.data?.outerFootprint);
   useEffect(() => {
     if (!map) return;
     const apply = () => {
       const footprintFC = buildFootprintFC(activeImpactStormId ? impactFootprint : undefined);
-      const outerFootprintFC = buildOuterFootprintFC(activeImpactStormId ? impactFootprint : undefined);
+      const outerFootprintFC = buildOuterFootprintFC(
+        activeImpactStormId ? impactOuterFootprint : undefined,
+      );
       const coneFC = buildConeFC(activeImpactStormId ? impactCone : undefined);
       const outerConeFC = buildConeFC(activeImpactStormId ? impactOuterCone : undefined);
 
@@ -449,7 +458,14 @@ export function HurricaneLayer({ map }: Props) {
     };
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, activeImpactStormId, impactFootprint, impactCone, impactOuterCone]);
+  }, [
+    map,
+    activeImpactStormId,
+    impactFootprint,
+    impactCone,
+    impactOuterCone,
+    impactOuterFootprint,
+  ]);
 
   // ── Spotlight the clicked storm: fade every other path almost to nothing ──
   useEffect(() => {

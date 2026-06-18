@@ -175,7 +175,9 @@ def _compute_impact_payload(
     facts = _apply_peril_filter(resolved.facts, payload.perils)
     facts = apply_filters(facts, payload.filters)
 
-    impacts, footprint, cone, outer_cone = compute_impact(storm, multiplier=multiplier)
+    impacts, footprint, cone, outer_cone, outer_rings = compute_impact(
+        storm, multiplier=multiplier
+    )
     impacts = join_tiv(impacts, facts)
 
     total_tiv = sum(i.tiv for i in impacts)
@@ -207,8 +209,26 @@ def _compute_impact_payload(
                 "rmaxSource": fp.rmax_source,
                 "r64Nm": round(fp.r64_nm, 1),
                 "r64Source": fp.r64_source,
+                # Per-quadrant R64 (NE, SE, SW, NW) in nautical miles; null
+                # when no IBTrACS measurement — caller uses the symmetric r64Nm.
+                "r64QuadsNm": (
+                    [round(v, 1) for v in fp.r64_quads_nm]
+                    if fp.r64_quads_nm is not None
+                    else None
+                ),
             }
             for fp in footprint
+        ],
+        # Asymmetric outer-footprint polygons (one per fix). Frontend renders
+        # these directly so the "egg" matches the asymmetric outer cone seam.
+        "outerFootprint": [
+            {
+                "corners": r["ring"],
+                "windKt": r["wind_kt"],
+                "r64Nm": round(r["r64_nm"], 1),
+                "r64Source": r["r64_source"],
+            }
+            for r in outer_rings
         ],
         # Inner cone (Rmax / eyewall) and outer cone (R64 / hurricane-wind
         # extent). Each quad is a closed GeoJSON ring colored by wind speed.

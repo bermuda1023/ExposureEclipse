@@ -87,11 +87,12 @@ def _parse_float(s: str) -> float | None:
 
 @lru_cache(maxsize=1)
 def _parse_csv() -> tuple[
-    dict[tuple[str, str], float],          # rmax index
-    dict[tuple[str, str], float],          # r64 (mean across non-zero quadrants) index
-    dict[str, Storm],                       # storms by ATCF id
+    dict[tuple[str, str], float],                                # rmax index
+    dict[tuple[str, str], float],                                # r64 mean (legacy)
+    dict[tuple[str, str], tuple[float, float, float, float]],    # r64 quadrants (NE, SE, SW, NW)
+    dict[str, Storm],                                            # storms by ATCF id
 ]:
-    """Single-pass fetch + parse → (rmax_index, r64_index, storms_by_atcf)."""
+    """Single-pass fetch + parse → (rmax_idx, r64_mean_idx, r64_quads_idx, storms)."""
     req = urllib.request.Request(
         IBTRACS_URL, headers={"User-Agent": "exposure-eclipse-ibtracs/1.0"}
     )
@@ -120,10 +121,11 @@ def _parse_csv() -> tuple[
         i_r64 = [header.index(f"USA_R64_{q}") for q in ("NE", "SE", "SW", "NW")]
     except ValueError:
         # Header layout drifted — bail out clean; downstream falls back gracefully.
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
     rmax_index: dict[tuple[str, str], float] = {}
     r64_index: dict[tuple[str, str], float] = {}
+    r64_quads_index: dict[tuple[str, str], tuple[float, float, float, float]] = {}
     storms: dict[str, Storm] = {}
     max_col = max(
         i_atcf, i_time, i_rmw, i_season, i_name,
@@ -162,24 +164,25 @@ def _parse_csv() -> tuple[
             except ValueError:
                 pass
 
-        # R64 index — IBTrACS records the radius of 64-kt winds in each of
-        # four quadrants. Many older fixes carry only NE filled in and the
-        # rest blank/zero; the mean of the *non-zero* quadrants is a fair
-        # representative size that the visible outer cone uses to convey
-        # the hurricane wind field's footprint.
-        quad_vals: list[float] = []
+        # R64 — radius of 64-kt winds in each of four quadrants (NE, SE, SW, NW).
+        # We keep two indexes:
+        #   - r64_index:  mean across non-zero quadrants (legacy, used by the
+        #                 detail panel + as the "symmetric" half-width when a
+        #                 caller doesn't want per-bearing detail).
+        #   - r64_quads_index: the raw four values, used to build the
+        #                 ASYMMETRIC outer cone + asymmetric county capture
+        #                 via linear interpolation between adjacent quadrants.
+        quad_raw: list[float] = []
         for ci in i_r64:
             v = row[ci].strip()
-            if not v:
-                continue
             try:
-                f = float(v)
+                quad_raw.append(float(v) if v else 0.0)
             except ValueError:
-                continue
-            if f > 0:
-                quad_vals.append(f)
-        if quad_vals:
-            r64_index[(atcf, key_dt)] = sum(quad_vals) / len(quad_vals)
+                quad_raw.append(0.0)
+        if any(v > 0 for v in quad_raw):
+            r64_quads_index[(atcf, key_dt)] = tuple(quad_raw)  # type: ignore[assignment]
+            nonzero = [v for v in quad_raw if v > 0]
+            r64_index[(atcf, key_dt)] = sum(nonzero) / len(nonzero)
 
         # Track point — needs at minimum lat/lon.
         lat = _parse_float(row[i_lat])
@@ -219,7 +222,7 @@ def _parse_csv() -> tuple[
     for s in storms.values():
         s.track.sort(key=lambda p: p.datetime_utc)
 
-    return rmax_index, r64_index, storms
+    return rmax_index, r64_index, r64_quads_index, storms
 
 
 def _rmax_index() -> dict[tuple[str, str], float]:
@@ -230,8 +233,12 @@ def _r64_index() -> dict[tuple[str, str], float]:
     return _parse_csv()[1]
 
 
-def _storms_index() -> dict[str, Storm]:
+def _r64_quads_index() -> dict[tuple[str, str], tuple[float, float, float, float]]:
     return _parse_csv()[2]
+
+
+def _storms_index() -> dict[str, Storm]:
+    return _parse_csv()[3]
 
 
 # ───────────────────────── public API ─────────────────────────
@@ -275,12 +282,10 @@ def lookup_rmax_nm(storm_id: str | None, datetime_utc: str | None) -> float | No
 
 
 def lookup_r64_nm(storm_id: str | None, datetime_utc: str | None) -> float | None:
-    """Return IBTrACS-measured mean R64 (nautical miles) for one fix, or None.
+    """Return IBTrACS-measured MEAN R64 (nautical miles) for one fix, or None.
 
-    R64 is the radius at which the wind field still reaches 64 kt (hurricane
-    threshold). Larger than Rmax; defines the wind footprint that flags
-    impacted counties. NHC didn't systematically record R64 before ~2004,
-    so older storms commonly return None — caller falls back to 2.5×Rmax.
+    Convenience wrapper that averages the non-zero quadrants. Use
+    ``lookup_r64_quads_nm`` if you need the per-quadrant detail.
     """
     if not storm_id or not datetime_utc:
         return None
@@ -288,6 +293,24 @@ def lookup_r64_nm(storm_id: str | None, datetime_utc: str | None) -> float | Non
     if key_dt is None:
         return None
     return _r64_index().get((storm_id.upper(), key_dt))
+
+
+def lookup_r64_quads_nm(
+    storm_id: str | None,
+    datetime_utc: str | None,
+) -> tuple[float, float, float, float] | None:
+    """Return IBTrACS-measured R64 per quadrant ``(NE, SE, SW, NW)`` in nm.
+
+    Zero values are kept (meaning "no 64-kt winds in that quadrant"). NHC
+    didn't systematically record R64 before ~2004, so older storms return
+    None — caller should fall back to a synthetic / symmetric radius.
+    """
+    if not storm_id or not datetime_utc:
+        return None
+    key_dt = _normalize_datetime(datetime_utc)
+    if key_dt is None:
+        return None
+    return _r64_quads_index().get((storm_id.upper(), key_dt))
 
 
 def warm_cache() -> tuple[int, int, int]:

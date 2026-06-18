@@ -86,6 +86,20 @@ export interface FootprintPoint {
    * 2.5×Rmax fallback for pre-2004 storms with no R64 measurement. */
   r64Nm: number;
   r64Source: "ibtracs" | "fallback";
+  /** Per-quadrant R64 in nautical miles (NE, SE, SW, NW). null when no
+   * IBTrACS measurement — caller falls back to symmetric r64Nm. */
+  r64QuadsNm: [number, number, number, number] | null;
+}
+
+/** Asymmetric outer-footprint polygon for one fix — the cap that blends
+ * with the asymmetric outer cone. Sampled by the backend from per-bearing
+ * R64 interpolation so left/right/front/rear widths reflect the storm's
+ * actual measured wind asymmetry. */
+export interface OuterFootprintRing {
+  corners: [number, number][];
+  windKt: number;
+  r64Nm: number;
+  r64Source: "ibtracs" | "fallback";
 }
 
 /** One tapered-quad cone segment between two adjacent footprint points.
@@ -119,10 +133,13 @@ export interface HurricaneImpactResponse {
   footprint: FootprintPoint[];
   /** Inner cone — tapered quads at Rmax (eyewall / wind-max core). */
   cone: ConeQuad[];
-  /** Outer cone — tapered quads at R64 (hurricane-wind extent). Larger and
-   * rendered with lower opacity to convey the full footprint of damaging
-   * winds while keeping the eyewall core readable on top. */
+  /** Outer cone — tapered quads at R64 (hurricane-wind extent). Lopsided
+   * to reflect the per-quadrant IBTrACS R64 measurements; rendered with
+   * lower opacity so the eyewall core stays readable on top. */
   outerCone: ConeQuad[];
+  /** Outer-footprint asymmetric rings (one per ≥64 kt fix). Shape matches
+   * the asymmetric outerCone so cap + quad seam reads as one piece. */
+  outerFootprint: OuterFootprintRing[];
   summary: ImpactSummary;
   counties: ImpactedCounty[];
 }
