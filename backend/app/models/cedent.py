@@ -93,6 +93,7 @@ class Cedent(CamelModel):
     cedent_id: str
     cedent_name: str
     chains: list[ProgrammeChain]
+    region: str | None = None  # short bucket: "Nationwide" / "California" / "Southeast"
     notes: str | None = None
 
 

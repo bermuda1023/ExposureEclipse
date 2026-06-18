@@ -65,10 +65,47 @@ export function Header() {
 
 function Logo() {
   return (
-    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden>
-      <circle cx="16" cy="16" r="13" fill="#0a1f3a" stroke="#3f80c5" strokeWidth="2" />
-      <path d="M5 16 a11 11 0 0 1 22 0 Z" fill="#3f80c5" opacity="0.65" />
-      <circle cx="16" cy="16" r="4" fill="#d97706" />
+    <svg
+      width="36"
+      height="36"
+      viewBox="0 0 40 40"
+      aria-hidden
+      style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.4))" }}
+    >
+      <defs>
+        {/* Corona ring — soft amber halo around the eclipse */}
+        <radialGradient id="ee-corona" cx="50%" cy="50%" r="50%">
+          <stop offset="55%" stopColor="#d97706" stopOpacity="0" />
+          <stop offset="78%" stopColor="#fbbf24" stopOpacity="0.55" />
+          <stop offset="100%" stopColor="#fde68a" stopOpacity="0" />
+        </radialGradient>
+        {/* Sun disc — warm gradient */}
+        <radialGradient id="ee-sun" cx="40%" cy="40%" r="70%">
+          <stop offset="0%" stopColor="#fde68a" />
+          <stop offset="60%" stopColor="#fbbf24" />
+          <stop offset="100%" stopColor="#d97706" />
+        </radialGradient>
+        {/* Moon/occluder — navy with a subtle highlight on the right edge */}
+        <radialGradient id="ee-moon" cx="65%" cy="40%" r="65%">
+          <stop offset="0%" stopColor="#1f4a85" />
+          <stop offset="100%" stopColor="#0a1f3a" />
+        </radialGradient>
+      </defs>
+
+      {/* Corona / glow */}
+      <circle cx="20" cy="20" r="19" fill="url(#ee-corona)" />
+      {/* Sun disc */}
+      <circle cx="20" cy="20" r="14" fill="url(#ee-sun)" />
+      {/* Eclipse occluder — slightly offset to give the crescent */}
+      <circle cx="23.5" cy="18.5" r="13.5" fill="url(#ee-moon)" />
+      {/* Bright limb highlight on the visible crescent edge */}
+      <path
+        d="M 9.2 13 A 14 14 0 0 0 9.2 27"
+        stroke="#fef3c7"
+        strokeWidth="0.7"
+        fill="none"
+        opacity="0.9"
+      />
     </svg>
   );
 }

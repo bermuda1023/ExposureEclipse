@@ -57,6 +57,8 @@ export interface Cedent {
   cedentId: string;
   cedentName: string;
   chains: ProgrammeChain[];
+  /** Short bucket label e.g. "Nationwide" / "California" / "Southeast". */
+  region?: string | null;
   notes?: string | null;
 }
 

@@ -177,18 +177,32 @@ function CedentItem({ cedent }: { cedent: Cedent }) {
         style={{ all: "unset", cursor: "pointer", display: "grid", gap: 2, padding: 2 }}
         title={isSelected ? "Deselect cedent" : "Select cedent — unions all offices and chains"}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
           <strong style={{ fontSize: "0.85rem", color: "var(--ink-900)" }}>
             {cedent.cedentName}
           </strong>
-          <span style={{ fontSize: "0.7rem", color: "var(--ink-500)" }}>
+          <span style={{ fontSize: "0.66rem", color: "var(--ink-500)" }}>
             {[...offices.keys()].sort().join(" · ")}
           </span>
         </div>
-        {cedent.notes && (
-          <div style={{ fontSize: "0.7rem", color: "var(--ink-500)", lineHeight: 1.3 }}>
-            {cedent.notes}
-          </div>
+        {cedent.region && (
+          <span
+            style={{
+              justifySelf: "start",
+              marginTop: 4,
+              fontSize: "0.66rem",
+              fontWeight: 600,
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              color: "var(--brand-700)",
+              background: "var(--brand-50)",
+              border: "1px solid var(--brand-400)",
+              padding: "1px 7px",
+              borderRadius: 999,
+            }}
+          >
+            {cedent.region}
+          </span>
         )}
       </button>
 
