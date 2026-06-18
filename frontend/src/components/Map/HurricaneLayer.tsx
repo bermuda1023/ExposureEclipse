@@ -35,16 +35,9 @@ const SOURCE = "hurricane-source";
 const FOOTPRINT_SOURCE = "hurricane-footprint";
 const CONE_SOURCE = "hurricane-cone";
 
-// Saffir-Simpson color stops for Mapbox ['interpolate', ['linear'], windKt, ...]
-// — must be PAIRED (stop_value, color), with the lowest stop = the floor for
-// rendering. Below 64 the cone never paints anyway (filtered out backend-side).
-const CONE_COLOR_STOPS: (string | number)[] = [
-  64, "#fde047",  // Cat 1 bright yellow
-  83, "#fb923c",  // Cat 2 orange
-  96, "#ea580c",  // Cat 3 deep orange
-  113, "#b91c1c", // Cat 4 deep red
-  137, "#581c87", // Cat 5 purple — distinct from Cat 4
-];
+// Saffir-Simpson palette used inline in the cone + footprint fill expressions
+// via a Mapbox ["step", ["get", "windKt"], default, stop, color, ...] form
+// (matches the same pattern as LINE_LAYER and renders reliably).
 
 /** Build a 48-vertex polygon ring approximating a circle of radius (nm) around (lat, lon). */
 const NM_PER_DEG_LAT = 60;
@@ -319,16 +312,24 @@ export function HurricaneLayer({ map }: Props) {
             type: "fill",
             source: CONE_SOURCE,
             paint: {
+              // ["step", input, default_output, stop1, output1, ...] — matches
+              // the same pattern as LINE_LAYER which works. Avoids the silent-
+              // fail risk an interpolate expression had earlier.
               "fill-color": [
-                "interpolate", ["linear"], ["get", "windKt"],
-                ...CONE_COLOR_STOPS,
+                "step", ["get", "windKt"],
+                "#fde047",        // default (≥ 64 kt, < 83)
+                83, "#fb923c",
+                96, "#ea580c",
+                113, "#b91c1c",
+                137, "#581c87",
               ] as unknown as never,
               "fill-opacity": 0.55,
+              "fill-outline-color": "rgba(0,0,0,0)",
             },
           },
           // Insert under the county outline so storm-hit / storm-focused
           // outlines stay visible on top of the cone fill.
-          "county-line",
+          map.getLayer("county-line") ? "county-line" : undefined,
         );
       }
 
@@ -343,16 +344,24 @@ export function HurricaneLayer({ map }: Props) {
             type: "fill",
             source: FOOTPRINT_SOURCE,
             paint: {
+              // ["step", input, default_output, stop1, output1, ...] — matches
+              // the same pattern as LINE_LAYER which works. Avoids the silent-
+              // fail risk an interpolate expression had earlier.
               "fill-color": [
-                "interpolate", ["linear"], ["get", "windKt"],
-                ...CONE_COLOR_STOPS,
+                "step", ["get", "windKt"],
+                "#fde047",        // default (≥ 64 kt, < 83)
+                83, "#fb923c",
+                96, "#ea580c",
+                113, "#b91c1c",
+                137, "#581c87",
               ] as unknown as never,
               "fill-opacity": 0.55,
+              "fill-outline-color": "rgba(0,0,0,0)",
             },
           },
           // Insert under the county outline so storm-hit / storm-focused
           // outlines stay visible on top of the cone fill.
-          "county-line",
+          map.getLayer("county-line") ? "county-line" : undefined,
         );
       }
     };

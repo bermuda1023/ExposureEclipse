@@ -366,10 +366,13 @@ def _build_cone(footprint: list[FootprintPoint]) -> list[ConeQuad]:
         bearing = _bearing_deg(a.lat, a.lon, b.lat, b.lon)
         left_bearing = (bearing - 90.0) % 360.0
         right_bearing = (bearing + 90.0) % 360.0
-        la_lat, la_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, left_bearing)
-        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, right_bearing)
-        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, left_bearing)
-        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, right_bearing)
+        # Half-width = the inflated 2.5×Rmax "damaging winds" radius (same
+        # geometry that picks counties), so the visible cone exactly matches
+        # the impact set. Using just Rmax made the cone invisibly thin.
+        la_lat, la_lon = _offset_latlon(a.lat, a.lon, a.radius_nm, left_bearing)
+        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, a.radius_nm, right_bearing)
+        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, b.radius_nm, left_bearing)
+        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, b.radius_nm, right_bearing)
         quads.append(
             ConeQuad(
                 corners=(
