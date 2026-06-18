@@ -12,6 +12,7 @@ dist/
 build/
 *.egg-info/
 .vite/
+*.tsbuildinfo
 
 # Env / secrets
 .env

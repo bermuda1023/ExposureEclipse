@@ -24,10 +24,26 @@ from ..services.hurdat2 import (
     peak_wind,
 )
 
+
+def _effective_category(landfall_cat: int, peak_cat: int) -> int:
+    """The strength used for the min-category filter.
+
+    With landfall (cat >= -1) we keep the landfall intensity. Without a
+    detectable landfall (-2) we fall back to the storm's peak intensity over
+    its lifetime — otherwise a Cat 5 storm that stayed at sea would compare
+    as ``-2 < 1`` and get dropped from "Cat 1+" filters.
+    """
+    return landfall_cat if landfall_cat != -2 else peak_cat
+
 router = APIRouter(prefix="/hurricanes", tags=["hurricanes"])
 
 
-def _serialize(storm: Storm, landfall_cat: int, landfall_state: str | None) -> dict:
+def _serialize(
+    storm: Storm,
+    landfall_cat: int,
+    landfall_state: str | None,
+    effective_cat: int,
+) -> dict:
     return {
         "stormId": storm.storm_id,
         "name": storm.name,
@@ -35,6 +51,10 @@ def _serialize(storm: Storm, landfall_cat: int, landfall_state: str | None) -> d
         "landfallCategory": landfall_cat,  # -2 = no landfall, -1 = TD, 0 = TS, 1-5 = SS
         "landfallState": landfall_state,
         "peakWindKt": peak_wind(storm),
+        # The category used by the strength filter — landfall if it had one,
+        # else the storm's peak. Frontend uses this to decide colour for the
+        # storm's overall classification in the tooltip.
+        "effectiveCategory": effective_cat,
         "track": [
             {
                 "lat": p.lat,
@@ -85,9 +105,11 @@ def list_hurricanes(
         cat, state = landfall_summary(s)
         if landfall_only and cat == -2:
             continue
-        if cat < min_category:
+        peak_cat = category_for_wind(peak_wind(s))
+        effective = _effective_category(cat, peak_cat)
+        if effective < min_category:
             continue
-        out.append(_serialize(s, cat, state))
+        out.append(_serialize(s, cat, state, effective))
 
     return {
         "storms": out,

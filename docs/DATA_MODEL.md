@@ -1,150 +1,151 @@
-# Data Model — Exposure Eclipse
+# DATA_MODEL — Cedent → Office → Chain → Programme
 
-> Conceptual entities and typed fields. In v1 several of these are mock fixtures (JSON/CSV);
-> backend responses must behave as if the normalized shapes below exist regardless of
-> provider. Enum-typed fields reference `CONTRACTS.md`. Field names here are logical; the
-> API serializes to `camelCase`.
+The navigation entity. Replaces the flat `DatasetRegistry` rows of the
+pre-cedent design.
 
-Type legend: `string`, `int`, `decimal`, `bool`, `datetime`, `enum:<Name>`, `?` = nullable.
+```
+Cedent  (Farmers Group)        region: "Nationwide"
+├── Office BDA                  ← display tier only; resolves to chainIds[]
+│   ├── ProgrammeChain "Farmers Nationwide"
+│   │   ├── Programme 2027     perils: [WS,EQ,CS]   → EDMRef → SQL pointer
+│   │   ├── Programme 2026
+│   │   └── Programme 2025
+│   └── …
+└── Office NYC
+    └── ProgrammeChain "Farmers Florida-Only"
+        ├── Programme 2027     perils: [WS]
+        └── Programme 2026
+```
 
-## DatasetRegistry
-One registered EDM/dataset.
-
-| Field | Type | Notes |
-|---|---|---|
-| DatasetId | string | stable id |
-| ServerName | string | |
-| EDMDatabaseName | string | e.g. `Re_BER_27_Farmers_HU_EDM_01` |
-| TreatyYear | int | |
-| CedentName | string? | manual in v1 |
-| ProgrammeName | string? | manual in v1 |
-| YearOfAccount | int? | |
-| Currency | enum:Currency | ISO 4217 |
-| ExposureDataCutoffDate | datetime? | |
-| PriorExposureDataCutoffDate | datetime? | |
-| AvailableGranularity | enum:AggregationLevel[] | subset of COUNTRY/STATE/COUNTY/CRESTA |
-| ERTStatus | enum:ErtStatus | |
-| LastERTGeneratedAt | datetime? | |
-| IsIncludedInPortfolio | bool | drives portfolio scope (v1) |
-| CreatedAt / UpdatedAt | datetime | |
-
-## DatasetMetadata
-Manual metadata before Front Sheet/SRS (v2 replaces).
-
-| Field | Type |
-|---|---|
-| DatasetId | string |
-| Office / Underwriter / ProductClass | string? |
-| CedentName / Broker / ProgrammeName | string? |
-| YearOfAccount | int? |
-| Currency | enum:Currency |
-| Notes | string? |
-
-## DatasetGroup
-Multiple EDMs as one analytical programme.
+## Cedent
 
 | Field | Type | Notes |
 |---|---|---|
-| DatasetGroupId | string | |
-| GroupName | string | |
-| CedentName / ProgrammeName | string? | |
-| YearOfAccount | int? | |
-| Currency | enum:Currency | all members must match (or conversion assumption) |
-| CombinationMethod | enum:CombinationMethod | default `MAX_ACROSS_PERILS_AT_VIEW_GRAIN` |
-| DistinctSegmentsConfirmed | bool | required `true` for `SUM_DISTINCT_SEGMENTS` |
-| CreatedBy / CreatedAt | string / datetime | |
-| Notes | string? | |
+| `cedentId` | string | stable id |
+| `cedentName` | string | display name |
+| `region` | string \| null | short bucket — `Nationwide` / `California` / `Southeast` |
+| `notes` | string \| null | optional (no longer rendered) |
+| `chains` | ProgrammeChain[] | one or more |
 
-## DatasetGroupMember
+Selecting a cedent = union of every chain's latest-year programme,
+combined under `MAX_ACROSS_PERILS_AT_VIEW_GRAIN` (CLAUDE.md rule 3).
 
-| Field | Type |
-|---|---|
-| DatasetGroupId | string |
-| DatasetId | string |
-| ServerName / EDMDatabaseName | string |
-| Peril | enum:Peril |
-| IncludedFlag | bool |
-| SortOrder | int |
+## Office (display tier)
 
-## ExpectedERTTable
-Configurable registry of expected standardized ERT outputs — **names are not hardcoded**.
+Not a separate entity — derived from `chain.office`. Selecting an office
+unions every chain in that office. Only three offices in v1: **BDA**, **NYC**,
+**LON**. Resolution happens in the frontend (CedentTree → `chainIds[]`),
+then the backend treats it like a multi-chain combination.
+
+## ProgrammeChain
 
 | Field | Type | Notes |
 |---|---|---|
-| ExpectedTableId | string | |
-| TableType | string | the 7 real ERT cuts (see `ERT_OUTPUT_FORMAT.md`): `TIV_SUMMARY`, `EVOLUTION`, `CONSTRUCTION_SUMMARY`, `YEARBUILT_SUMMARY`, `NUMBEROFSTORIES_SUMMARY`, `PERIL_DETAILS`, `DISTANCE_TO_COAST` |
-| AggregationLevel | enum:AggregationLevel? | |
-| TableNamePattern | string | pattern resolved from EDM/year/currency/peril/level (TBD — OPEN_QUESTIONS) |
-| RequiredForV1 | bool | drives `ERT_READY` vs `ERT_PARTIAL` |
-| Description | string | |
+| `chainId` | string | stable id |
+| `cedentId` | string | parent |
+| `chainName` | string | display name (e.g. "Farmers Nationwide") |
+| `office` | string | `BDA` / `NYC` / `LON` |
+| `defaultPeril` | Peril | metadata; can be `ALL` |
+| `programmes` | Programme[] | ordered newest-first by treatyYear |
 
-ERT status logic: all `RequiredForV1` tables present → `ERT_READY`; some present →
-`ERT_PARTIAL`; none → `ERT_NOT_FOUND`.
+A chain is the **unit of YoY comparison**: clicking a chain auto-pairs
+the latest programme with its prior. Override via `comparisonProgrammeId`.
 
-## IEDIndustryExposure
-Static RMS IED industry TIV — market-share denominator.
-
-| Field | Type | Notes |
-|---|---|---|
-| GeographyLevel | enum:AggregationLevel | has county-level rows |
-| Country / State / County / CRESTA | string? | identifiers per level |
-| OccupancySegment | enum:OccupancySegment | may be `UNKNOWN` |
-| IndustryTIV | decimal | denominator |
-| Currency | enum:Currency | |
-| SourceYear | int | |
-
-Include intentional gaps in mock to exercise `WARN_IED_DENOMINATOR_MISSING`.
-
-## ExposureFactNormalized
-Conceptual normalized analytical row the backend exposes from ERT outputs (the `Evolution`
-cut is the closest real analogue — see `ERT_OUTPUT_FORMAT.md`). May not exist physically in
-v1, but **all calculations operate on this shape** so providers are swappable.
+## Programme
 
 | Field | Type | Notes |
 |---|---|---|
-| DatasetId | string | |
-| DatasetGroupId | string? | |
-| Portname | string | ERT `PORTNAME` snapshot, `MMDDYYYY` (= ExposureDataCutoffDate) |
-| SourceServerName / SourceDatabaseName / SourceTableName | string | traceability |
-| Aggregation | enum:AggregationLevel | ERT `Aggregation` discriminator (Country/State/…) |
-| GeographyLevel | enum:AggregationLevel | = Aggregation |
-| Country / CountryName | string? | e.g. `US` / `United States` |
-| Statecode / StateName | string? | e.g. `TX` / `TEXAS` |
-| County / CRESTA / CrestaName | string? | `CrestaName` may be `No Cresta`/`blank` |
-| GeographyId | string | canonical key (`US`, `US-FL`, `US-FL-12086`, …) |
-| Peril | enum:Peril | `EQ, WS, CS, FL, FR, TR` |
-| Occupancy | string? | raw ERT occupancy (e.g. `Permanent`) |
-| OccupancyGroup | string? | e.g. `Res-MFD`, `Res-SFD` |
-| OccupancySegment | enum:OccupancySegment | derived (RES/COM/IND/UNKNOWN) |
-| Construction | string? | `Masonry` / `Reinforced` / `Wood` / … |
-| YearBuilt | string? | band (`1980 to 2000`, `Unknown`, …) |
-| DistanceToCoast | string? | lettered band (`g=> +10 Miles from Coast`) |
-| GeocodingQuality | string? | `Coordinate` / `Street/Parcel` / `Postal code` / `Block Group` |
-| NumberOfStories | string? | band (`1-3 stories`, `(blank)`, …) |
-| Building / Contents / BI | decimal | TIV components |
-| TIV | decimal | = Building + Contents + BI |
-| ExplimGross | decimal | `EXPLIM_GR` |
-| ExplimNet | decimal | `EXPLIM_NET` |
-| LocationCount | int | `#Location` |
-| AccountCount | int? | `#Account` |
-| InvalidTIV | decimal? | data quality |
-| InvalidCount | int? | `#Invalid` data quality |
-| Currency | enum:Currency | |
-| ExposureDataCutoffDate | datetime? | parsed from Portname |
+| `programmeId` | string | stable id |
+| `chainId` | string | parent |
+| `cedentId` | string | grandparent |
+| `programmeName` | string | display |
+| `treatyYear` | int | |
+| `perils` | Peril[] | **canonical** — perils this EDM carries |
+| `peril` | Peril | legacy single-peril label (defaults to `ALL`) |
+| `office` | string | mirrors chain.office |
+| `underwriter` | string | |
+| `status` | string | `bound` \| `quoted` \| `written` (free-text v1) |
+| `layer` | string \| null | e.g. `"$100M xs $50M"` (not currently displayed) |
+| `signedShare` | float \| null | e.g. `0.20` |
+| `inceptionDate` / `expiryDate` | datetime \| null | |
+| `notes` | string \| null | |
+| `edm` | EDMRef | the SQL/EDM pointer |
+| `datasetId` | string | the legacy fact-file key (`mockdata/exposure_facts/<datasetId>.json`) |
 
-## BackgroundJob
-See `BACKGROUND_JOBS_SPEC.md`. Fields: JobId, ServerName, EDMDatabaseName, TreatyYear,
-Currency, Peril, AggregationLevels, StartedBy, StartedAt, CompletedAt,
-Status(enum:JobStatus), ErrorMessage?, OutputTablesGenerated[], RowsGenerated,
-InputParametersJson, TablesChecked[], TablesGeneratedBeforeFailure[].
+**Multi-peril by default.** An office's annual EDM typically bundles WS+EQ+CS
+together. The top-of-page peril multi-select filters which perils get
+rendered. `Programme.peril` is kept only for compatibility with single-peril
+metadata.
+
+## EDMRef
+
+| Field | Type | Notes |
+|---|---|---|
+| `serverName` | string | |
+| `edmDatabaseName` | string | |
+| `currency` | string | ISO 4217 |
+| `ertStatus` | ErtStatus | `ERT_READY` \| `ERT_PARTIAL` \| `ERT_NOT_FOUND` \| `ERT_ERROR` |
+| `availableGranularity` | AggregationLevel[] | subset of COUNTRY/STATE/COUNTY/CRESTA |
+| `lastGeneratedAt` | datetime \| null | |
+| `exposureDataCutoffDate` | datetime \| null | |
+
+The SQL data-source pointer that used to live on `DatasetRegistry`. Frontend
+never imports this directly — it rides inside a Programme.
+
+## ExposureFactNormalized (the row calc operates on)
+
+The conceptual analytical row the backend exposes from ERT outputs. All
+calculations operate on this shape so providers are swappable. Stored as JSON
+per dataset_id under `mockdata/exposure_facts/<datasetId>.json` for the mock
+provider.
+
+| Field | Type | Notes |
+|---|---|---|
+| `datasetId` | string | matches Programme.datasetId |
+| `portname` | string | ERT `PORTNAME` snapshot, MMDDYYYY |
+| `sourceServerName` / `sourceDatabaseName` / `sourceTableName` | string | traceability |
+| `aggregation` / `geographyLevel` | AggregationLevel | the row's grain |
+| `country` / `countryName` | string \| null | e.g. `US` / `United States` |
+| `statecode` / `stateName` | string \| null | e.g. `FL` / `FLORIDA` |
+| `county` / `countyName` | string \| null | FIPS / display |
+| `cresta` / `crestaName` | string \| null | optional |
+| `geographyId` | string | canonical key — `US`, `US-FL`, `US-FL-12086`, `CRESTA-…` |
+| `peril` | Peril | `EQ` / `WS` / `CS` / `FL` / `FR` / `TR` |
+| `occupancy` / `occupancyGroup` | string \| null | from ERT |
+| `occupancySegment` | OccupancySegment | `RESIDENTIAL` / `COMMERCIAL` / `INDUSTRIAL` / `UNKNOWN` |
+| `construction` / `yearBuilt` / `distanceToCoast` / `geocodingQuality` / `numberOfStories` | string \| null | dimension bands |
+| `building` / `contents` / `bi` | float | TIV components |
+| `tiv` | float | **must equal** Building + Contents + BI |
+| `explimGross` / `explimNet` | float | exposure bases |
+| `locationCount` | int | |
+| `accountCount` | int \| null | |
+| `invalidTiv` / `invalidCount` | float? / int? | data quality |
+| `currency` | string | ISO 4217 |
+| `exposureDataCutoffDate` | datetime \| null | |
 
 ## Relationships
 
 ```
-DatasetRegistry 1───* DatasetGroupMember *───1 DatasetGroup
-DatasetRegistry 1───1 DatasetMetadata (v1 manual)
-DatasetRegistry 1───* ExposureFactNormalized
-IEDIndustryExposure  — joined to facts by geography (+ occupancy segment) for market share
-ExpectedERTTable     — config; matched against actual tables to derive ErtStatus
-BackgroundJob        — produced by ERT run/rerun against a Dataset
+Cedent 1──N ProgrammeChain ──N Programme ──1 EDMRef
+                                  │
+                                  └──── datasetId ──→ exposure_facts/<id>.json
+                                                              (ExposureFactNormalized[])
+
+IEDIndustryExposure (mockdata/ied_industry.csv)
+  └── joined to facts by geographyId (+ optional occupancy segment) for market share
 ```
+
+## Geometry IDs
+
+ISO-ish stable keys. The Mapbox vector tilesets render against these:
+
+| Level | Format | Example |
+|---|---|---|
+| COUNTRY | ISO-2 | `US` |
+| STATE | `US-{USPS}` | `US-FL` |
+| COUNTY | `US-{USPS}-{FIPS5}` | `US-FL-12086` |
+| CRESTA | `CRESTA-{scheme}` | `CRESTA-US_01` |
+
+FIPS↔USPS lookup lives in both `backend/scripts/build_geo.py` (for any
+geometry generation) and `frontend/src/components/Map/fipsToUsps.ts` (for
+joining tileset features to API rows).

@@ -30,7 +30,7 @@ the raw value columns like Building/Contents/BI/EXPLIM — see §1b.)
 | `GEOGRAPHY_SHARE_OF_TOTAL_PORTFOLIO` | Geography Share of Total Portfolio | ratio | geo portfolio TIV ÷ total portfolio TIV |
 | `SELECTED_DEAL_GEOGRAPHY_CONCENTRATION` | Selected Deal Geography Concentration | ratio | deal geo TIV ÷ deal total TIV |
 | `CLIENT_MARKET_SHARE` | Client Market Share | ratio | client TIV ÷ RMS IED industry TIV |
-| `YOY_CHANGE` | Year-over-Year Change | ratio (signed) | (current − prior) ÷ prior |
+| `YOY_CHANGE` | Year-over-Year Change | ratio (signed) | superseded in the UI by `yoyMode` (toggle) which wraps any selected metric; enum kept for back-compat |
 
 ## 1b. Measures (`Measure`) — raw value columns from ERT cuts
 

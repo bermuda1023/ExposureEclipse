@@ -125,6 +125,8 @@ export function Shell() {
           {leftOpen && (
             <>
               <Panel
+                id="left-rail"
+                order={1}
                 defaultSize={22}
                 minSize={16}
                 maxSize={38}
@@ -141,9 +143,14 @@ export function Shell() {
             </>
           )}
 
-          <Panel defaultSize={leftOpen && rightOpen ? 56 : 80} minSize={30}>
+          <Panel
+            id="center"
+            order={2}
+            defaultSize={leftOpen && rightOpen ? 56 : 80}
+            minSize={30}
+          >
             <PanelGroup direction="vertical" autoSaveId={`${layoutKey}-rows`}>
-              <Panel defaultSize={pivotOpen ? 65 : 100} minSize={30}>
+              <Panel id="map-row" order={1} defaultSize={pivotOpen ? 65 : 100} minSize={30}>
                 <section
                   style={{
                     display: "grid",
@@ -178,7 +185,7 @@ export function Shell() {
               {pivotOpen ? (
                 <>
                   <ResizeGutter direction="horizontal" />
-                  <Panel defaultSize={35} minSize={18} collapsible>
+                  <Panel id="pivot-row" order={2} defaultSize={35} minSize={18} collapsible>
                     <section
                       style={{
                         display: "grid",
@@ -234,6 +241,8 @@ export function Shell() {
             <>
               <ResizeGutter direction="vertical" />
               <Panel
+                id="right-rail"
+                order={3}
                 defaultSize={22}
                 minSize={16}
                 maxSize={38}

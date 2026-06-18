@@ -1,131 +1,129 @@
-# CLAUDE.md — Exposure Eclipse Agent Operating Manual
+# CLAUDE.md — Exposure Eclipse operating manual
 
-> This file is auto-loaded into context. It is the **canonical entry point** for any
-> agent or developer building Exposure Eclipse. Read it fully before writing code.
-> When in doubt, this file and `docs/CONTRACTS.md` win over prose elsewhere.
+> Auto-loaded into every conversation. Read it fully before writing code.
+> The contract is **this file + `docs/CONTRACTS.md` + `docs/DATA_MODEL.md`**.
 
-## What you are building
+## What you're building
 
-**Exposure Eclipse** (internal nickname: *Risk Reaper* — never use in UI/docs) is a
-web-based **Property Cat exposure management workbench**. It turns existing ERT/EDM
-exposure outputs into an interactive map + pivot analysis platform: select EDMs, view
-TIV/location counts geographically, compare a deal vs the loaded portfolio, compute
-client market share vs RMS IED industry TIV, analyze year-over-year movement, group
-multiple peril EDMs into one programme, and export the exact filtered view to Excel.
+**Exposure Eclipse** — a web-based Property Cat exposure management workbench
+for reinsurance underwriters. It turns ERT/EDM exposure outputs into an
+interactive Mapbox choropleth + pivot + Excel-export pipeline, and overlays
+historical hurricane tracks for context.
 
-**V1 = mock-data prototype.** Prove the UI, API contracts, calculations, warnings, and
-exports with mock data. Do **not** connect to SQL Server until the mock contract is stable.
+**V1 = mock-data prototype.** No SQL Server. Mock provider satisfies the
+same `ExposureDataProvider` ABC the SQL provider will satisfy later.
 
-## Your role
+## The 10 rules (do not violate)
 
-Act as a senior full-stack engineer + solution architect + data engineer + QA engineer.
-Optimize for **accuracy and traceability**, then UX, then everything else.
+1. **Frontend never touches data sources.** All data flows
+   *Frontend → FastAPI → Provider → mock JSON*.
+2. **Mock data first.** `MockExposureDataProvider` reads `mockdata/cedents.json`
+   + `mockdata/exposure_facts/<datasetId>.json`. SQL provider is later.
+3. **Default group combination is `MAX_ACROSS_PERILS_AT_VIEW_GRAIN`.**
+   Never sum TIV across distinct perils unless `SUM_DISTINCT_SEGMENTS` with
+   `distinctSegmentsConfirmed=true`.
+4. **Max-across-perils is computed at the current viewed grain** — every
+   active grouping dimension (geography + pivot dims). See
+   `docs/CALCULATIONS.md`.
+5. **Never silently mix currencies.** Currency rides on every monetary value
+   and is shown in every tooltip, panel, and export. Mismatch → block or warn.
+6. **Every displayed number is traceable** to: source dataset(s) → filters
+   → formula → currency → warnings.
+7. **Don't guess business logic.** When ambiguous, pick a safe default, mark
+   it as an assumption in a code comment.
+8. **No hardcoded SQL table names, support email, or Mapbox token.** All from
+   env (`.env.example` documents the surface).
+9. **Excel export accuracy > formatting.** The export reuses the same router
+   builder functions the screen uses — numbers must match.
+10. **Use canonical enums from `docs/CONTRACTS.md`** in both `backend/app/models/enums.py`
+    and `frontend/src/types/contracts.ts`. No ad-hoc string literals on the wire.
 
-## The 12 hard rules (do not violate)
-
-1. **Frontend never touches data sources.** No SQL Server, Databricks, stored procedures,
-   or internal tables from the frontend — ever. Frontend → FastAPI → Provider → data.
-2. **Mock data first.** Build against `MockExposureDataProvider`. Same API contract the
-   SQL provider will satisfy later. The frontend must not know which provider served it.
-3. **Never sum TIV across peril EDMs by default.** Default group combination is
-   `MAX_ACROSS_PERILS_AT_VIEW_GRAIN`. Summing is allowed **only** when the user explicitly
-   marks EDMs as distinct exposure segments (`SUM_DISTINCT_SEGMENTS`).
-4. **Max-across-perils is computed at the *current viewed grain*** — every active grouping
-   dimension in the current view. See `docs/CALCULATION_RULES.md`.
-5. **Never silently mix currencies.** Block or warn. Currency appears in every tooltip,
-   panel, and export. See `WARN_CURRENCY_MISMATCH` / `WARN_CURRENCY_ASSUMED`.
-6. **Every displayed number is traceable** to: source dataset(s) → filters → formula →
-   currency → warnings. If you can't trace it, don't show it.
-7. **Do not guess business logic.** If ambiguous, pick a *safe* default, label it as an
-   assumption (in code comment + UI warning where user-facing), and continue. Log it in
-   `docs/OPEN_QUESTIONS.md` if it needs sign-off.
-8. **Do not hardcode** SQL table names, the support email, or the Mapbox token. All come
-   from config (`docs/STACK_AND_SETUP.md`) or the `ExpectedERTTable` registry.
-9. **Excel export accuracy > formatting.** Numbers must match the screen/API exactly.
-10. **Use canonical enums from `docs/CONTRACTS.md`** for metrics, statuses, methods,
-    warnings, errors, perils. No ad-hoc string literals on either side of the wire.
-11. **Graceful degradation, never fabrication.** Missing county data → show state +
-    `WARN_COUNTY_DATA_UNAVAILABLE`. Never invent geography or fill denominators.
-12. **Build incrementally** following `docs/IMPLEMENTATION_PLAN.md`. Each phase has a
-    Definition of Done; don't start phase N+1 until phase N's DoD passes.
-
-## Golden path (the workflow the product exists to serve)
-
-Select server → treaty year → (filter) → refresh EDM list → pick current EDM →
-pick prior EDM (YoY) → set currency → check ERT status → (Run/Rerun ERT if needed) →
-load analysis → map by metric → hover tooltip → click geography → detail panel →
-create dataset group (WS/EQ/CS) → see max-across-perils warning → pivot → export Excel.
-
-If a change breaks this path, it's wrong regardless of how clean it is.
-
-## Tech stack (pinned in `docs/STACK_AND_SETUP.md`)
-
-- **Frontend:** React 18 + TypeScript 5 + Vite, Mapbox GL JS v3, TanStack Query,
-  Zustand, a pivot/data grid (see OPEN_QUESTIONS), Vitest + Testing Library + Playwright.
-- **Backend:** Python 3.12 + FastAPI + Pydantic v2, pandas, openpyxl/xlsxwriter, pytest.
-- **Dev ports:** frontend `5173`, backend `8000` (`/api` proxied).
-
-## Repo layout (full tree in `docs/PROJECT_STRUCTURE.md`)
+## The data model (the most important thing)
 
 ```
-/frontend        React app (never imports a DB client)
-/backend         FastAPI app, providers, calc, export, jobs
-/backend/app/providers   mock | sqlserver(v2) | databricks(v2)
-/mockdata        JSON/CSV fixtures consumed by MockExposureDataProvider
-/docs            specification pack (this is the contract)
+Cedent  (Farmers Group)        region: "Nationwide"
+└── Office BDA                  ← click = union of BDA's chains
+    ├── Chain "Nationwide"      ← click = chain; YoY auto-pairs latest vs prior
+    │   ├── Programme 2027      ← multi-peril (perils: WS+EQ+CS)  → EDMRef
+    │   ├── Programme 2026
+    │   └── Programme 2025
+    └── …
 ```
+
+- **Cedent** = the insurer; carries a region bucket (Nationwide / California / Southeast).
+- **Office** = where the deal is written (BDA / NYC / LON). Display tier only;
+  resolved to `chainIds[]` for the API.
+- **ProgrammeChain** = the renewal lineage (same deal slot year over year).
+  Unit of YoY comparison.
+- **Programme** = a specific treaty year. **Multi-peril by default** — its EDM
+  may carry WS+EQ+CS rows together. The top-of-page peril multi-select filters.
+- **EDMRef** = the SQL pointer (`serverName`, `edmDatabaseName`, currency,
+  ertStatus, availableGranularity).
+
+## Selection model (one-of)
+
+`POST /api/exposures/{map,detail,pivot}` accepts exactly one of:
+- `programmeId` — one programme/year
+- `chainId` — latest programme; prior auto-paired (override via
+  `comparisonProgrammeId`)
+- `chainIds[]` — office-level multi-chain combination
+- `cedentId` — all chains under the cedent
+- `datasetId` / `datasetGroupId` — legacy escape hatches
+
+Plus `perils: Peril[]` (multi-select; empty = ALL), `metric: MetricKey`,
+`aggregationLevel: AggregationLevel`, `filters: ExposureFilters`,
+`yoyMode: bool`.
+
+## The golden path
+
+Open app → pick a cedent / office / chain / programme in the left rail →
+peril multi-select up top → map paints state level → scroll-zoom past
+~zoom 4 → county vector tileset takes over → hover for full tooltip
+(geo, active metric, YoY delta if on, other metrics, currency, warnings)
+→ click → detail panel populates → optionally enable hurricane overlay
+→ Export to Excel.
+
+## Tech stack (pinned)
+
+- **Frontend:** React 18 + TS 5 + Vite 5 + Mapbox GL JS v3, TanStack Query v5,
+  Zustand, react-resizable-panels v2, Vitest + Testing Library.
+- **Backend:** Python 3.12 + FastAPI + Pydantic v2 + openpyxl. No pandas in
+  prod (slimmed for Vercel). pytest + httpx for tests.
+- **Map geometry:** Mapbox vector tilesets (state + county), not GeoJSON.
+  Tilesets defined in `frontend/src/components/Map/MapView.tsx`.
+- **Hurricanes:** Live fetch of NOAA HURDAT2 via the backend; lru_cached.
+- **Deploy:** Vercel (single project: static SPA + Python serverless function).
+  See `docs/DEPLOY.md`.
+
+## Project layout
+
+```
+api/                  Vercel Python entrypoint (api/index.py re-exports app.main:app)
+backend/app/          FastAPI app, providers, services, models
+backend/scripts/      Data-generation / merge scripts
+backend/tests/        pytest
+frontend/src/         React app — never imports a data client
+mockdata/             cedents.json + exposure_facts/*.json + ied_industry.csv
+docs/                 lean specification pack (~6 files)
+vercel.json           single-deploy config
+```
+
+See `docs/ARCHITECTURE.md` for the directory tree in detail.
+
+## Per-task required reading (token discipline)
+
+| Task | Read |
+|---|---|
+| Always-loaded | `CLAUDE.md` + `docs/CONTRACTS.md` |
+| Data model / mock / fact rows | `docs/DATA_MODEL.md`, `docs/MOCK_DATA.md`, `docs/ERT_OUTPUT_FORMAT.md` |
+| Calculations / grouping | `docs/CALCULATIONS.md` |
+| API endpoints | `docs/API.md` |
+| Architecture / deploy | `docs/ARCHITECTURE.md`, `docs/DEPLOY.md` |
+
+When delegating to sub-agents: scope them to the row above + `CONTRACTS.md`,
+nothing more. Agents return diffs/summaries, not file dumps.
 
 ## How to work each task
 
-For every implementation step, report: **files changed → what changed → how to run →
-how to test → assumptions made → next recommended step.** Keep diffs small and reviewable.
-
-## Per-task required reading (scope sub-agents to THIS — don't load the whole pack)
-
-A sub-agent should read **only** its row + the always-load core. This keeps each agent's
-context small. `CONTRACTS.md` is the shared contract; everything else is need-to-know.
-
-| Always load (core) | `CLAUDE.md` (this file) + `docs/CONTRACTS.md` |
-|---|---|
-| Scaffold / config | `docs/STACK_AND_SETUP.md`, `docs/PROJECT_STRUCTURE.md` |
-| Backend mock provider / data | `docs/ERT_OUTPUT_FORMAT.md`, `docs/DATA_MODEL.md`, `docs/MOCK_DATA_SPEC.md` |
-| Calculations / grouping | `docs/CALCULATION_RULES.md`, `docs/DATA_MODEL.md` |
-| API endpoints | `docs/API_SPEC.md` |
-| Map / tooltip | `docs/MAPBOX_SPEC.md`, `docs/API_SPEC.md` |
-| ERT jobs | `docs/BACKGROUND_JOBS_SPEC.md`, `docs/ERROR_HANDLING.md` |
-| Excel export | `docs/PRODUCT_REQUIREMENTS.md §15`, `docs/CALCULATION_RULES.md` |
-| Tests | `docs/TEST_PLAN.md` + the doc for the area under test |
-| Phasing / DoD | `docs/IMPLEMENTATION_PLAN.md`, `docs/DEFINITION_OF_DONE.md` |
-
-Don't re-explain the contract to a sub-agent in prose — point it at the file. Sub-agents
-return **data/diffs/summaries**, not file dumps, to the orchestrator.
-
-## Definition of Done
-
-The whole prototype's DoD is in `docs/DEFINITION_OF_DONE.md`. Per-phase DoD is in
-`docs/IMPLEMENTATION_PLAN.md`. Calculation correctness is non-negotiable — see
-`docs/TEST_PLAN.md`.
-
-## Document map
-
-| File | Purpose |
-|---|---|
-| `docs/PROJECT_BRIEF.md` | Why this exists, users, pain point, scope boundaries |
-| `docs/PRODUCT_REQUIREMENTS.md` | V1/V2 feature requirements |
-| `docs/TECHNICAL_ARCHITECTURE.md` | Layers, provider interface, build strategy |
-| `docs/CONTRACTS.md` ⭐ | **Canonical enums/constants — single source of truth** |
-| `docs/ERT_OUTPUT_FORMAT.md` ⭐ | **Real ERT cut format (from `BER25_Proforma_ERT`) — the source schema** |
-| `docs/GLOSSARY.md` | Domain terminology |
-| `docs/DATA_MODEL.md` | Entities + typed fields |
-| `docs/CALCULATION_RULES.md` | Formulas, edge cases, pseudocode |
-| `docs/API_SPEC.md` | Endpoints, request/response, errors, status codes |
-| `docs/MAPBOX_SPEC.md` | Map, layers, geometry sources, tooltips |
-| `docs/MOCK_DATA_SPEC.md` | Mock datasets, fixtures, scenarios |
-| `docs/BACKGROUND_JOBS_SPEC.md` | ERT async job lifecycle |
-| `docs/ERROR_HANDLING.md` | Error envelope, codes, email reporting |
-| `docs/STACK_AND_SETUP.md` | Versions, env vars, commands, ports |
-| `docs/PROJECT_STRUCTURE.md` | Exact repo tree + conventions |
-| `docs/IMPLEMENTATION_PLAN.md` | Phased build with per-phase DoD |
-| `docs/TEST_PLAN.md` | Test cases + fixtures |
-| `docs/DEFINITION_OF_DONE.md` | Acceptance checklist |
-| `docs/OPEN_QUESTIONS.md` | Unresolved decisions (do not guess these) |
+For every implementation step, report: **files changed → what changed → how
+to run → how to test → assumptions → next step.** Keep diffs small.

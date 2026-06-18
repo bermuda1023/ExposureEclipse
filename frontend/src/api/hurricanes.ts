@@ -25,6 +25,9 @@ export interface HurricaneStorm {
   landfallCategory: number; // -2 = none, -1 = TD, 0 = TS, 1..5 = SS
   landfallState: string | null;
   peakWindKt: number;
+  /** What the min-category filter compared against: landfall cat if the
+   * storm hit land, else peak cat over the lifetime. */
+  effectiveCategory: number;
   track: HurricaneTrackPoint[];
 }
 

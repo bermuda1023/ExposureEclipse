@@ -11,7 +11,7 @@ import { useHurricaneStore } from "../../state/hurricanes";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
 
 const CATEGORIES = [
-  { value: -2, label: "All (incl. no landfall)" },
+  { value: -1, label: "All (incl. TD/TS)" },
   { value: 0, label: "≥ TS" },
   { value: 1, label: "≥ Cat 1" },
   { value: 2, label: "≥ Cat 2" },
@@ -21,8 +21,17 @@ const CATEGORIES = [
 ];
 
 export function HurricaneControls() {
-  const { enabled, yearMin, yearMax, minCategory, setEnabled, setYearRange, setMinCategory } =
-    useHurricaneStore();
+  const {
+    enabled,
+    yearMin,
+    yearMax,
+    minCategory,
+    landfallOnly,
+    setEnabled,
+    setYearRange,
+    setMinCategory,
+    setLandfallOnly,
+  } = useHurricaneStore();
 
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -76,7 +85,8 @@ export function HurricaneControls() {
             value={minCategory}
             onChange={(e) => setMinCategory(+e.target.value)}
             style={{ fontSize: "0.78rem", width: "auto" }}
-            aria-label="Minimum landfall category"
+            aria-label="Minimum category (landfall when applicable, else peak)"
+            title="Strength filter — uses landfall intensity when the storm hit land, peak otherwise"
           >
             {CATEGORIES.map((c) => (
               <option key={c.value} value={c.value}>
@@ -84,6 +94,41 @@ export function HurricaneControls() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => setLandfallOnly(!landfallOnly)}
+            aria-pressed={landfallOnly}
+            title={
+              landfallOnly
+                ? "Only show storms that made landfall. Click to include open-sea storms (filtered by peak strength)."
+                : "Including all storms — filter uses peak strength for non-landfalling. Click to restrict to landfalling only."
+            }
+            style={{
+              fontSize: "0.72rem",
+              padding: "4px 9px",
+              borderRadius: "var(--radius-sm)",
+              border: `1px solid ${landfallOnly ? "var(--brand-700)" : "var(--ink-300)"}`,
+              background: landfallOnly ? "var(--brand-700)" : "var(--ink-0)",
+              color: landfallOnly ? "white" : "var(--ink-700)",
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "inline-flex",
+              gap: 5,
+              alignItems: "center",
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                background: landfallOnly ? "white" : "var(--ink-400)",
+                display: "inline-block",
+              }}
+            />
+            Landfall only
+          </button>
           <HurricaneLegend />
         </>
       )}
