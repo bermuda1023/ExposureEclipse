@@ -60,9 +60,11 @@ function buildFootprintFC(footprint: import("../../api/hurricanes").FootprintPoi
   const features: GeoJSON.Feature[] = [];
   if (!footprint) return { type: "FeatureCollection" as const, features };
   for (const pt of footprint) {
+    // Cap circles drawn at Rmax (eyewall) — same half-width as the cone
+    // quads, so caps and quads together form a continuous wind-max swath.
     features.push({
       type: "Feature",
-      geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, pt.radiusNm)] },
+      geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, pt.rmaxNm)] },
       properties: {
         windKt: pt.windKt,
         rmaxNm: pt.rmaxNm,

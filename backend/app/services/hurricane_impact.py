@@ -366,13 +366,14 @@ def _build_cone(footprint: list[FootprintPoint]) -> list[ConeQuad]:
         bearing = _bearing_deg(a.lat, a.lon, b.lat, b.lon)
         left_bearing = (bearing - 90.0) % 360.0
         right_bearing = (bearing + 90.0) % 360.0
-        # Half-width = the inflated 2.5×Rmax "damaging winds" radius (same
-        # geometry that picks counties), so the visible cone exactly matches
-        # the impact set. Using just Rmax made the cone invisibly thin.
-        la_lat, la_lon = _offset_latlon(a.lat, a.lon, a.radius_nm, left_bearing)
-        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, a.radius_nm, right_bearing)
-        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, b.radius_nm, left_bearing)
-        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, b.radius_nm, right_bearing)
+        # Cone half-width = Rmax (radius of MAXIMUM winds — the eyewall).
+        # The visible cone now shows the true wind-max core. The broader
+        # 2.5×Rmax "damaging-winds" zone is what flags impacted counties
+        # red on the map — different concept, different visual.
+        la_lat, la_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, left_bearing)
+        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, right_bearing)
+        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, left_bearing)
+        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, right_bearing)
         quads.append(
             ConeQuad(
                 corners=(
@@ -408,9 +409,15 @@ def compute_impact(
     for pt in storm.track:
         if not _within_us_bbox(pt):
             continue
-        if pt.wind_kt < MIN_FOOTPRINT_WIND_KT:
-            # Sub-hurricane-strength fix: skip entirely; doesn't enter footprint
-            # OR county checks.
+        # Two filters for "is this a hurricane right now":
+        #   - wind ≥ 64 kt (Cat 1)
+        #   - IBTrACS USA_STATUS == "HU" (true tropical hurricane phase)
+        # The second filter matters because IBTrACS reports a much larger
+        # Rmax once the storm goes extratropical (EX) — Michael 2018 jumps
+        # from 15 nm during landfall to 120 nm a few days later as the
+        # wind field reorganises. Without the status filter we'd render an
+        # absurdly large post-tropical cone.
+        if pt.wind_kt < MIN_FOOTPRINT_WIND_KT or pt.status != "HU":
             continue
         rmax, rmax_src = rmax_nm(
             pt.wind_kt,
