@@ -21,6 +21,7 @@ import {
 import { useHurricaneStore } from "../../state/hurricanes";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { useSelectionStore } from "../../state/selection";
+import { useScopeFiltersStore } from "../../state/scopeFilters";
 import { useViewStore } from "../../state/view";
 import { useFiltersStore } from "../../state/filters";
 import { useCedents } from "../../api/hooks";
@@ -205,12 +206,15 @@ export function HurricaneLayer({ map }: Props) {
           const stormId = props?.stormId as string | undefined;
           if (!stormId) return;
 
-          // Build the selection payload from current stores. Empty selection
-          // = still fire the request — the impact panel will show 0 TIV but
-          // the user can still see which counties got wind.
+          // Build the selection payload from the *same* logic Shell.tsx uses
+          // for the map request — so the impact panel aggregates exactly
+          // what's visible on the map (single deal, office, scope filters, or
+          // portfolio mode when nothing's set).
           const sel = useSelectionStore.getState();
           const view = useViewStore.getState();
           const filters = useFiltersStore.getState();
+          const scope = useScopeFiltersStore.getState();
+
           const officeChainIds = (() => {
             if (!sel.officeKey || !cedentsQuery.data) return [];
             const cedent = cedentsQuery.data.cedents.find(
@@ -222,10 +226,45 @@ export function HurricaneLayer({ map }: Props) {
                   .map((ch) => ch.chainId)
               : [];
           })();
+          // Scope filters → matching chainIds (only consulted when no explicit
+          // deal is picked, mirroring Shell.tsx).
+          const scopeChainIds = (() => {
+            if (!cedentsQuery.data) return [];
+            const officeSet = scope.offices.length ? new Set(scope.offices) : null;
+            const regionSet = scope.regions.length ? new Set(scope.regions) : null;
+            const uwSet = scope.underwriters.length
+              ? new Set(scope.underwriters)
+              : null;
+            const out: string[] = [];
+            for (const c of cedentsQuery.data.cedents) {
+              if (regionSet && (!c.region || !regionSet.has(c.region))) continue;
+              for (const ch of c.chains) {
+                if (officeSet && !officeSet.has(ch.office)) continue;
+                if (uwSet && !ch.programmes.some((p) => uwSet.has(p.underwriter)))
+                  continue;
+                out.push(ch.chainId);
+              }
+            }
+            return out;
+          })();
+          const hasScope =
+            scope.offices.length + scope.regions.length + scope.underwriters.length >
+            0;
+
+          const effectiveChainIds: string[] | undefined = (() => {
+            if (sel.programmeId || sel.chainId || sel.cedentId) return undefined;
+            if (officeChainIds.length > 0) return officeChainIds;
+            if (hasScope && scopeChainIds.length > 0) return scopeChainIds;
+            return undefined;
+          })();
+
+          // Empty target set is now a valid request: backend reads it as
+          // portfolio mode (union of every in-force programme). No more
+          // fallback to a single hardcoded dataset.
           const selectionPayload = {
             cedentId: sel.cedentId,
             chainId: sel.chainId,
-            chainIds: officeChainIds.length > 0 ? officeChainIds : undefined,
+            chainIds: effectiveChainIds,
             programmeId: sel.programmeId,
             // Force COUNTY level for the impact request — that's what the
             // panel renders against.
@@ -242,18 +281,6 @@ export function HurricaneLayer({ map }: Props) {
               yearBuilt: filters.yearBuilt,
             },
           };
-          // If no selection, fall back to a harmless dummy so the endpoint's
-          // require-exactly-one doesn't 422. Pick the legacy datasetId path.
-          if (
-            !selectionPayload.cedentId &&
-            !selectionPayload.chainId &&
-            !selectionPayload.chainIds &&
-            !selectionPayload.programmeId
-          ) {
-            // No selection — open the panel anyway with no TIV.
-            (selectionPayload as Record<string, unknown>).datasetId =
-              "ds-farmers-bda-2027";
-          }
 
           startImpact(stormId, selectionPayload);
           fetchHurricaneImpact(stormId, selectionPayload)
