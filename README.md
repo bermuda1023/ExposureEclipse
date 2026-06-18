@@ -62,3 +62,50 @@ Set `VITE_MAPBOX_TOKEN` (frontend) and `DATA_PROVIDER=mock` (backend). See
 
 Specification pack complete. Implementation starts at Phase 0 in
 `docs/IMPLEMENTATION_PLAN.md`.
+
+## Deploying to Vercel (frontend + backend, one repo, one domain)
+
+Vercel hosts both the static React build and the FastAPI handler as a
+serverless Python function — no CORS plumbing, no second platform.
+
+**Repo layout for deploy:**
+```
+vercel.json              ← routes /api/* to the Python function, /* to the SPA
+api/index.py             ← Vercel Python entrypoint; re-exports FastAPI app
+api/requirements.txt     ← lean runtime deps (no pandas/pytest/httpx)
+backend/app/             ← unchanged source
+mockdata/                ← bundled with the function via `includeFiles`
+frontend/                ← Vite build → dist/ served as static
+frontend/.env.production ← `VITE_API_BASE_URL=/api` (same-origin, no proxy)
+```
+
+**One-time setup:**
+```bash
+npm i -g vercel          # if you don't have it
+vercel link              # link this repo to a Vercel project
+```
+
+**Set env vars in the Vercel dashboard (Project → Settings → Environment Variables):**
+- `VITE_MAPBOX_TOKEN` — your Mapbox public token (Production scope)
+- `DATA_PROVIDER` — `mock`
+- `SUPPORT_ERROR_EMAIL` — any address; v1 uses the no-op email transport
+
+**Deploy:**
+```bash
+vercel              # preview
+vercel --prod       # production
+```
+
+**Caveats (serverless quirks of the current code):**
+1. The ERT background-job lifecycle (`services/jobs.py`) keeps state in-process,
+   so a job submitted on one lambda may be polled from a different one and look
+   "missing". For the demo it just means the queued→running→completed animation
+   might glitch. Fix when needed: persist the registry in Vercel KV.
+2. The dataset-group create endpoint has the same in-memory issue, but the UI
+   no longer surfaces it under the cedent/office model — so no user impact.
+
+**Local dev still works exactly as before:**
+```bash
+cd backend && .venv/Scripts/python -m uvicorn app.main:app --port 8000
+cd frontend && npm run dev   # http://localhost:5173 (Vite proxies /api → :8000)
+```

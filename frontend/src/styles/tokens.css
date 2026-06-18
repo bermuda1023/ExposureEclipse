@@ -1,0 +1,133 @@
+/* Design tokens — single source of truth for the visual system.
+ *
+ * Palette is a navy / slate / amber set chosen to read as "serious cat
+ * underwriting workbench" rather than "default React app". Avoid pure black
+ * on pure white; chrome lives in the slate scale.
+ */
+
+:root {
+  /* Brand */
+  --brand-900: #0a1f3a;
+  --brand-800: #102a4c;
+  --brand-700: #173762;
+  --brand-600: #1f4a85;
+  --brand-500: #2563a8;
+  --brand-400: #3f80c5;
+  --brand-100: #e5eef9;
+  --brand-50: #f3f7fc;
+
+  /* Neutral / slate scale */
+  --ink-900: #0f172a;
+  --ink-700: #334155;
+  --ink-600: #475569;
+  --ink-500: #64748b;
+  --ink-400: #94a3b8;
+  --ink-300: #cbd5e1;
+  --ink-200: #e2e8f0;
+  --ink-100: #f1f5f9;
+  --ink-50:  #f8fafc;
+  --ink-0:   #ffffff;
+
+  /* Semantic */
+  --ok-700:    #166534;
+  --ok-500:    #16a34a;
+  --ok-100:    #dcfce7;
+  --warn-700:  #92400e;
+  --warn-500:  #d97706;
+  --warn-100:  #fef3c7;
+  --error-700: #991b1b;
+  --error-500: #dc2626;
+  --error-100: #fee2e2;
+  --info-700:  #1e3a8a;
+  --info-500:  #2563eb;
+  --info-100:  #dbeafe;
+  --accent-500: #d97706; /* amber accent used sparingly */
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow:    0 1px 3px rgba(15, 23, 42, 0.07), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.10), 0 4px 6px -4px rgba(15, 23, 42, 0.05);
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius:    6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Typography */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Sizing */
+  --sidebar-w: 320px;
+  --detail-w:  360px;
+  --header-h:  60px;
+}
+
+/* Reset + base */
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-900);
+  background: var(--ink-100);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 { margin: 0; line-height: 1.25; letter-spacing: -0.01em; color: var(--ink-900); }
+code, pre { font-family: var(--font-mono); font-size: 0.85em; }
+a { color: var(--brand-600); }
+
+button {
+  font: inherit;
+  border: 1px solid var(--ink-300);
+  background: var(--ink-0);
+  color: var(--ink-900);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 80ms ease, border-color 80ms ease, color 80ms ease;
+}
+button:hover:not(:disabled) { background: var(--ink-50); border-color: var(--ink-400); }
+button:disabled { color: var(--ink-400); background: var(--ink-100); cursor: not-allowed; }
+button.primary {
+  background: var(--brand-700);
+  color: white;
+  border-color: var(--brand-700);
+}
+button.primary:hover:not(:disabled) { background: var(--brand-600); border-color: var(--brand-600); }
+button.ghost { background: transparent; border-color: transparent; color: var(--brand-600); }
+button.ghost:hover:not(:disabled) { background: var(--brand-50); }
+
+input, select {
+  font: inherit;
+  border: 1px solid var(--ink-300);
+  background: var(--ink-0);
+  color: var(--ink-900);
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  width: 100%;
+}
+input:focus, select:focus, button:focus-visible {
+  outline: 2px solid var(--brand-400);
+  outline-offset: 1px;
+}
+
+/* Reusable card */
+.card {
+  background: var(--ink-0);
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Scrollbars — keep it subtle but visible */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--ink-300); border-radius: 5px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--ink-400); }
+*::-webkit-scrollbar-track { background: transparent; }

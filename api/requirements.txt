@@ -1,0 +1,6 @@
+# Runtime deps for the Vercel Python serverless function.
+# Kept lean: no pandas, no pytest, no httpx — those are dev-only.
+fastapi>=0.115
+pydantic>=2.9
+pydantic-settings>=2.5
+openpyxl>=3.1

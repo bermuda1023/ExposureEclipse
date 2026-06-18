@@ -1,0 +1,442 @@
+[
+  {
+    "cedentId": "ced-farmers",
+    "cedentName": "Farmers Group",
+    "notes": "US national insurer; BDA writes the bundled nationwide treaty, NYC writes a FL-only deal.",
+    "chains": [
+      {
+        "chainId": "chain-farmers-bda",
+        "cedentId": "ced-farmers",
+        "chainName": "Farmers Nationwide",
+        "office": "BDA",
+        "defaultPeril": "ALL",
+        "programmes": [
+          {
+            "programmeId": "prog-farmers-bda-2027",
+            "chainId": "chain-farmers-bda",
+            "cedentId": "ced-farmers",
+            "programmeName": "Farmers Nationwide — 2027 Treaty",
+            "treatyYear": 2027,
+            "perils": ["WS", "EQ", "CS"],
+            "peril": "ALL",
+            "office": "BDA",
+            "underwriter": "M. Hayes",
+            "status": "bound",
+            "signedShare": 0.20,
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z",
+            "datasetId": "ds-farmers-bda-2027",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_27_Farmers_BDA_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY", "CRESTA"],
+              "lastGeneratedAt": "2026-05-02T14:00:00Z",
+              "exposureDataCutoffDate": "2025-09-30T00:00:00Z"
+            }
+          },
+          {
+            "programmeId": "prog-farmers-bda-2026",
+            "chainId": "chain-farmers-bda",
+            "cedentId": "ced-farmers",
+            "programmeName": "Farmers Nationwide — 2026 Treaty",
+            "treatyYear": 2026,
+            "perils": ["WS", "EQ", "CS"],
+            "peril": "ALL",
+            "office": "BDA",
+            "underwriter": "M. Hayes",
+            "status": "bound",
+            "signedShare": 0.20,
+            "datasetId": "ds-farmers-bda-2026",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_26_Farmers_BDA_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2025-05-02T14:00:00Z",
+              "exposureDataCutoffDate": "2024-09-30T00:00:00Z"
+            }
+          },
+          {
+            "programmeId": "prog-farmers-bda-2025",
+            "chainId": "chain-farmers-bda",
+            "cedentId": "ced-farmers",
+            "programmeName": "Farmers Nationwide — 2025 Treaty",
+            "treatyYear": 2025,
+            "perils": ["WS", "EQ", "CS"],
+            "peril": "ALL",
+            "office": "BDA",
+            "underwriter": "M. Hayes",
+            "status": "bound",
+            "signedShare": 0.18,
+            "datasetId": "ds-farmers-bda-2025",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_25_Farmers_BDA_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2024-05-02T14:00:00Z",
+              "exposureDataCutoffDate": "2023-09-30T00:00:00Z"
+            }
+          }
+        ]
+      },
+      {
+        "chainId": "chain-farmers-nyc-fl",
+        "cedentId": "ced-farmers",
+        "chainName": "Farmers Florida-Only",
+        "office": "NYC",
+        "defaultPeril": "WS",
+        "programmes": [
+          {
+            "programmeId": "prog-farmers-nyc-fl-2027",
+            "chainId": "chain-farmers-nyc-fl",
+            "cedentId": "ced-farmers",
+            "programmeName": "Farmers FL-Only — 2027",
+            "treatyYear": 2027,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "NYC",
+            "underwriter": "J. Rivera",
+            "status": "bound",
+            "signedShare": 0.30,
+            "datasetId": "ds-farmers-nyfl-27-ws",
+            "edm": {
+              "serverName": "USA-SQL02",
+              "edmDatabaseName": "Re_USA_27_Farmers_FL_WS_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2026-06-04T11:30:00Z",
+              "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
+            }
+          },
+          {
+            "programmeId": "prog-farmers-nyc-fl-2026",
+            "chainId": "chain-farmers-nyc-fl",
+            "cedentId": "ced-farmers",
+            "programmeName": "Farmers FL-Only — 2026",
+            "treatyYear": 2026,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "NYC",
+            "underwriter": "J. Rivera",
+            "status": "bound",
+            "signedShare": 0.28,
+            "datasetId": "ds-farmers-nyfl-26-ws",
+            "edm": {
+              "serverName": "USA-SQL02",
+              "edmDatabaseName": "Re_USA_26_Farmers_FL_WS_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2025-06-04T11:30:00Z",
+              "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "cedentId": "ced-acmere",
+    "cedentName": "AcmeRe Holdings",
+    "notes": "Multi-line carrier with one bundled multiperil treaty.",
+    "chains": [
+      {
+        "chainId": "chain-acmere-bda-multi",
+        "cedentId": "ced-acmere",
+        "chainName": "AcmeRe Multiperil",
+        "office": "BDA",
+        "defaultPeril": "ALL",
+        "programmes": [
+          {
+            "programmeId": "prog-acmere-bda-multi-2027",
+            "chainId": "chain-acmere-bda-multi",
+            "cedentId": "ced-acmere",
+            "programmeName": "AcmeRe Multiperil — 2027 Treaty",
+            "treatyYear": 2027,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "BDA",
+            "underwriter": "L. Okonkwo",
+            "status": "bound",
+            "signedShare": 0.10,
+            "datasetId": "ds-acmere-27-multi",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_27_AcmeRe_MULTI_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2026-06-12T09:30:00Z",
+              "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
+            }
+          },
+          {
+            "programmeId": "prog-acmere-bda-multi-2026",
+            "chainId": "chain-acmere-bda-multi",
+            "cedentId": "ced-acmere",
+            "programmeName": "AcmeRe Multiperil — 2026 Treaty",
+            "treatyYear": 2026,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "BDA",
+            "underwriter": "L. Okonkwo",
+            "status": "bound",
+            "signedShare": 0.10,
+            "datasetId": "ds-acmere-26-multi",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_26_AcmeRe_MULTI_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_PARTIAL",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2025-06-12T09:30:00Z",
+              "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "cedentId": "ced-zenith",
+    "cedentName": "Zenith Insurance",
+    "notes": "California-heavy commercial EQ portfolio.",
+    "chains": [
+      {
+        "chainId": "chain-zenith-nyc-eq",
+        "cedentId": "ced-zenith",
+        "chainName": "Zenith CA EQ XL",
+        "office": "NYC",
+        "defaultPeril": "EQ",
+        "programmes": [
+          {
+            "programmeId": "prog-zenith-nyc-eq-2027",
+            "chainId": "chain-zenith-nyc-eq",
+            "cedentId": "ced-zenith",
+            "programmeName": "Zenith CA EQ XL — 2027",
+            "treatyYear": 2027,
+            "perils": ["EQ"],
+            "peril": "EQ",
+            "office": "NYC",
+            "underwriter": "R. Cho",
+            "status": "bound",
+            "signedShare": 0.22,
+            "datasetId": "ds-zenith-27-eq",
+            "edm": {
+              "serverName": "USA-SQL02",
+              "edmDatabaseName": "Re_USA_27_Zenith_EQ_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2026-06-11T18:14:00Z",
+              "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
+            }
+          },
+          {
+            "programmeId": "prog-zenith-nyc-eq-2026",
+            "chainId": "chain-zenith-nyc-eq",
+            "cedentId": "ced-zenith",
+            "programmeName": "Zenith CA EQ XL — 2026",
+            "treatyYear": 2026,
+            "perils": ["EQ"],
+            "peril": "EQ",
+            "office": "NYC",
+            "underwriter": "R. Cho",
+            "status": "bound",
+            "signedShare": 0.20,
+            "datasetId": "ds-zenith-26-eq",
+            "edm": {
+              "serverName": "USA-SQL02",
+              "edmDatabaseName": "Re_USA_26_Zenith_EQ_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2025-06-11T18:14:00Z",
+              "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "cedentId": "ced-coastalre",
+    "cedentName": "Coastal Re",
+    "notes": "FL-dominant hurricane quota share.",
+    "chains": [
+      {
+        "chainId": "chain-coastalre-nyc-ws",
+        "cedentId": "ced-coastalre",
+        "chainName": "Coastal Re FL Hurricane QS",
+        "office": "NYC",
+        "defaultPeril": "WS",
+        "programmes": [
+          {
+            "programmeId": "prog-coastalre-nyc-ws-2027",
+            "chainId": "chain-coastalre-nyc-ws",
+            "cedentId": "ced-coastalre",
+            "programmeName": "Coastal Re FL QS — 2027",
+            "treatyYear": 2027,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "NYC",
+            "underwriter": "K. Diaz",
+            "status": "bound",
+            "signedShare": 0.40,
+            "datasetId": "ds-coastalre-27-ws",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_27_CoastalRe_WS_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2026-06-13T11:02:00Z",
+              "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
+            }
+          },
+          {
+            "programmeId": "prog-coastalre-nyc-ws-2026",
+            "chainId": "chain-coastalre-nyc-ws",
+            "cedentId": "ced-coastalre",
+            "programmeName": "Coastal Re FL QS — 2026",
+            "treatyYear": 2026,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "NYC",
+            "underwriter": "K. Diaz",
+            "status": "bound",
+            "signedShare": 0.35,
+            "datasetId": "ds-coastalre-26-ws",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_26_CoastalRe_WS_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2025-06-13T11:02:00Z",
+              "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "cedentId": "ced-munich-risk",
+    "cedentName": "Munich Risk",
+    "notes": "European reinsurer; demonstrates EUR-currency programme + first-year (no prior).",
+    "chains": [
+      {
+        "chainId": "chain-munich-lon-ws",
+        "cedentId": "ced-munich-risk",
+        "chainName": "Munich US WS XL",
+        "office": "LON",
+        "defaultPeril": "WS",
+        "programmes": [
+          {
+            "programmeId": "prog-munich-lon-ws-2027",
+            "chainId": "chain-munich-lon-ws",
+            "cedentId": "ced-munich-risk",
+            "programmeName": "Munich US WS XL — 2027 (inception)",
+            "treatyYear": 2027,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "LON",
+            "underwriter": "S. Berger",
+            "status": "bound",
+            "signedShare": 0.12,
+            "notes": "First-year programme — no prior in chain, demonstrates 'NEW' YoY status.",
+            "datasetId": "ds-munich-27-ws",
+            "edm": {
+              "serverName": "LONDON-SQL01",
+              "edmDatabaseName": "Re_LON_27_Munich_WS_EDM_01",
+              "currency": "EUR",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE"],
+              "lastGeneratedAt": "2026-06-15T08:00:00Z",
+              "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "cedentId": "ced-sample-client",
+    "cedentName": "Sample Client AG",
+    "notes": "ERT outputs absent — demonstrates the ERT_NOT_FOUND scenario.",
+    "chains": [
+      {
+        "chainId": "chain-sample-27-ws",
+        "cedentId": "ced-sample-client",
+        "chainName": "Sample US WS",
+        "office": "LON",
+        "defaultPeril": "WS",
+        "programmes": [
+          {
+            "programmeId": "prog-sample-27-ws",
+            "chainId": "chain-sample-27-ws",
+            "cedentId": "ced-sample-client",
+            "programmeName": "Sample US WS — 2027",
+            "treatyYear": 2027,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "LON",
+            "underwriter": "—",
+            "status": "quoted",
+            "datasetId": "ds-sample-27-ws",
+            "edm": {
+              "serverName": "USA-SQL02",
+              "edmDatabaseName": "Re_USA_27_SampleClient_WS_EDM_01",
+              "currency": "EUR",
+              "ertStatus": "ERT_NOT_FOUND",
+              "availableGranularity": ["COUNTRY"]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "cedentId": "ced-alwaysfails",
+    "cedentName": "Designed To Fail Co.",
+    "notes": "Triggers the failed-ERT-job scenario when Run ERT is clicked.",
+    "chains": [
+      {
+        "chainId": "chain-alwaysfails-27-ws",
+        "cedentId": "ced-alwaysfails",
+        "chainName": "Always-Fails WS",
+        "office": "BDA",
+        "defaultPeril": "WS",
+        "programmes": [
+          {
+            "programmeId": "prog-alwaysfails-27-ws",
+            "chainId": "chain-alwaysfails-27-ws",
+            "cedentId": "ced-alwaysfails",
+            "programmeName": "Always-Fails WS — 2027",
+            "treatyYear": 2027,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "BDA",
+            "underwriter": "—",
+            "status": "quoted",
+            "datasetId": "ds-alwaysfails-27-ws",
+            "edm": {
+              "serverName": "BERMUDA-SQL01",
+              "edmDatabaseName": "Re_BER_27_AlwaysFails_WS_EDM_01",
+              "currency": "USD",
+              "ertStatus": "ERT_NOT_FOUND",
+              "availableGranularity": ["COUNTRY"]
+            }
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "geographyId": "CRESTA-US_01", "name": "CRESTA US Zone 01", "country": "US" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-82.5, 25.0], [-79.9, 25.0], [-79.9, 28.0], [-82.5, 28.0], [-82.5, 25.0]]]
+      }
+    }
+  ]
+}

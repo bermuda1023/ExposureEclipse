@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"geographyId":"US","geographyName":"United States"},"geometry":{"type":"Polygon","coordinates":[[[-125,24],[-66,24],[-66,49],[-125,49],[-125,24]]]}}]}
