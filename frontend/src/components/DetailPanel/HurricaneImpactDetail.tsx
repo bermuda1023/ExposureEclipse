@@ -15,7 +15,8 @@ import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "../Map/hurricaneCol
 import { CountyReferenceSection } from "./CountyReferenceSection";
 
 export function HurricaneImpactDetail() {
-  const { data, clear, popFromDetail } = useHurricaneImpactStore();
+  const { data, clear, popFromDetail, setFocusedGeoid } = useHurricaneImpactStore();
+  const focusedGeoid = useHurricaneImpactStore((s) => s.focusedGeoid);
   const cedents = useCedents();
   const [openGeoid, setOpenGeoid] = useState<string | null>(null);
 
@@ -136,12 +137,25 @@ export function HurricaneImpactDetail() {
           <tbody>
             {data.counties.map((c) => {
               const isOpen = openGeoid === c.geoid;
+              const isFocused = focusedGeoid === c.geoid;
               return (
                 <FragmentRow
                   key={c.geoid}
                   county={c}
                   isOpen={isOpen}
-                  toggle={() => setOpenGeoid(isOpen ? null : c.geoid)}
+                  isFocused={isFocused}
+                  toggle={() => {
+                    // Single click both expands the per-programme breakdown
+                    // AND tells the map which county to spotlight. Toggling
+                    // the same row off clears both.
+                    if (isOpen) {
+                      setOpenGeoid(null);
+                      setFocusedGeoid(null);
+                    } else {
+                      setOpenGeoid(c.geoid);
+                      setFocusedGeoid(c.geoid);
+                    }
+                  }}
                   currency={data.currency}
                   programmeLabel={programmeLabel}
                 />
@@ -165,12 +179,14 @@ export function HurricaneImpactDetail() {
 function FragmentRow({
   county: c,
   isOpen,
+  isFocused,
   toggle,
   currency,
   programmeLabel,
 }: {
   county: import("../../api/hurricanes").ImpactedCounty;
   isOpen: boolean;
+  isFocused: boolean;
   toggle: () => void;
   currency: string;
   programmeLabel: Map<string, string>;
@@ -180,7 +196,12 @@ function FragmentRow({
       <tr
         style={{
           borderTop: "1px solid var(--ink-200)",
-          background: c.hasData ? "var(--brand-50)" : undefined,
+          background: isFocused
+            ? "#fef3c7"
+            : c.hasData
+              ? "var(--brand-50)"
+              : undefined,
+          boxShadow: isFocused ? "inset 3px 0 0 #f59e0b" : undefined,
           cursor: "pointer",
         }}
         onClick={toggle}

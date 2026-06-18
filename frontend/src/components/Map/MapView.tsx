@@ -199,18 +199,27 @@ export function MapView({ data, isLoading, error }: Props) {
         paint: {
           "line-color": [
             "case",
+            // Focused (clicked in the impact detail panel) takes priority over
+            // the generic storm-hit outline so the user can see WHICH impacted
+            // county they just picked.
+            ["==", ["feature-state", "stormFocused"], true],
+            "#f59e0b",                  // amber for the focused county
             ["==", ["feature-state", "stormHit"], true],
-            "#dc2626",                  // red outline for storm-impacted
+            "#dc2626",                  // red for everyone else in the swath
             "#2c3a52",
           ],
           "line-width": [
             "case",
+            ["==", ["feature-state", "stormFocused"], true],
+            4.0,
             ["==", ["feature-state", "stormHit"], true],
             2.2,
             0.3,
           ],
           "line-opacity": [
             "case",
+            ["==", ["feature-state", "stormFocused"], true],
+            1.0,
             ["==", ["feature-state", "stormHit"], true],
             0.95,
             // Fade county outlines in/out around the COUNTY_THRESHOLD so
@@ -241,6 +250,13 @@ export function MapView({ data, isLoading, error }: Props) {
         map.setFeatureState(
           { source: COUNTY_TILESET.src, sourceLayer: COUNTY_TILESET.layer, id },
           { stormHit: true },
+        );
+      }
+      const focused = focusedGeoidRef.current;
+      if (focused) {
+        map.setFeatureState(
+          { source: COUNTY_TILESET.src, sourceLayer: COUNTY_TILESET.layer, id: focused },
+          { stormFocused: true },
         );
       }
     });
@@ -436,6 +452,38 @@ export function MapView({ data, isLoading, error }: Props) {
       );
     }
   }, [impactData, impactStormId]);
+
+  // ── Spotlight the county the user just clicked in the impact detail panel ──
+  const focusedGeoid = useHurricaneImpactStore((s) => s.focusedGeoid);
+  const focusedGeoidRef = useRef<string | null>(null);
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !styleReadyRef.current) return;
+    // Drop the previous focus, if any.
+    const prev = focusedGeoidRef.current;
+    if (prev && prev !== focusedGeoid) {
+      m.removeFeatureState(
+        { source: COUNTY_TILESET.src, sourceLayer: COUNTY_TILESET.layer, id: prev },
+        "stormFocused",
+      );
+    }
+    focusedGeoidRef.current = focusedGeoid;
+    if (!focusedGeoid) return;
+    m.setFeatureState(
+      { source: COUNTY_TILESET.src, sourceLayer: COUNTY_TILESET.layer, id: focusedGeoid },
+      { stormFocused: true },
+    );
+    // Center the map on the focused county centroid so it's never off-screen,
+    // but only nudge — don't zoom past where the user already is.
+    const c = impactData?.counties.find((x) => x.geoid === focusedGeoid);
+    if (c) {
+      m.easeTo({
+        center: [c.centroidLon, c.centroidLat],
+        duration: 600,
+        zoom: Math.max(m.getZoom(), 6),
+      });
+    }
+  }, [focusedGeoid, impactData]);
 
   // ── Render ──
   if (!hasToken) {

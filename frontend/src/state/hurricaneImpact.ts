@@ -17,12 +17,16 @@ interface HurricaneImpactState {
   /** When true, the right-rail detail panel takes over with the impact view
    * (instead of the usual county detail). */
   pushedToDetail: boolean;
+  /** The county GEOID currently focused by clicking a row in the impact
+   * detail. The map paints a brighter outline on this county. */
+  focusedGeoid: string | null;
 
   start: (stormId: string, selectionPayload: Record<string, unknown>) => void;
   setData: (data: HurricaneImpactResponse) => void;
   setError: (msg: string) => void;
   pushToDetail: () => void;
   popFromDetail: () => void;
+  setFocusedGeoid: (geoid: string | null) => void;
   clear: () => void;
 }
 
@@ -33,6 +37,7 @@ export const useHurricaneImpactStore = create<HurricaneImpactState>((set) => ({
   error: null,
   selectionPayload: null,
   pushedToDetail: false,
+  focusedGeoid: null,
 
   start: (stormId, selectionPayload) =>
     set({
@@ -41,11 +46,13 @@ export const useHurricaneImpactStore = create<HurricaneImpactState>((set) => ({
       error: null,
       data: null,
       selectionPayload,
+      focusedGeoid: null,
     }),
   setData: (data) => set({ data, isLoading: false, error: null }),
   setError: (msg) => set({ error: msg, isLoading: false }),
   pushToDetail: () => set({ pushedToDetail: true }),
   popFromDetail: () => set({ pushedToDetail: false }),
+  setFocusedGeoid: (geoid) => set({ focusedGeoid: geoid }),
   clear: () =>
     set({
       activeStormId: null,
@@ -54,5 +61,6 @@ export const useHurricaneImpactStore = create<HurricaneImpactState>((set) => ({
       error: null,
       selectionPayload: null,
       pushedToDetail: false,
+      focusedGeoid: null,
     }),
 }));
