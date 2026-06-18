@@ -323,5 +323,74 @@ def build_export_xlsx(payload: dict, provider: ExposureDataProvider) -> bytes:
     return buf.getvalue()
 
 
+def build_hurricane_impact_xlsx(impact: dict) -> bytes:
+    """Build a 2-sheet workbook (Summary + Impacted Counties) for a single
+    hurricane-impact response. Mirrors the shape returned by
+    ``/api/hurricanes/{id}/impact`` exactly — numbers come straight from the
+    same compute path used on screen.
+    """
+    timestamp = datetime.now(timezone.utc)
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    summary = impact.get("summary") or {}
+    counties = impact.get("counties") or []
+    _check_row_budget(len(counties))
+
+    _write_kv_sheet(
+        wb,
+        "Summary",
+        [
+            ("Generated at (UTC)", timestamp),
+            ("Service", "Exposure Eclipse — Hurricane Impact"),
+            ("Storm ID", impact.get("stormId")),
+            ("Storm Name", impact.get("stormName")),
+            ("Year", impact.get("year")),
+            ("Currency", impact.get("currency")),
+            ("Rmax Multiplier", impact.get("multiplier")),
+            ("Counties Impacted", summary.get("countiesImpacted")),
+            ("Counties With Portfolio Data", summary.get("countiesWithData")),
+            ("Total TIV (in selection)", summary.get("totalTiv")),
+            ("Total Location Count", summary.get("totalLocationCount")),
+        ],
+    )
+
+    ws = wb.create_sheet("Impacted Counties")
+    headers = [
+        "Geography ID",
+        "GEOID (FIPS)",
+        "County",
+        "State",
+        "Max Wind (kt)",
+        "Saffir-Simpson",
+        "Closest Eye Distance (nm)",
+        "Rmax at Closest (nm)",
+        "TIV",
+        "Location Count",
+        "Has Portfolio Data",
+        "Centroid Lat",
+        "Centroid Lon",
+    ]
+    _write_header_row(ws, headers)
+    for r, c in enumerate(counties, start=2):
+        ws.cell(row=r, column=1, value=c.get("geographyId"))
+        ws.cell(row=r, column=2, value=c.get("geoid"))
+        ws.cell(row=r, column=3, value=c.get("name"))
+        ws.cell(row=r, column=4, value=c.get("state"))
+        ws.cell(row=r, column=5, value=c.get("maxWindKt"))
+        ws.cell(row=r, column=6, value=c.get("maxCategory"))
+        ws.cell(row=r, column=7, value=c.get("closestDistanceNm"))
+        ws.cell(row=r, column=8, value=c.get("rmaxAtClosestNm"))
+        ws.cell(row=r, column=9, value=c.get("tiv"))
+        ws.cell(row=r, column=10, value=c.get("locationCount"))
+        ws.cell(row=r, column=11, value=c.get("hasData"))
+        ws.cell(row=r, column=12, value=c.get("centroidLat"))
+        ws.cell(row=r, column=13, value=c.get("centroidLon"))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 # Re-export common types the router may want for convenience.
-__all__ = ["build_export_xlsx", "MetricKey", "Measure"]
+__all__ = ["build_export_xlsx", "build_hurricane_impact_xlsx", "MetricKey", "Measure"]

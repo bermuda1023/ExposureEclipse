@@ -50,6 +50,7 @@ export function HurricaneLayer({ map }: Props) {
   const startImpact = useHurricaneImpactStore((s) => s.start);
   const setImpactData = useHurricaneImpactStore((s) => s.setData);
   const setImpactError = useHurricaneImpactStore((s) => s.setError);
+  const activeImpactStormId = useHurricaneImpactStore((s) => s.activeStormId);
   // Read selection + view state via getState() inside the click handler to
   // avoid re-registering the listener every time something changes.
   const cedentsQuery = useCedents();
@@ -217,7 +218,7 @@ export function HurricaneLayer({ map }: Props) {
               "ds-farmers-bda-2027";
           }
 
-          startImpact(stormId);
+          startImpact(stormId, selectionPayload);
           fetchHurricaneImpact(stormId, selectionPayload)
             .then((data) => setImpactData(data))
             .catch((err) => setImpactError(String((err as Error)?.message ?? err)));
@@ -242,6 +243,73 @@ export function HurricaneLayer({ map }: Props) {
       // Don't tear down on every dep change — only when the layer is disabled.
     };
   }, [map, enabled, query.data]);
+
+  // ── Spotlight the clicked storm: fade every other path almost to nothing ──
+  useEffect(() => {
+    if (!map) return;
+    if (!map.getLayer(LINE_LAYER)) return;
+    if (activeImpactStormId) {
+      const hl = [
+        "case",
+        ["==", ["get", "stormId"], activeImpactStormId],
+        1.0,
+        0.04,
+      ] as unknown as never;
+      const widthHl = [
+        "case",
+        ["==", ["get", "stormId"], activeImpactStormId],
+        [
+          "interpolate",
+          ["linear"],
+          ["get", "cat"],
+          -1, 1.8,
+          0, 2.2,
+          1, 2.8,
+          2, 3.4,
+          3, 4.0,
+          4, 4.6,
+          5, 5.2,
+        ],
+        [
+          "interpolate",
+          ["linear"],
+          ["get", "cat"],
+          -1, 1.2,
+          0, 1.5,
+          1, 2,
+          2, 2.5,
+          3, 3,
+          4, 3.5,
+          5, 4,
+        ],
+      ] as unknown as never;
+      map.setPaintProperty(LINE_LAYER, "line-opacity", hl);
+      map.setPaintProperty(LINE_LAYER, "line-width", widthHl);
+      if (map.getLayer(POINT_LAYER)) {
+        map.setPaintProperty(POINT_LAYER, "circle-opacity", hl);
+        map.setPaintProperty(POINT_LAYER, "circle-stroke-opacity", hl);
+      }
+    } else {
+      // Restore defaults.
+      map.setPaintProperty(LINE_LAYER, "line-opacity", 0.92);
+      map.setPaintProperty(LINE_LAYER, "line-width", [
+        "interpolate",
+        ["linear"],
+        ["get", "cat"],
+        -1, 1.2,
+        0, 1.5,
+        1, 2,
+        2, 2.5,
+        3, 3,
+        4, 3.5,
+        5, 4,
+      ] as unknown as never);
+      if (map.getLayer(POINT_LAYER)) {
+        map.setPaintProperty(POINT_LAYER, "circle-opacity", 1);
+        map.setPaintProperty(POINT_LAYER, "circle-stroke-opacity", 1);
+      }
+    }
+  }, [map, activeImpactStormId, query.data]);
 
   // Tooltip overlay sits on top of the map container.
   if (!hovered || !cursor || !enabled) return null;

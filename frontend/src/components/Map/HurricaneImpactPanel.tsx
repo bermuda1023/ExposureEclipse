@@ -5,12 +5,30 @@
  * by max wind speed.
  */
 
+import { useState } from "react";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
+import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
 
 export function HurricaneImpactPanel() {
-  const { activeStormId, data, isLoading, error, clear } = useHurricaneImpactStore();
+  const { activeStormId, data, isLoading, error, clear, selectionPayload } =
+    useHurricaneImpactStore();
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function onDownload() {
+    if (!activeStormId || !selectionPayload) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await downloadHurricaneImpactXlsx(activeStormId, selectionPayload);
+    } catch (e) {
+      setExportError(String((e as Error)?.message ?? e));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (!activeStormId && !isLoading && !data && !error) return null;
 
@@ -60,20 +78,40 @@ export function HurricaneImpactPanel() {
             {data ? `${data.stormName} (${data.year})` : activeStormId}
           </div>
         </div>
-        <button
-          onClick={clear}
-          aria-label="Close impact panel"
-          style={{
-            all: "unset",
-            cursor: "pointer",
-            color: "var(--ink-500)",
-            fontSize: "1.1rem",
-            padding: "0 4px",
-          }}
-          title="Clear hurricane impact selection"
-        >
-          ✕
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button
+            onClick={onDownload}
+            disabled={!data || exporting}
+            title="Download impact summary as Excel"
+            style={{
+              all: "unset",
+              cursor: data && !exporting ? "pointer" : "not-allowed",
+              color: "var(--brand-700)",
+              fontWeight: 600,
+              fontSize: "0.7rem",
+              padding: "2px 6px",
+              border: "1px solid var(--brand-400)",
+              borderRadius: 4,
+              opacity: data && !exporting ? 1 : 0.4,
+            }}
+          >
+            {exporting ? "…" : "↓ xlsx"}
+          </button>
+          <button
+            onClick={clear}
+            aria-label="Close impact panel"
+            style={{
+              all: "unset",
+              cursor: "pointer",
+              color: "var(--ink-500)",
+              fontSize: "1.1rem",
+              padding: "0 4px",
+            }}
+            title="Clear hurricane impact selection"
+          >
+            ✕
+          </button>
+        </div>
       </header>
 
       <div style={{ overflow: "auto", padding: 12, display: "grid", gap: 10, alignContent: "start" }}>
@@ -81,6 +119,11 @@ export function HurricaneImpactPanel() {
         {error && (
           <div style={{ color: "var(--error-700)" }}>
             <strong>Impact lookup failed:</strong> {error}
+          </div>
+        )}
+        {exportError && (
+          <div style={{ color: "var(--error-700)", fontSize: "0.72rem" }}>
+            Export failed: {exportError}
           </div>
         )}
         {data && (

@@ -54,6 +54,8 @@ export interface ImpactedCounty {
   geoid: string;              // "12086"
   name: string;               // "Charlotte"
   state: string;              // "FL"
+  centroidLat: number;
+  centroidLon: number;
   maxWindKt: number;
   maxCategory: number;
   closestDistanceNm: number;
@@ -76,11 +78,13 @@ export interface HurricaneImpactResponse {
   year: number;
   currency: string;
   multiplier: number;
+  /** [west, south, east, north] of the impacted-county centroids; null if no impact. */
+  bbox: [number, number, number, number] | null;
   summary: ImpactSummary;
   counties: ImpactedCounty[];
 }
 
-import { apiPost } from "./client";
+import { API_BASE, apiPost } from "./client";
 
 export const fetchHurricaneImpact = (
   stormId: string,
@@ -91,3 +95,32 @@ export const fetchHurricaneImpact = (
     `/hurricanes/${encodeURIComponent(stormId)}/impact?multiplier=${multiplier}`,
     selection,
   );
+
+/** POSTs selection to the export endpoint and triggers a browser download. */
+export async function downloadHurricaneImpactXlsx(
+  stormId: string,
+  selection: Record<string, unknown>,
+  multiplier = 2.5,
+): Promise<void> {
+  const url = `${API_BASE}/hurricanes/${encodeURIComponent(stormId)}/impact/export?multiplier=${multiplier}`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(selection),
+  });
+  if (!resp.ok) {
+    throw new Error(`Export failed (${resp.status})`);
+  }
+  const blob = await resp.blob();
+  const cd = resp.headers.get("content-disposition") || "";
+  const match = /filename="?([^"]+)"?/.exec(cd);
+  const filename = match?.[1] ?? `impact_${stormId}.xlsx`;
+  const link = document.createElement("a");
+  const objUrl = URL.createObjectURL(blob);
+  link.href = objUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objUrl);
+}

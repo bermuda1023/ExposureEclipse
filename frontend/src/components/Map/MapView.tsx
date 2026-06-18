@@ -410,10 +410,16 @@ export function MapView({ data, isLoading, error }: Props) {
       );
       hitIdsRef.current.add(c.geoid);
     }
-    // If user clicked an impact while zoomed out, fly to the affected bbox.
-    if (impactData.counties.length > 0 && impactStormId) {
-      const lats = impactData.counties.map(() => 0); // bbox via simple state span — keep cheap by using first 200
-      void lats; // (placeholder — we don't need to fly; user is usually already near)
+    // Fly to the impacted-county footprint so the user immediately sees it.
+    if (impactData.bbox) {
+      const [w, s, e, n] = impactData.bbox;
+      m.fitBounds(
+        [
+          [w, s],
+          [e, n],
+        ],
+        { padding: { top: 60, right: 380, bottom: 80, left: 60 }, duration: 900, maxZoom: 7 },
+      );
     }
   }, [impactData, impactStormId]);
 

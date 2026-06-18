@@ -15,10 +15,12 @@ Response is shaped for direct rendering as a Mapbox source.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from ..models.exposure import MapRequest
 from ..providers import ExposureDataProvider, get_provider
 from ..services.calculations import apply_filters
+from ..services.export_excel import build_hurricane_impact_xlsx
 from ..services.hurdat2 import (
     Storm,
     category_for_wind,
@@ -137,13 +139,13 @@ def list_hurricanes(
 # point in the storm's track, joined to TIV from the user's current selection.
 
 
-@router.post("/{storm_id}/impact")
-def hurricane_impact(
+def _compute_impact_payload(
     storm_id: str,
     payload: MapRequest,
-    multiplier: float = Query(2.5, ge=1.0, le=6.0, alias="multiplier"),
-    provider: ExposureDataProvider = Depends(get_provider),
+    multiplier: float,
+    provider: ExposureDataProvider,
 ) -> dict:
+    """Shared impact computation — used by both the JSON and xlsx endpoints."""
     # Import here to avoid a circular dep with exposures router at module load.
     from .exposures import _apply_peril_filter, _resolve_view, _require_exactly_one_target
 
@@ -185,12 +187,21 @@ def hurricane_impact(
     total_loc = sum(i.location_count for i in impacts)
     counties_with_data = sum(1 for i in impacts if i.has_data)
 
+    # Bounding box of impacted-county centroids, padded ~0.3deg so fitBounds
+    # leaves a comfortable margin around the wind footprint.
+    bbox: list[float] | None = None
+    if impacts:
+        lats = [i.centroid_lat for i in impacts]
+        lons = [i.centroid_lon for i in impacts]
+        bbox = [min(lons) - 0.3, min(lats) - 0.3, max(lons) + 0.3, max(lats) + 0.3]
+
     return {
         "stormId": storm.storm_id,
         "stormName": storm.name,
         "year": storm.year,
         "currency": resolved.currency,
         "multiplier": multiplier,
+        "bbox": bbox,  # [west, south, east, north] or null when no impact
         "summary": {
             "countiesImpacted": len(impacts),
             "countiesWithData": counties_with_data,
@@ -203,6 +214,8 @@ def hurricane_impact(
                 "geoid": i.geoid,
                 "name": i.name,
                 "state": i.state_usps,
+                "centroidLat": round(i.centroid_lat, 4),
+                "centroidLon": round(i.centroid_lon, 4),
                 "maxWindKt": i.max_wind_kt,
                 "maxCategory": i.max_category,
                 "closestDistanceNm": round(i.closest_distance_nm, 1),
@@ -214,3 +227,32 @@ def hurricane_impact(
             for i in impacts
         ],
     }
+
+
+@router.post("/{storm_id}/impact")
+def hurricane_impact(
+    storm_id: str,
+    payload: MapRequest,
+    multiplier: float = Query(2.5, ge=1.0, le=6.0, alias="multiplier"),
+    provider: ExposureDataProvider = Depends(get_provider),
+) -> dict:
+    return _compute_impact_payload(storm_id, payload, multiplier, provider)
+
+
+@router.post("/{storm_id}/impact/export")
+def hurricane_impact_export(
+    storm_id: str,
+    payload: MapRequest,
+    multiplier: float = Query(2.5, ge=1.0, le=6.0, alias="multiplier"),
+    provider: ExposureDataProvider = Depends(get_provider),
+) -> Response:
+    """Download the impact result as an .xlsx workbook (Summary + counties)."""
+    impact = _compute_impact_payload(storm_id, payload, multiplier, provider)
+    xlsx = build_hurricane_impact_xlsx(impact)
+    safe_name = "".join(c for c in (impact.get("stormName") or "storm") if c.isalnum()).lower() or "storm"
+    filename = f"impact_{safe_name}_{impact.get('year')}_{storm_id}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

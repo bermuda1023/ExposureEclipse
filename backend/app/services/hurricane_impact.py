@@ -30,6 +30,10 @@ COUNTIES_TOPO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json"
 FETCH_TIMEOUT_S = 30
 DAMAGING_WIND_MULTIPLIER = 2.5  # radius of damaging winds = multiplier × Rmax
 
+# Counties only count as impacted if exposed to at least this sustained wind
+# (knots). 85 kt sits inside Cat 2 — anything below is treated as noise.
+MIN_IMPACT_WIND_KT = 85
+
 # Conterminous US + PR bounding box. Track points outside this never touch
 # counties we care about — saves doing 3,000 distance checks per point.
 US_BBOX_LAT = (17.5, 50.0)
@@ -230,6 +234,8 @@ class CountyImpact:
     geography_id: str
     name: str
     state_usps: str
+    centroid_lat: float
+    centroid_lon: float
     max_wind_kt: int          # strongest wind any nearby track-point carried
     max_category: int          # Saffir-Simpson of max_wind_kt
     closest_distance_nm: float  # closest approach of the storm's eye
@@ -256,7 +262,9 @@ def compute_impact(
     for pt in storm.track:
         if not _within_us_bbox(pt):
             continue
-        if pt.wind_kt <= 0:
+        # Skip weak track points entirely: they wouldn't drive a county into
+        # the impact set anyway and let us avoid 3000 distance checks per leg.
+        if pt.wind_kt < MIN_IMPACT_WIND_KT:
             continue
         rmax = rmax_nm(pt.wind_kt, pt.lat)
         radius = rmax * multiplier
@@ -278,6 +286,8 @@ def compute_impact(
                     geography_id=c.geography_id,
                     name=c.name,
                     state_usps=c.state_usps,
+                    centroid_lat=c.centroid_lat,
+                    centroid_lon=c.centroid_lon,
                     max_wind_kt=pt.wind_kt,
                     max_category=category_for_wind(pt.wind_kt),
                     closest_distance_nm=d,
