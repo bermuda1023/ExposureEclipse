@@ -21,6 +21,8 @@ export interface EDMRef {
   exposureDataCutoffDate?: string | null;
 }
 
+export type ProgrammeStatus = "BOUND" | "QUOTED" | "DECLINED" | "NTU" | "EXPIRED";
+
 export interface Programme {
   programmeId: string;
   chainId: string;
@@ -34,7 +36,7 @@ export interface Programme {
   peril: Peril;
   office: string;
   underwriter: string;
-  status: string;
+  status: ProgrammeStatus;
   layer?: string | null;
   signedShare?: number | null;
   inceptionDate?: string | null;

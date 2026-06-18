@@ -18,6 +18,7 @@ import { lazy, Suspense, useMemo, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useCedents, useMapData } from "../../api/hooks";
 import { useFiltersStore } from "../../state/filters";
+import { useScopeFiltersStore } from "../../state/scopeFilters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
 // Mapbox GL JS is ~1.8 MB minified — lazy-load so it stays off the critical path.
@@ -61,12 +62,47 @@ export function Shell() {
     return cedent.chains.filter((ch) => ch.office === officeKey.office).map((ch) => ch.chainId);
   }, [officeKey, cedentsQuery.data]);
 
+  // Scope filters (office / region / underwriter multi-selects in the left rail)
+  // — when these are active and the user has no explicit single selection, the
+  // aggregation request narrows to the intersection of matching chains. This is
+  // how "select all M. Hayes deals" or "Southeast region only" flows into the map.
+  const scopeOffices = useScopeFiltersStore((s) => s.offices);
+  const scopeRegions = useScopeFiltersStore((s) => s.regions);
+  const scopeUnderwriters = useScopeFiltersStore((s) => s.underwriters);
+  const scopeChainIds = useMemo<string[]>(() => {
+    if (!cedentsQuery.data) return [];
+    const officeSet = scopeOffices.length ? new Set(scopeOffices) : null;
+    const regionSet = scopeRegions.length ? new Set(scopeRegions) : null;
+    const uwSet = scopeUnderwriters.length ? new Set(scopeUnderwriters) : null;
+    const out: string[] = [];
+    for (const c of cedentsQuery.data.cedents) {
+      if (regionSet && (!c.region || !regionSet.has(c.region))) continue;
+      for (const ch of c.chains) {
+        if (officeSet && !officeSet.has(ch.office)) continue;
+        if (uwSet && !ch.programmes.some((p) => uwSet.has(p.underwriter))) continue;
+        out.push(ch.chainId);
+      }
+    }
+    return out;
+  }, [cedentsQuery.data, scopeOffices, scopeRegions, scopeUnderwriters]);
+  const hasScopeFilter =
+    scopeOffices.length + scopeRegions.length + scopeUnderwriters.length > 0;
+
+  // No explicit selection AND no scope filters → backend portfolio mode
+  // (union of all in-force BOUND programmes). Scope filters take priority
+  // over portfolio mode but yield to an explicit single selection.
+  const effectiveChainIds = useMemo<string[] | undefined>(() => {
+    if (programmeId || chainId || cedentId) return undefined;
+    if (officeChainIds.length > 0) return officeChainIds;
+    if (hasScopeFilter && scopeChainIds.length > 0) return scopeChainIds;
+    return undefined;
+  }, [programmeId, chainId, cedentId, officeChainIds, hasScopeFilter, scopeChainIds]);
+
   const mapRequest = useMemo<MapRequest | null>(() => {
-    if (!cedentId && !chainId && !programmeId && officeChainIds.length === 0) return null;
     return {
       cedentId,
       chainId,
-      chainIds: officeChainIds.length > 0 ? officeChainIds : undefined,
+      chainIds: effectiveChainIds,
       programmeId,
       aggregationLevel,
       metric,
@@ -87,7 +123,7 @@ export function Shell() {
     cedentId,
     chainId,
     programmeId,
-    officeChainIds,
+    effectiveChainIds,
     comparisonProgrammeId,
     aggregationLevel,
     metric,
@@ -105,7 +141,7 @@ export function Shell() {
   const mapQuery = useMapData(mapRequest);
   const featureWarnings = mapQuery.data?.features.flatMap((f) => f.warnings) ?? [];
   const allWarnings = [...(mapQuery.data?.warnings ?? []), ...featureWarnings];
-  const hasSelection = Boolean(mapRequest);
+  const hasSelection = true; // portfolio mode is always a valid view
 
   const layoutKey = `ee-cols-${leftOpen ? "L" : "x"}-${rightOpen ? "R" : "x"}`;
 
@@ -285,6 +321,73 @@ export function Shell() {
   );
 }
 
+/**
+ * Tiny chip showing what scope the map is currently rendering: explicit deal
+ * selection (cedent / chain / programme name) or the in-force portfolio
+ * aggregate when nothing is selected. Lets the user know they're looking at
+ * everything in-force vs a single deal.
+ */
+function PortfolioScopeBadge() {
+  const sel = useSelectionStore();
+  const scope = useScopeFiltersStore();
+  const { data } = useCedents();
+  const scopeBits = [
+    scope.offices.length ? `${scope.offices.length} office${scope.offices.length === 1 ? "" : "s"}` : null,
+    scope.regions.length ? `${scope.regions.length} region${scope.regions.length === 1 ? "" : "s"}` : null,
+    scope.underwriters.length ? `${scope.underwriters.length} UW` : null,
+  ].filter(Boolean);
+  let label = scopeBits.length > 0 ? `Filtered scope · ${scopeBits.join(" · ")}` : "Portfolio · in-force";
+  let isExplicit = false;
+  if (sel.programmeId) {
+    const prog = data?.cedents
+      .flatMap((c) => c.chains.flatMap((ch) => ch.programmes))
+      .find((p) => p.programmeId === sel.programmeId);
+    label = prog ? `${prog.programmeName}` : sel.programmeId;
+    isExplicit = true;
+  } else if (sel.chainId) {
+    const chain = data?.cedents
+      .flatMap((c) => c.chains)
+      .find((ch) => ch.chainId === sel.chainId);
+    label = chain ? `${chain.chainName}` : sel.chainId;
+    isExplicit = true;
+  } else if (sel.officeKey) {
+    const cedent = data?.cedents.find((c) => c.cedentId === sel.officeKey!.cedentId);
+    label = cedent
+      ? `${cedent.cedentName} · ${sel.officeKey.office}`
+      : sel.officeKey.office;
+    isExplicit = true;
+  } else if (sel.cedentId) {
+    const cedent = data?.cedents.find((c) => c.cedentId === sel.cedentId);
+    label = cedent?.cedentName ?? sel.cedentId;
+    isExplicit = true;
+  }
+  return (
+    <span
+      title={isExplicit ? "Active selection — click 'Clear' to return to portfolio" : "Showing every currently-in-force bound programme"}
+      style={{
+        fontSize: "0.66rem",
+        fontWeight: 700,
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        color: isExplicit ? "var(--brand-700)" : "var(--ink-700)",
+        background: isExplicit ? "var(--brand-50)" : "#f3f4f6",
+        border: `1px solid ${isExplicit ? "var(--brand-400)" : "#d1d5db"}`,
+        padding: "2px 8px",
+        borderRadius: 999,
+        whiteSpace: "nowrap",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      {isExplicit ? null : (
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981" }} />
+      )}
+      {label}
+    </span>
+  );
+}
+
 function MapToolbar() {
   return (
     <div
@@ -302,6 +405,7 @@ function MapToolbar() {
     >
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", rowGap: 6 }}>
         <h2 style={{ fontSize: "0.85rem", fontWeight: 600 }}>Exposure map</h2>
+        <PortfolioScopeBadge />
         <PerilSelector />
         <HurricaneControls />
       </div>

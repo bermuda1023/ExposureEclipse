@@ -25,10 +25,10 @@ EDMRef
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .common import CamelModel
-from .enums import AggregationLevel, ErtStatus, Peril
+from .enums import AggregationLevel, ErtStatus, Peril, ProgrammeStatus
 
 
 class EDMRef(CamelModel):
@@ -62,7 +62,7 @@ class Programme(CamelModel):
     peril: Peril = Peril.ALL
     office: str
     underwriter: str
-    status: str = "bound"  # bound | quoted | written (free-text in v1)
+    status: ProgrammeStatus = ProgrammeStatus.BOUND
     layer: str | None = None
     signed_share: float | None = None
     inception_date: datetime | None = None
@@ -74,6 +74,28 @@ class Programme(CamelModel):
     # cedent model — many programmes will share their dataset_id with their
     # programme_id, but a chain that renames itself can keep historical facts.
     dataset_id: str
+
+    def is_in_force(self, as_of: datetime | None = None) -> bool:
+        """A programme is in-force iff status=BOUND and ``as_of`` falls within
+        [inception_date, expiry_date]. Missing dates → treated as bound forever.
+        ``as_of`` defaults to ``datetime.now(timezone.utc)``."""
+        if self.status != ProgrammeStatus.BOUND:
+            return False
+        now = as_of or datetime.now(timezone.utc)
+        # Some mock dates are naive; coerce both sides to UTC-aware for comparison.
+        if self.inception_date:
+            inc = self.inception_date
+            if inc.tzinfo is None:
+                inc = inc.replace(tzinfo=timezone.utc)
+            if now < inc:
+                return False
+        if self.expiry_date:
+            exp = self.expiry_date
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if now > exp:
+                return False
+        return True
 
 
 class ProgrammeChain(CamelModel):

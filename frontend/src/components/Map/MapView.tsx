@@ -231,6 +231,20 @@ export function MapView({ data, isLoading, error }: Props) {
       flushFeatureState();
     });
 
+    // Mapbox: feature-state set BEFORE a tile loads doesn't always apply to
+    // newly-loaded tiles. Reapply stormHit highlights whenever the county
+    // source finishes loading new tiles (the choropleth flush handles itself).
+    map.on("sourcedata", (ev) => {
+      if (ev.sourceId !== COUNTY_TILESET.src) return;
+      if (!ev.isSourceLoaded) return;
+      for (const id of hitIdsRef.current) {
+        map.setFeatureState(
+          { source: COUNTY_TILESET.src, sourceLayer: COUNTY_TILESET.layer, id },
+          { stormHit: true },
+        );
+      }
+    });
+
     mapRef.current = map;
     setMapInstance(map);
 

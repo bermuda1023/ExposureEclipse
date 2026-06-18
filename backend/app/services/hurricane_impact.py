@@ -229,6 +229,15 @@ def _within_us_bbox(pt: TrackPoint) -> bool:
 
 
 @dataclass(slots=True)
+class ProgrammeContribution:
+    """Per-programme slice of a single county's impacted TIV."""
+
+    dataset_id: str
+    tiv: float
+    location_count: int
+
+
+@dataclass(slots=True)
 class CountyImpact:
     geoid: str
     geography_id: str
@@ -243,6 +252,11 @@ class CountyImpact:
     tiv: float                  # joined from the user's selection
     location_count: int
     has_data: bool             # true if any fact row exists for this county
+    by_programme: list[ProgrammeContribution] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.by_programme is None:
+            self.by_programme = []
 
 
 def compute_impact(
@@ -316,8 +330,13 @@ def join_tiv(
     Facts is iterable of ExposureFactNormalized — we only sum COUNTY-grain
     rows. State-grain rows are intentionally ignored here (state-rollup would
     be misleading for a county-level wind-field).
+
+    Also produces a per-programme breakdown (``by_programme``) so the right-rail
+    detail view can expand each county and show which deals contributed.
     """
     by_geo: dict[str, tuple[float, int]] = {}
+    # Two-level index: geo -> dataset_id -> (tiv, loc)
+    by_geo_prog: dict[str, dict[str, tuple[float, int]]] = {}
     for f in facts:
         gid = getattr(f, "geography_id", None)
         agg = getattr(f, "aggregation", None)
@@ -325,6 +344,10 @@ def join_tiv(
             continue
         cur_tiv, cur_loc = by_geo.get(gid, (0.0, 0))
         by_geo[gid] = (cur_tiv + (f.tiv or 0.0), cur_loc + (f.location_count or 0))
+        ds_id = getattr(f, "dataset_id", "(unknown)")
+        prog_map = by_geo_prog.setdefault(gid, {})
+        cur_p_tiv, cur_p_loc = prog_map.get(ds_id, (0.0, 0))
+        prog_map[ds_id] = (cur_p_tiv + (f.tiv or 0.0), cur_p_loc + (f.location_count or 0))
 
     for imp in impacts:
         if imp.geography_id in by_geo:
@@ -332,4 +355,9 @@ def join_tiv(
             imp.tiv = tiv
             imp.location_count = loc
             imp.has_data = True
+            prog_map = by_geo_prog.get(imp.geography_id, {})
+            imp.by_programme = [
+                ProgrammeContribution(dataset_id=ds, tiv=t, location_count=lc)
+                for ds, (t, lc) in sorted(prog_map.items(), key=lambda kv: -kv[1][0])
+            ]
     return impacts

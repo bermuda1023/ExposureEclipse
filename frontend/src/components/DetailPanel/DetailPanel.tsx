@@ -16,9 +16,22 @@ import { useViewStore } from "../../state/view";
 import { formatCount, formatMoneyCompact, formatMoneyFull, formatPercent } from "../../lib/format";
 import { WarningsPanel } from "../layout/WarningsPanel";
 import type { BreakdownRow, DetailRequest } from "../../api/types";
-import { YoyStatus } from "../../types/contracts";
+import { YoyStatus, AggregationLevel } from "../../types/contracts";
+import { CountyReferenceSection } from "./CountyReferenceSection";
+import { HurricaneImpactDetail } from "./HurricaneImpactDetail";
+import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 
 export function DetailPanel() {
+  // When the user pushes a hurricane impact to the right rail, that view
+  // replaces the standard county detail entirely. Clearing the impact (✕) or
+  // "↩ float" restores the regular flow.
+  const impactPushedToDetail = useHurricaneImpactStore((s) => s.pushedToDetail);
+  if (impactPushedToDetail) return <HurricaneImpactDetail />;
+
+  return <CountyDetail />;
+}
+
+function CountyDetail() {
   const cedentId = useSelectionStore((s) => s.cedentId);
   const officeKey = useSelectionStore((s) => s.officeKey);
   const chainId = useSelectionStore((s) => s.chainId);
@@ -147,6 +160,10 @@ export function DetailPanel() {
           value={formatMoneyCompact(data.dealVsPortfolio.portfolioTiv, currency)}
         />
       </Section>
+
+      {data.aggregationLevel === AggregationLevel.COUNTY && (
+        <CountyReferenceSection geographyId={data.geographyId} />
+      )}
 
       <Section title={`Client market share — ${data.marketShare.segment}`}>
         <Row label="Client TIV" value={formatMoneyCompact(data.marketShare.clientTiv, currency)} />

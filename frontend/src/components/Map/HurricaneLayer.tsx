@@ -28,7 +28,50 @@ import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
 
 const LINE_LAYER = "hurricane-lines";
 const POINT_LAYER = "hurricane-landfall-points";
+const FOOTPRINT_FILL = "hurricane-footprint-fill";
+const FOOTPRINT_LINE = "hurricane-footprint-line";
 const SOURCE = "hurricane-source";
+const FOOTPRINT_SOURCE = "hurricane-footprint";
+
+// Same physics as backend/services/hurricane_impact.py — Willoughby (2006) Rmax.
+const MIN_FOOTPRINT_WIND_KT = 85;
+const FOOTPRINT_MULTIPLIER = 2.5;
+const NM_PER_DEG_LAT = 60;
+
+function rmaxNm(windKt: number, lat: number): number {
+  if (windKt <= 0) return 0;
+  const vMs = windKt * 0.5144;
+  const rmaxKm = 46.6 * Math.exp(-0.0155 * vMs + 0.0169 * Math.abs(lat));
+  return Math.max(8, rmaxKm / 1.852);
+}
+
+/** Build a 48-vertex polygon ring approximating a circle of radius (nm) around (lat, lon). */
+function ringAround(lat: number, lon: number, radiusNm: number, steps = 48): number[][] {
+  const ring: number[][] = [];
+  const cosLat = Math.cos((lat * Math.PI) / 180);
+  for (let i = 0; i <= steps; i++) {
+    const theta = (i / steps) * 2 * Math.PI;
+    const dLat = (radiusNm / NM_PER_DEG_LAT) * Math.cos(theta);
+    const dLon = (radiusNm / (NM_PER_DEG_LAT * Math.max(cosLat, 0.01))) * Math.sin(theta);
+    ring.push([lon + dLon, lat + dLat]);
+  }
+  return ring;
+}
+
+function buildFootprintFC(storm: HurricaneStorm | undefined) {
+  const features: GeoJSON.Feature[] = [];
+  if (!storm) return { type: "FeatureCollection" as const, features };
+  for (const pt of storm.track) {
+    if (pt.windKt < MIN_FOOTPRINT_WIND_KT) continue;
+    const r = rmaxNm(pt.windKt, pt.lat) * FOOTPRINT_MULTIPLIER;
+    features.push({
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, r)] },
+      properties: { windKt: pt.windKt, cat: pt.category },
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
+}
 
 interface Props {
   map: MbMap | null;
@@ -244,6 +287,50 @@ export function HurricaneLayer({ map }: Props) {
     };
   }, [map, enabled, query.data]);
 
+  // ── Wind-footprint overlay for the actively-clicked storm ──
+  useEffect(() => {
+    if (!map) return;
+    const apply = () => {
+      const storm = activeImpactStormId
+        ? query.data?.storms.find((s) => s.stormId === activeImpactStormId)
+        : undefined;
+      const fc = buildFootprintFC(storm);
+      const existing = map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource | undefined;
+      if (existing) {
+        existing.setData(fc as never);
+      } else {
+        map.addSource(FOOTPRINT_SOURCE, { type: "geojson", data: fc as never });
+        map.addLayer(
+          {
+            id: FOOTPRINT_FILL,
+            type: "fill",
+            source: FOOTPRINT_SOURCE,
+            paint: {
+              "fill-color": "#dc2626",
+              "fill-opacity": 0.12,
+            },
+          },
+          LINE_LAYER, // sit BELOW the storm lines so the highlighted line stays on top
+        );
+        map.addLayer(
+          {
+            id: FOOTPRINT_LINE,
+            type: "line",
+            source: FOOTPRINT_SOURCE,
+            paint: {
+              "line-color": "#dc2626",
+              "line-width": 1.2,
+              "line-opacity": 0.45,
+            },
+          },
+          LINE_LAYER,
+        );
+      }
+    };
+    if (map.isStyleLoaded()) apply();
+    else map.once("style.load", apply);
+  }, [map, activeImpactStormId, query.data]);
+
   // ── Spotlight the clicked storm: fade every other path almost to nothing ──
   useEffect(() => {
     if (!map) return;
@@ -354,10 +441,10 @@ export function HurricaneLayer({ map }: Props) {
 // ───────────────────────── helpers ─────────────────────────
 
 function removeLayers(map: MbMap) {
-  for (const id of [LINE_LAYER, POINT_LAYER]) {
+  for (const id of [FOOTPRINT_LINE, FOOTPRINT_FILL, LINE_LAYER, POINT_LAYER]) {
     if (map.getLayer(id)) map.removeLayer(id);
   }
-  for (const id of [SOURCE, `${SOURCE}-pts`]) {
+  for (const id of [SOURCE, `${SOURCE}-pts`, FOOTPRINT_SOURCE]) {
     if (map.getSource(id)) map.removeSource(id);
   }
 }

@@ -24,7 +24,7 @@
             "peril": "ALL",
             "office": "BDA",
             "underwriter": "M. Hayes",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.2,
             "inceptionDate": "2027-01-01T00:00:00Z",
             "expiryDate": "2027-12-31T00:00:00Z",
@@ -58,7 +58,7 @@
             "peril": "ALL",
             "office": "BDA",
             "underwriter": "M. Hayes",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.2,
             "datasetId": "ds-farmers-bda-2026",
             "edm": {
@@ -73,7 +73,9 @@
               ],
               "lastGeneratedAt": "2025-05-02T14:00:00Z",
               "exposureDataCutoffDate": "2024-09-30T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2026-01-01T00:00:00Z",
+            "expiryDate": "2026-12-31T00:00:00Z"
           },
           {
             "programmeId": "prog-farmers-bda-2025",
@@ -89,7 +91,7 @@
             "peril": "ALL",
             "office": "BDA",
             "underwriter": "M. Hayes",
-            "status": "bound",
+            "status": "EXPIRED",
             "signedShare": 0.18,
             "datasetId": "ds-farmers-bda-2025",
             "edm": {
@@ -104,7 +106,9 @@
               ],
               "lastGeneratedAt": "2024-05-02T14:00:00Z",
               "exposureDataCutoffDate": "2023-09-30T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2025-01-01T00:00:00Z",
+            "expiryDate": "2025-12-31T00:00:00Z"
           }
         ]
       },
@@ -127,7 +131,7 @@
             "peril": "WS",
             "office": "NYC",
             "underwriter": "J. Rivera",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.3,
             "datasetId": "ds-farmers-nyfl-27-ws",
             "edm": {
@@ -142,7 +146,9 @@
               ],
               "lastGeneratedAt": "2026-06-04T11:30:00Z",
               "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z"
           },
           {
             "programmeId": "prog-farmers-nyc-fl-2026",
@@ -156,7 +162,7 @@
             "peril": "WS",
             "office": "NYC",
             "underwriter": "J. Rivera",
-            "status": "bound",
+            "status": "NTU",
             "signedShare": 0.28,
             "datasetId": "ds-farmers-nyfl-26-ws",
             "edm": {
@@ -171,7 +177,9 @@
               ],
               "lastGeneratedAt": "2025-06-04T11:30:00Z",
               "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2026-01-01T00:00:00Z",
+            "expiryDate": "2026-12-31T00:00:00Z"
           }
         ]
       }
@@ -201,7 +209,7 @@
             "peril": "WS",
             "office": "BDA",
             "underwriter": "L. Okonkwo",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.1,
             "datasetId": "ds-acmere-27-multi",
             "edm": {
@@ -216,7 +224,9 @@
               ],
               "lastGeneratedAt": "2026-06-12T09:30:00Z",
               "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z"
           },
           {
             "programmeId": "prog-acmere-bda-multi-2026",
@@ -230,7 +240,7 @@
             "peril": "WS",
             "office": "BDA",
             "underwriter": "L. Okonkwo",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.1,
             "datasetId": "ds-acmere-26-multi",
             "edm": {
@@ -245,7 +255,9 @@
               ],
               "lastGeneratedAt": "2025-06-12T09:30:00Z",
               "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2026-01-01T00:00:00Z",
+            "expiryDate": "2026-12-31T00:00:00Z"
           }
         ]
       }
@@ -275,7 +287,7 @@
             "peril": "EQ",
             "office": "NYC",
             "underwriter": "R. Cho",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.22,
             "datasetId": "ds-zenith-27-eq",
             "edm": {
@@ -290,7 +302,9 @@
               ],
               "lastGeneratedAt": "2026-06-11T18:14:00Z",
               "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z"
           },
           {
             "programmeId": "prog-zenith-nyc-eq-2026",
@@ -304,7 +318,7 @@
             "peril": "EQ",
             "office": "NYC",
             "underwriter": "R. Cho",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.2,
             "datasetId": "ds-zenith-26-eq",
             "edm": {
@@ -319,7 +333,9 @@
               ],
               "lastGeneratedAt": "2025-06-11T18:14:00Z",
               "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2026-01-01T00:00:00Z",
+            "expiryDate": "2026-12-31T00:00:00Z"
           }
         ]
       }
@@ -349,7 +365,7 @@
             "peril": "WS",
             "office": "NYC",
             "underwriter": "K. Diaz",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.4,
             "datasetId": "ds-coastalre-27-ws",
             "edm": {
@@ -364,7 +380,9 @@
               ],
               "lastGeneratedAt": "2026-06-13T11:02:00Z",
               "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z"
           },
           {
             "programmeId": "prog-coastalre-nyc-ws-2026",
@@ -378,7 +396,7 @@
             "peril": "WS",
             "office": "NYC",
             "underwriter": "K. Diaz",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.35,
             "datasetId": "ds-coastalre-26-ws",
             "edm": {
@@ -393,7 +411,9 @@
               ],
               "lastGeneratedAt": "2025-06-13T11:02:00Z",
               "exposureDataCutoffDate": "2024-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2026-01-01T00:00:00Z",
+            "expiryDate": "2026-12-31T00:00:00Z"
           }
         ]
       }
@@ -423,7 +443,7 @@
             "peril": "WS",
             "office": "LON",
             "underwriter": "S. Berger",
-            "status": "bound",
+            "status": "BOUND",
             "signedShare": 0.12,
             "notes": "First-year programme \u2014 no prior in chain, demonstrates 'NEW' YoY status.",
             "datasetId": "ds-munich-27-ws",
@@ -438,7 +458,9 @@
               ],
               "lastGeneratedAt": "2026-06-15T08:00:00Z",
               "exposureDataCutoffDate": "2025-12-31T00:00:00Z"
-            }
+            },
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z"
           }
         ]
       }
@@ -468,7 +490,7 @@
             "peril": "WS",
             "office": "LON",
             "underwriter": "\u2014",
-            "status": "quoted",
+            "status": "QUOTED",
             "datasetId": "ds-sample-27-ws",
             "edm": {
               "serverName": "USA-SQL02",
@@ -478,7 +500,9 @@
               "availableGranularity": [
                 "COUNTRY"
               ]
-            }
+            },
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z"
           }
         ]
       }
@@ -508,7 +532,7 @@
             "peril": "WS",
             "office": "BDA",
             "underwriter": "\u2014",
-            "status": "quoted",
+            "status": "QUOTED",
             "datasetId": "ds-alwaysfails-27-ws",
             "edm": {
               "serverName": "BERMUDA-SQL01",
@@ -518,7 +542,9 @@
               "availableGranularity": [
                 "COUNTRY"
               ]
-            }
+            },
+            "inceptionDate": "2027-01-01T00:00:00Z",
+            "expiryDate": "2027-12-31T00:00:00Z"
           }
         ]
       }

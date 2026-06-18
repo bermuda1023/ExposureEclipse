@@ -223,6 +223,14 @@ def _compute_impact_payload(
                 "tiv": i.tiv,
                 "locationCount": i.location_count,
                 "hasData": i.has_data,
+                "byProgramme": [
+                    {
+                        "datasetId": p.dataset_id,
+                        "tiv": p.tiv,
+                        "locationCount": p.location_count,
+                    }
+                    for p in i.by_programme
+                ],
             }
             for i in impacts
         ],

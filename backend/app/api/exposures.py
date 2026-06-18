@@ -119,7 +119,11 @@ _PIVOT_DIM_TO_ATTR: dict[str, str] = {
 
 
 def _require_exactly_one_target(payload: "MapRequest | DetailRequest | PivotRequest") -> None:
-    """Enforce: exactly one of programmeId / chainId / chainIds / cedentId / datasetId / datasetGroupId."""
+    """Enforce: AT MOST one of programmeId / chainId / chainIds / cedentId /
+    datasetId / datasetGroupId. Zero is allowed and means **portfolio mode** —
+    the resolved view is the union of all currently-in-force programmes across
+    every cedent.
+    """
     chain_ids = list(getattr(payload, "chain_ids", []) or [])
     targets = {
         "programmeId": getattr(payload, "programme_id", None),
@@ -130,14 +134,15 @@ def _require_exactly_one_target(payload: "MapRequest | DetailRequest | PivotRequ
         "datasetGroupId": getattr(payload, "dataset_group_id", None),
     }
     set_count = sum(1 for v in targets.values() if v)
-    if set_count != 1:
+    if set_count > 1:
         raise HTTPException(
             status_code=422,
             detail={
                 "code": ErrorCode.VALIDATION_ERROR.value,
                 "message": (
-                    "Provide exactly one of 'programmeId', 'chainId', 'chainIds', "
-                    "'cedentId', 'datasetId', or 'datasetGroupId'."
+                    "Provide AT MOST one of 'programmeId', 'chainId', 'chainIds', "
+                    "'cedentId', 'datasetId', or 'datasetGroupId'. Omit them all "
+                    "for the in-force portfolio view."
                 ),
                 "details": targets,
             },
@@ -189,7 +194,52 @@ def _resolve_view(
     Resolution order: programmeId > chainId > cedentId > datasetId > datasetGroupId.
     The chain path also auto-derives the prior programme as the comparison (unless
     the user supplied a `comparison_programme_id` or `comparison_dataset_id`).
+
+    **Portfolio mode** (no target supplied): union of every currently-in-force
+    BOUND programme across all cedents.
     """
+    chain_ids = list(getattr(payload, "chain_ids", []) or [])
+    any_target = any(
+        [
+            getattr(payload, "programme_id", None),
+            getattr(payload, "chain_id", None),
+            chain_ids,
+            getattr(payload, "cedent_id", None),
+            getattr(payload, "dataset_id", None),
+            getattr(payload, "dataset_group_id", None),
+        ]
+    )
+    if not any_target:
+        # No selection → in-force portfolio aggregate.
+        facts: list[ExposureFactNormalized] = []
+        currencies: set[str] = set()
+        included_count = 0
+        for cedent in provider.list_cedents():
+            for chain in cedent.chains:
+                for prog in chain.programmes:
+                    if not prog.is_in_force():
+                        continue
+                    facts.extend(provider.get_facts_for_dataset(prog.dataset_id))
+                    currencies.add(prog.edm.currency)
+                    included_count += 1
+        warnings: list[Warning] = []
+        if len(currencies) > 1:
+            warnings.append(make_warning(WarningCode.WARN_CURRENCY_MISMATCH))
+        currency = next(iter(currencies)) if len(currencies) == 1 else "MIXED"
+        method = (
+            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN if included_count > 1 else None
+        )
+        if method is not None:
+            warnings.append(make_warning(WarningCode.WARN_DATASET_GROUP_MAX_ACROSS_PERILS))
+        return _ResolvedView(
+            facts=facts,
+            currency=currency,
+            combination_method=method,
+            base_dataset_id=None,
+            comparison_dataset_id=None,
+            warnings=warnings,
+        )
+
     # programmeId — single programme, treat like a dataset.
     if getattr(payload, "programme_id", None):
         prog = provider.get_programme(payload.programme_id)  # type: ignore[arg-type]

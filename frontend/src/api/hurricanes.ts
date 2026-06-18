@@ -49,6 +49,12 @@ export const listHurricanes = (params: HurricaneFiltersParams = {}) =>
 
 // ───────────────────────── impact ─────────────────────────
 
+export interface ImpactProgrammeContribution {
+  datasetId: string;
+  tiv: number;
+  locationCount: number;
+}
+
 export interface ImpactedCounty {
   geographyId: string;        // "US-FL-12086"
   geoid: string;              // "12086"
@@ -63,6 +69,7 @@ export interface ImpactedCounty {
   tiv: number;
   locationCount: number;
   hasData: boolean;
+  byProgramme: ImpactProgrammeContribution[];
 }
 
 export interface ImpactSummary {

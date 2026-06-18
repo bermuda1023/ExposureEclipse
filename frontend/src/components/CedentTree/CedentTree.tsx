@@ -16,13 +16,74 @@
 import { useMemo, useState } from "react";
 import { useCedents, useProgrammeStatus } from "../../api/hooks";
 import { useSelectionStore } from "../../state/selection";
+import { useScopeFiltersStore } from "../../state/scopeFilters";
 import type { Cedent, Programme, ProgrammeChain } from "../../api/cedents";
 import { ErtBadge } from "./ErtBadge";
 import { ErtStatus } from "../../types/contracts";
 import { ErtJobIndicator } from "../ErtJob/ErtJobIndicator";
+import { StatusBadge, isInForce } from "./StatusBadge";
 
 function uniq<T>(items: T[]): T[] {
   return [...new Set(items)];
+}
+
+/**
+ * Compact multi-select rendered as toggleable chips. Empty selection = no
+ * filter on this dimension; visually distinct from "all chips active" so the
+ * user can tell scope filters apart from explicit selections.
+ */
+function ChipFilter({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (vs: string[]) => void;
+}) {
+  if (options.length === 0) return null;
+  const sel = new Set(selected);
+  const toggle = (v: string) => {
+    const next = new Set(sel);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    onChange([...next]);
+  };
+  return (
+    <div style={{ display: "grid", gap: 3 }}>
+      <span style={{ fontSize: "0.66rem", color: "var(--ink-500)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+        {label}
+      </span>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {options.map((opt) => {
+          const active = sel.has(opt);
+          return (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => toggle(opt)}
+              title={active ? `Remove ${label.toLowerCase()} '${opt}'` : `Add ${label.toLowerCase()} '${opt}'`}
+              style={{
+                all: "unset",
+                cursor: "pointer",
+                fontSize: "0.66rem",
+                padding: "2px 7px",
+                borderRadius: 999,
+                fontWeight: 600,
+                color: active ? "var(--brand-700)" : "var(--ink-600)",
+                background: active ? "var(--brand-50)" : "var(--ink-0)",
+                border: `1px solid ${active ? "var(--brand-500)" : "var(--ink-300)"}`,
+              }}
+            >
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function groupByOffice(chains: ProgrammeChain[]): Map<string, ProgrammeChain[]> {
@@ -38,31 +99,63 @@ function groupByOffice(chains: ProgrammeChain[]): Map<string, ProgrammeChain[]> 
 export function CedentTree() {
   const { data, isLoading, error } = useCedents();
   const [search, setSearch] = useState("");
-  const [officeFilter, setOfficeFilter] = useState<string>("");
+  const offices = useScopeFiltersStore((s) => s.offices);
+  const regions = useScopeFiltersStore((s) => s.regions);
+  const underwriters = useScopeFiltersStore((s) => s.underwriters);
+  const setOffices = useScopeFiltersStore((s) => s.setOffices);
+  const setRegions = useScopeFiltersStore((s) => s.setRegions);
+  const setUnderwriters = useScopeFiltersStore((s) => s.setUnderwriters);
+  const clearScope = useScopeFiltersStore((s) => s.clear);
 
   const allOffices = useMemo(() => {
     if (!data) return [];
-    const offices = new Set<string>();
-    for (const c of data.cedents) for (const ch of c.chains) offices.add(ch.office);
-    return uniq([...offices]).sort();
+    const xs = new Set<string>();
+    for (const c of data.cedents) for (const ch of c.chains) xs.add(ch.office);
+    return uniq([...xs]).sort();
+  }, [data]);
+  const allRegions = useMemo(() => {
+    if (!data) return [];
+    const xs = new Set<string>();
+    for (const c of data.cedents) if (c.region) xs.add(c.region);
+    return uniq([...xs]).sort();
+  }, [data]);
+  const allUnderwriters = useMemo(() => {
+    if (!data) return [];
+    const xs = new Set<string>();
+    for (const c of data.cedents)
+      for (const ch of c.chains)
+        for (const p of ch.programmes) if (p.underwriter) xs.add(p.underwriter);
+    return uniq([...xs]).sort();
   }, [data]);
 
   const filtered = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
+    const officeSet = offices.length ? new Set(offices) : null;
+    const regionSet = regions.length ? new Set(regions) : null;
+    const uwSet = underwriters.length ? new Set(underwriters) : null;
+
     return data.cedents
+      .filter((c) => !regionSet || (c.region && regionSet.has(c.region)))
       .map((c) => ({
         ...c,
-        chains: c.chains.filter((ch) => !officeFilter || ch.office === officeFilter),
+        chains: c.chains.filter((ch) => {
+          if (officeSet && !officeSet.has(ch.office)) return false;
+          if (uwSet) {
+            // Keep chain if ANY programme in the chain is by a selected underwriter.
+            if (!ch.programmes.some((p) => uwSet.has(p.underwriter))) return false;
+          }
+          return true;
+        }),
       }))
       .filter((c) => {
-        if (officeFilter && c.chains.length === 0) return false;
+        if ((officeSet || uwSet) && c.chains.length === 0) return false;
         if (!q) return true;
         const haystack =
           `${c.cedentName} ${c.chains.map((ch) => `${ch.chainName} ${ch.office}`).join(" ")}`.toLowerCase();
         return haystack.includes(q);
       });
-  }, [data, search, officeFilter]);
+  }, [data, search, offices, regions, underwriters]);
 
   return (
     <aside
@@ -98,19 +191,42 @@ export function CedentTree() {
             aria-label="Search cedents"
           />
         </label>
-        <label style={{ display: "grid", gap: 3 }}>
-          Office
-          <select
-            value={officeFilter}
-            onChange={(e) => setOfficeFilter(e.target.value)}
-            aria-label="Office filter"
+        <ChipFilter
+          label="Office"
+          options={allOffices}
+          selected={offices}
+          onChange={setOffices}
+        />
+        <ChipFilter
+          label="Region"
+          options={allRegions}
+          selected={regions}
+          onChange={setRegions}
+        />
+        <ChipFilter
+          label="Underwriter"
+          options={allUnderwriters}
+          selected={underwriters}
+          onChange={setUnderwriters}
+        />
+        {(offices.length + regions.length + underwriters.length) > 0 && (
+          <button
+            type="button"
+            onClick={clearScope}
+            style={{
+              all: "unset",
+              cursor: "pointer",
+              alignSelf: "start",
+              fontSize: "0.66rem",
+              color: "var(--brand-700)",
+              fontWeight: 600,
+              textDecoration: "underline",
+              padding: "2px 0",
+            }}
           >
-            <option value="">(any)</option>
-            {allOffices.map((o) => (
-              <option key={o} value={o}>{o}</option>
-            ))}
-          </select>
-        </label>
+            Clear all scope filters
+          </button>
+        )}
       </div>
 
       {isLoading && (
@@ -325,7 +441,7 @@ function ChainItem({ chain }: { chain: ProgrammeChain }) {
         fontSize: "0.78rem",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
         <button
           type="button"
           onClick={() => selectChain(isChainSelected ? null : chain.chainId)}
@@ -334,14 +450,32 @@ function ChainItem({ chain }: { chain: ProgrammeChain }) {
         >
           <div
             style={{
-              fontWeight: 600,
-              color: "var(--ink-900)",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              minWidth: 0,
             }}
           >
-            {chain.chainName}
+            <span
+              style={{
+                fontWeight: 600,
+                color: "var(--ink-900)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                flex: 1,
+                minWidth: 0,
+              }}
+            >
+              {chain.chainName}
+            </span>
+            {current && (
+              <StatusBadge
+                status={current.status}
+                inForce={isInForce(current)}
+                size="xs"
+              />
+            )}
           </div>
         </button>
         <button
@@ -431,7 +565,14 @@ function ProgrammeItem({
         <span style={{ fontSize: "0.74rem", color: "var(--ink-900)", fontWeight: 600 }}>
           {programme.treatyYear}
         </span>
-        <ErtBadge status={ert} />
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <StatusBadge
+            status={programme.status}
+            inForce={isInForce(programme)}
+            size="xs"
+          />
+          <ErtBadge status={ert} />
+        </span>
       </button>
       {showJob && (
         <div style={{ paddingLeft: 8, marginTop: 4 }}>

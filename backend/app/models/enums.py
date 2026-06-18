@@ -59,6 +59,18 @@ class ErtStatus(str, Enum):
     ERT_ERROR = "ERT_ERROR"
 
 
+class ProgrammeStatus(str, Enum):
+    """Deal lifecycle. Currently in-force = ``BOUND`` and date between inception
+    and expiry. ``EXPIRED`` is set automatically by the provider when expiry has
+    passed. ``DECLINED`` / ``NTU`` deals don't enter the in-force portfolio."""
+
+    BOUND = "BOUND"
+    QUOTED = "QUOTED"
+    DECLINED = "DECLINED"
+    NTU = "NTU"
+    EXPIRED = "EXPIRED"
+
+
 class CombinationMethod(str, Enum):
     """CONTRACTS.md §4 — default is MAX_ACROSS_PERILS_AT_VIEW_GRAIN (CLAUDE.md rule 3)."""
 

@@ -98,10 +98,26 @@ def test_map_without_comparison_emits_prior_not_selected_warning() -> None:
     assert WarningCode.WARN_PRIOR_DATASET_NOT_SELECTED.value in codes
 
 
-def test_map_requires_exactly_one_dataset_or_group() -> None:
+def test_map_allows_zero_targets_returns_portfolio() -> None:
+    """No selection target → portfolio mode (union of all in-force programmes)."""
     resp = client.post(
         "/api/exposures/map",
         json={
+            "aggregationLevel": AggregationLevel.STATE.value,
+            "metric": MetricKey.TIV.value,
+        },
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()["features"]) > 0
+
+
+def test_map_rejects_multiple_targets() -> None:
+    """Two targets are still ambiguous and must 422."""
+    resp = client.post(
+        "/api/exposures/map",
+        json={
+            "datasetId": "ds-farmers-bda-2027",
+            "cedentId": "ced-farmers",
             "aggregationLevel": AggregationLevel.STATE.value,
             "metric": MetricKey.TIV.value,
         },

@@ -12,10 +12,23 @@ import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
 import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
 
 export function HurricaneImpactPanel() {
-  const { activeStormId, data, isLoading, error, clear, selectionPayload } =
-    useHurricaneImpactStore();
+  const {
+    activeStormId,
+    data,
+    isLoading,
+    error,
+    clear,
+    selectionPayload,
+    pushedToDetail,
+    pushToDetail,
+  } = useHurricaneImpactStore();
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+
+  // When the impact has been pushed to the right-rail detail panel, hide the
+  // floating panel — the detail view shows the same content + per-programme
+  // breakdown.
+  if (pushedToDetail) return null;
 
   async function onDownload() {
     if (!activeStormId || !selectionPayload) return;
@@ -79,6 +92,24 @@ export function HurricaneImpactPanel() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button
+            onClick={pushToDetail}
+            disabled={!data}
+            title="Open this impact in the right-rail detail panel (with per-programme breakdown)"
+            style={{
+              all: "unset",
+              cursor: data ? "pointer" : "not-allowed",
+              color: "var(--brand-700)",
+              fontWeight: 600,
+              fontSize: "0.7rem",
+              padding: "2px 6px",
+              border: "1px solid var(--brand-400)",
+              borderRadius: 4,
+              opacity: data ? 1 : 0.4,
+            }}
+          >
+            → detail
+          </button>
           <button
             onClick={onDownload}
             disabled={!data || exporting}

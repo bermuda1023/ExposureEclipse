@@ -89,9 +89,16 @@ def test_export_map_data_matches_api():
         tiv = row[3]
         if gid:
             sheet_tivs[gid] = tiv
-    # Every feature in the API response is in the sheet with identical TIV.
+    # Every feature in the API response is in the sheet with the same TIV.
+    # openpyxl round-trips floats with slight precision loss (eg 31951964602.260002
+    # arrives back as 31951964602.26) — compare with math.isclose, not ==.
+    import math
     for gid, tiv in map_features.items():
-        assert sheet_tivs.get(gid) == tiv, f"Mismatch for {gid}: api={tiv} sheet={sheet_tivs.get(gid)}"
+        sheet_tiv = sheet_tivs.get(gid)
+        assert sheet_tiv is not None, f"Missing {gid} in sheet"
+        assert math.isclose(sheet_tiv, tiv, rel_tol=1e-9), (
+            f"Mismatch for {gid}: api={tiv} sheet={sheet_tiv}"
+        )
 
 
 def test_export_too_large_returns_413(monkeypatch):
