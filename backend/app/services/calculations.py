@@ -66,8 +66,22 @@ def _grain_key(fact: ExposureFactNormalized, by: Sequence[str]) -> tuple[Any, ..
     than a hard failure on a typo. (The result is still a stable tuple key, so
     aggregates work — but the caller would notice everything collapses into
     one bucket and likely catches the mistake.)
+
+    Special case: when the caller groups by the bare ``county`` attribute we
+    qualify the value with the state code ("Charlotte, FL") because many
+    states share county names. The map/detail paths key by ``geography_id``
+    instead (US-FL-12086), so they're unaffected — only pivot rows/columns
+    that pick the COUNTY dimension flow through here.
     """
-    return tuple(getattr(fact, attr, None) for attr in by)
+    out: list[Any] = []
+    for attr in by:
+        if attr == "county":
+            county = getattr(fact, "county", None)
+            state = getattr(fact, "statecode", None)
+            out.append(f"{county}, {state}" if county and state else county)
+        else:
+            out.append(getattr(fact, attr, None))
+    return tuple(out)
 
 
 def aggregate_tiv(

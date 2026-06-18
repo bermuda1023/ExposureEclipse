@@ -24,6 +24,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from ..api.exposures import (  # reuse the router builder functions for parity with the wire
+    _resolve_view,
     exposures_detail as _build_detail,
     exposures_map as _build_map,
     exposures_pivot as _build_pivot,
@@ -123,11 +124,12 @@ def build_export_xlsx(payload: dict, provider: ExposureDataProvider) -> bytes:
         )
         pivot_resp = _build_pivot(pivot_req, provider)
 
-    # Row-budget guard: rough estimate = map features + breakdown rows + pivot cells + raw facts.
-    raw_facts: list = []
-    ds_id = payload.get("datasetId")
-    if ds_id:
-        raw_facts = provider.get_facts_for_dataset(ds_id)
+    # Raw facts: dump every row the resolved view operates on. This works for
+    # ANY scope — single programme, office tier, scope filter chips, or the
+    # in-force portfolio when nothing is selected. Granular enough that users
+    # can verify the on-screen numbers by inspection.
+    resolved_view = _resolve_view(provider, map_req)
+    raw_facts = list(resolved_view.facts)
     rough_total = (
         len(map_resp.features)
         + (sum(len(b) for b in detail_resp.breakdowns.model_dump().values()) if detail_resp else 0)
@@ -164,11 +166,23 @@ def build_export_xlsx(payload: dict, provider: ExposureDataProvider) -> bytes:
     _write_kv_sheet(wb, "Filters Used", [(k, filters.get(k)) for k in sorted(filters)])
 
     # ── Dataset Metadata ──
+    # When the user is on a single deal we dump its programme metadata. For
+    # multi-deal scopes (cedent / office / portfolio / chainIds) we list the
+    # contributing dataset_ids + currency so the export is still self-describing.
     metadata_rows: list[tuple[str, Any]] = []
+    ds_id = payload.get("datasetId")
     if ds_id:
         prog = provider.get_programme_by_dataset_id(ds_id)
         if prog:
             metadata_rows = list(prog.model_dump(by_alias=True).items())
+    else:
+        contributing = sorted({f.dataset_id for f in raw_facts if f.dataset_id})
+        metadata_rows = [
+            ("Scope", "multi-programme (portfolio / cedent / chainIds)"),
+            ("Currency", resolved_view.currency),
+            ("Contributing programmes", ", ".join(contributing) or "(none)"),
+            ("Programme count", len(contributing)),
+        ]
     _write_kv_sheet(wb, "Dataset Metadata", metadata_rows or [("(none)", "")])
 
     # ── Data Quality Warnings ──

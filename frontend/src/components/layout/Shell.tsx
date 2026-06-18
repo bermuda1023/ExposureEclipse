@@ -21,6 +21,7 @@ import { useFiltersStore } from "../../state/filters";
 import { useScopeFiltersStore } from "../../state/scopeFilters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
+import { useEffectiveScope } from "../../state/useEffectiveScope";
 // Mapbox GL JS is ~1.8 MB minified — lazy-load so it stays off the critical path.
 const MapView = lazy(() =>
   import("../Map/MapView").then((m) => ({ default: m.MapView })),
@@ -38,12 +39,8 @@ import { WarningsPanel } from "./WarningsPanel";
 import type { MapRequest } from "../../api/types";
 
 export function Shell() {
-  const cedentId = useSelectionStore((s) => s.cedentId);
-  const officeKey = useSelectionStore((s) => s.officeKey);
-  const chainId = useSelectionStore((s) => s.chainId);
-  const programmeId = useSelectionStore((s) => s.programmeId);
+  const scope = useEffectiveScope();
   const comparisonProgrammeId = useSelectionStore((s) => s.comparisonProgrammeId);
-  const cedentsQuery = useCedents();
   const aggregationLevel = useViewStore((s) => s.aggregationLevel);
   const metric = useViewStore((s) => s.metric);
   const yoyMode = useViewStore((s) => s.yoyMode);
@@ -53,57 +50,16 @@ export function Shell() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
 
-  // Resolve office selection → chainIds (the cedent tree knows which chains
-  // belong to that office).
-  const officeChainIds = useMemo<string[]>(() => {
-    if (!officeKey || !cedentsQuery.data) return [];
-    const cedent = cedentsQuery.data.cedents.find((c) => c.cedentId === officeKey.cedentId);
-    if (!cedent) return [];
-    return cedent.chains.filter((ch) => ch.office === officeKey.office).map((ch) => ch.chainId);
-  }, [officeKey, cedentsQuery.data]);
-
-  // Scope filters (office / region / underwriter multi-selects in the left rail)
-  // — when these are active and the user has no explicit single selection, the
-  // aggregation request narrows to the intersection of matching chains. This is
-  // how "select all M. Hayes deals" or "Southeast region only" flows into the map.
-  const scopeOffices = useScopeFiltersStore((s) => s.offices);
-  const scopeRegions = useScopeFiltersStore((s) => s.regions);
-  const scopeUnderwriters = useScopeFiltersStore((s) => s.underwriters);
-  const scopeChainIds = useMemo<string[]>(() => {
-    if (!cedentsQuery.data) return [];
-    const officeSet = scopeOffices.length ? new Set(scopeOffices) : null;
-    const regionSet = scopeRegions.length ? new Set(scopeRegions) : null;
-    const uwSet = scopeUnderwriters.length ? new Set(scopeUnderwriters) : null;
-    const out: string[] = [];
-    for (const c of cedentsQuery.data.cedents) {
-      if (regionSet && (!c.region || !regionSet.has(c.region))) continue;
-      for (const ch of c.chains) {
-        if (officeSet && !officeSet.has(ch.office)) continue;
-        if (uwSet && !ch.programmes.some((p) => uwSet.has(p.underwriter))) continue;
-        out.push(ch.chainId);
-      }
-    }
-    return out;
-  }, [cedentsQuery.data, scopeOffices, scopeRegions, scopeUnderwriters]);
-  const hasScopeFilter =
-    scopeOffices.length + scopeRegions.length + scopeUnderwriters.length > 0;
-
-  // No explicit selection AND no scope filters → backend portfolio mode
-  // (union of all in-force BOUND programmes). Scope filters take priority
-  // over portfolio mode but yield to an explicit single selection.
-  const effectiveChainIds = useMemo<string[] | undefined>(() => {
-    if (programmeId || chainId || cedentId) return undefined;
-    if (officeChainIds.length > 0) return officeChainIds;
-    if (hasScopeFilter && scopeChainIds.length > 0) return scopeChainIds;
-    return undefined;
-  }, [programmeId, chainId, cedentId, officeChainIds, hasScopeFilter, scopeChainIds]);
+  // Effective scope (selection ∪ scope-filter ∪ portfolio fallback) is
+  // resolved by useEffectiveScope so every consumer (map, pivot, export,
+  // hurricane impact) sees the SAME set of programmes.
 
   const mapRequest = useMemo<MapRequest | null>(() => {
     return {
-      cedentId,
-      chainId,
-      chainIds: effectiveChainIds,
-      programmeId,
+      cedentId: scope.cedentId,
+      chainId: scope.chainId,
+      chainIds: scope.chainIds,
+      programmeId: scope.programmeId,
       aggregationLevel,
       metric,
       filters: {
@@ -120,10 +76,10 @@ export function Shell() {
       yoyMode,
     };
   }, [
-    cedentId,
-    chainId,
-    programmeId,
-    effectiveChainIds,
+    scope.cedentId,
+    scope.chainId,
+    scope.programmeId,
+    scope.chainIds,
     comparisonProgrammeId,
     aggregationLevel,
     metric,

@@ -20,11 +20,9 @@ import {
 } from "../../api/hurricanes";
 import { useHurricaneStore } from "../../state/hurricanes";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
-import { useSelectionStore } from "../../state/selection";
-import { useScopeFiltersStore } from "../../state/scopeFilters";
 import { useViewStore } from "../../state/view";
 import { useFiltersStore } from "../../state/filters";
-import { useCedents } from "../../api/hooks";
+import { useEffectiveScope } from "../../state/useEffectiveScope";
 import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
 
 const LINE_LAYER = "hurricane-lines";
@@ -89,9 +87,13 @@ export function HurricaneLayer({ map }: Props) {
   const setImpactData = useHurricaneImpactStore((s) => s.setData);
   const setImpactError = useHurricaneImpactStore((s) => s.setError);
   const activeImpactStormId = useHurricaneImpactStore((s) => s.activeStormId);
-  // Read selection + view state via getState() inside the click handler to
-  // avoid re-registering the listener every time something changes.
-  const cedentsQuery = useCedents();
+  // Effective scope is computed by the same hook the map + pivot + export
+  // use, so a hurricane click always aggregates the SAME programmes the user
+  // is looking at. Kept in a ref so changing scope doesn't tear down + rebuild
+  // the Mapbox source/layers.
+  const effectiveScope = useEffectiveScope();
+  const scopeRef = useRef(effectiveScope);
+  scopeRef.current = effectiveScope;
   const [hovered, setHovered] = useState<HoveredSegment | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -206,68 +208,14 @@ export function HurricaneLayer({ map }: Props) {
           const stormId = props?.stormId as string | undefined;
           if (!stormId) return;
 
-          // Build the selection payload from the *same* logic Shell.tsx uses
-          // for the map request — so the impact panel aggregates exactly
-          // what's visible on the map (single deal, office, scope filters, or
-          // portfolio mode when nothing's set).
-          const sel = useSelectionStore.getState();
           const view = useViewStore.getState();
           const filters = useFiltersStore.getState();
-          const scope = useScopeFiltersStore.getState();
-
-          const officeChainIds = (() => {
-            if (!sel.officeKey || !cedentsQuery.data) return [];
-            const cedent = cedentsQuery.data.cedents.find(
-              (c) => c.cedentId === sel.officeKey!.cedentId,
-            );
-            return cedent
-              ? cedent.chains
-                  .filter((ch) => ch.office === sel.officeKey!.office)
-                  .map((ch) => ch.chainId)
-              : [];
-          })();
-          // Scope filters → matching chainIds (only consulted when no explicit
-          // deal is picked, mirroring Shell.tsx).
-          const scopeChainIds = (() => {
-            if (!cedentsQuery.data) return [];
-            const officeSet = scope.offices.length ? new Set(scope.offices) : null;
-            const regionSet = scope.regions.length ? new Set(scope.regions) : null;
-            const uwSet = scope.underwriters.length
-              ? new Set(scope.underwriters)
-              : null;
-            const out: string[] = [];
-            for (const c of cedentsQuery.data.cedents) {
-              if (regionSet && (!c.region || !regionSet.has(c.region))) continue;
-              for (const ch of c.chains) {
-                if (officeSet && !officeSet.has(ch.office)) continue;
-                if (uwSet && !ch.programmes.some((p) => uwSet.has(p.underwriter)))
-                  continue;
-                out.push(ch.chainId);
-              }
-            }
-            return out;
-          })();
-          const hasScope =
-            scope.offices.length + scope.regions.length + scope.underwriters.length >
-            0;
-
-          const effectiveChainIds: string[] | undefined = (() => {
-            if (sel.programmeId || sel.chainId || sel.cedentId) return undefined;
-            if (officeChainIds.length > 0) return officeChainIds;
-            if (hasScope && scopeChainIds.length > 0) return scopeChainIds;
-            return undefined;
-          })();
-
-          // Empty target set is now a valid request: backend reads it as
-          // portfolio mode (union of every in-force programme). No more
-          // fallback to a single hardcoded dataset.
+          const sc = scopeRef.current;
           const selectionPayload = {
-            cedentId: sel.cedentId,
-            chainId: sel.chainId,
-            chainIds: effectiveChainIds,
-            programmeId: sel.programmeId,
-            // Force COUNTY level for the impact request — that's what the
-            // panel renders against.
+            cedentId: sc.cedentId,
+            chainId: sc.chainId,
+            chainIds: sc.chainIds,
+            programmeId: sc.programmeId,
             aggregationLevel: "COUNTY",
             metric: "TIV",
             perils: view.perils,

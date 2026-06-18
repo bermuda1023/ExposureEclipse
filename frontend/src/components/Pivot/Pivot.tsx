@@ -7,10 +7,11 @@
  */
 
 import { useMemo, useState } from "react";
-import { useCedents, usePivotData } from "../../api/hooks";
+import { usePivotData } from "../../api/hooks";
 import { useFiltersStore } from "../../state/filters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
+import { useEffectiveScope } from "../../state/useEffectiveScope";
 import {
   AggregationLevel,
   Measure,
@@ -62,34 +63,23 @@ const MONEY_MEASURES: ReadonlySet<MeasureType> = new Set([
 ]);
 
 export function Pivot() {
-  const cedentId = useSelectionStore((s) => s.cedentId);
-  const officeKey = useSelectionStore((s) => s.officeKey);
-  const chainId = useSelectionStore((s) => s.chainId);
-  const programmeId = useSelectionStore((s) => s.programmeId);
+  const scope = useEffectiveScope();
   const comparisonProgrammeId = useSelectionStore((s) => s.comparisonProgrammeId);
   const perils = useViewStore((s) => s.perils);
   const filters = useFiltersStore();
-  const cedentsQuery = useCedents();
 
   const [rows, setRows] = useState<string[]>([AggregationLevel.STATE]);
   const [columns, setColumns] = useState<string[]>(["PERIL"]);
   const [measures, setMeasures] = useState<MeasureType[]>([Measure.TIV, Measure.LOCATION_COUNT]);
 
-  const officeChainIds = useMemo<string[]>(() => {
-    if (!officeKey || !cedentsQuery.data) return [];
-    const cedent = cedentsQuery.data.cedents.find((c) => c.cedentId === officeKey.cedentId);
-    if (!cedent) return [];
-    return cedent.chains.filter((ch) => ch.office === officeKey.office).map((ch) => ch.chainId);
-  }, [officeKey, cedentsQuery.data]);
-
+  // Pivot fires for any scope the map fires for, including portfolio mode.
   const request = useMemo<PivotRequest | null>(() => {
-    if (!cedentId && !chainId && !programmeId && officeChainIds.length === 0) return null;
     if (measures.length === 0) return null;
     return {
-      cedentId,
-      chainId,
-      chainIds: officeChainIds.length > 0 ? officeChainIds : undefined,
-      programmeId,
+      cedentId: scope.cedentId,
+      chainId: scope.chainId,
+      chainIds: scope.chainIds,
+      programmeId: scope.programmeId,
       rows,
       columns,
       measures,
@@ -106,10 +96,10 @@ export function Pivot() {
       perils,
     };
   }, [
-    cedentId,
-    chainId,
-    programmeId,
-    officeChainIds,
+    scope.cedentId,
+    scope.chainId,
+    scope.programmeId,
+    scope.chainIds,
     comparisonProgrammeId,
     perils,
     rows,
@@ -175,7 +165,7 @@ export function Pivot() {
       </p>
       {!request && (
         <p style={{ color: "#666", fontSize: "0.85rem" }}>
-          Pick a current dataset/group and at least one measure.
+          Pick at least one measure.
         </p>
       )}
       {isLoading && <p>Loading pivot…</p>}

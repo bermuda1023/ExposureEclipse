@@ -6,37 +6,24 @@
  * just forward whatever the user is looking at right now.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { downloadExcelExport } from "../../api/exports";
-import { useCedents } from "../../api/hooks";
 import { useFiltersStore } from "../../state/filters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
+import { useEffectiveScope } from "../../state/useEffectiveScope";
 
 export function ExportButton() {
-  const cedentId = useSelectionStore((s) => s.cedentId);
-  const officeKey = useSelectionStore((s) => s.officeKey);
-  const chainId = useSelectionStore((s) => s.chainId);
-  const programmeId = useSelectionStore((s) => s.programmeId);
+  const scope = useEffectiveScope();
   const comparisonProgrammeId = useSelectionStore((s) => s.comparisonProgrammeId);
   const aggregationLevel = useViewStore((s) => s.aggregationLevel);
   const metric = useViewStore((s) => s.metric);
   const perils = useViewStore((s) => s.perils);
   const selectedGeographyId = useViewStore((s) => s.selectedGeographyId);
   const filters = useFiltersStore();
-  const cedentsQuery = useCedents();
-
-  const officeChainIds = useMemo<string[]>(() => {
-    if (!officeKey || !cedentsQuery.data) return [];
-    const cedent = cedentsQuery.data.cedents.find((c) => c.cedentId === officeKey.cedentId);
-    if (!cedent) return [];
-    return cedent.chains.filter((ch) => ch.office === officeKey.office).map((ch) => ch.chainId);
-  }, [officeKey, cedentsQuery.data]);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hasSelection = Boolean(cedentId || chainId || programmeId || officeChainIds.length > 0);
-  const disabled = busy || !hasSelection;
 
   return (
     <div style={{ display: "grid", gap: 4 }}>
@@ -46,10 +33,10 @@ export function ExportButton() {
           setError(null);
           try {
             const blob = await downloadExcelExport({
-              cedentId,
-              chainId,
-              chainIds: officeChainIds.length > 0 ? officeChainIds : undefined,
-              programmeId,
+              cedentId: scope.cedentId,
+              chainId: scope.chainId,
+              chainIds: scope.chainIds,
+              programmeId: scope.programmeId,
               comparisonProgrammeId,
               perils,
               aggregationLevel,
@@ -82,7 +69,14 @@ export function ExportButton() {
             setBusy(false);
           }
         }}
-        disabled={disabled}
+        disabled={busy}
+        title={
+          scope.hasExplicit
+            ? "Export the current selection to Excel"
+            : scope.hasScopeFilter
+              ? "Export the filtered scope to Excel"
+              : "Export the in-force portfolio to Excel"
+        }
       >
         {busy ? "Building workbook…" : "Export to Excel"}
       </button>
