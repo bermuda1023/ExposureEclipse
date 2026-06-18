@@ -175,7 +175,7 @@ def _compute_impact_payload(
     facts = _apply_peril_filter(resolved.facts, payload.perils)
     facts = apply_filters(facts, payload.filters)
 
-    impacts, footprint, cone = compute_impact(storm, multiplier=multiplier)
+    impacts, footprint, cone, outer_cone = compute_impact(storm, multiplier=multiplier)
     impacts = join_tiv(impacts, facts)
 
     total_tiv = sum(i.tiv for i in impacts)
@@ -205,12 +205,15 @@ def _compute_impact_payload(
                 "rmaxNm": round(fp.rmax_nm, 1),
                 "radiusNm": round(fp.radius_nm, 1),
                 "rmaxSource": fp.rmax_source,
+                "r64Nm": round(fp.r64_nm, 1),
+                "r64Source": fp.r64_source,
             }
             for fp in footprint
         ],
+        # Inner cone (Rmax / eyewall) and outer cone (R64 / hurricane-wind
+        # extent). Each quad is a closed GeoJSON ring colored by wind speed.
         "cone": [
             {
-                # GeoJSON polygon ring (closed = first vertex repeated at end)
                 "corners": [
                     [round(lon, 4), round(lat, 4)] for (lon, lat) in q.corners
                 ]
@@ -220,6 +223,18 @@ def _compute_impact_payload(
                 "endWindKt": q.end_wind_kt,
             }
             for q in cone
+        ],
+        "outerCone": [
+            {
+                "corners": [
+                    [round(lon, 4), round(lat, 4)] for (lon, lat) in q.corners
+                ]
+                + [[round(q.corners[0][0], 4), round(q.corners[0][1], 4)]],
+                "windKt": q.wind_kt,
+                "startWindKt": q.start_wind_kt,
+                "endWindKt": q.end_wind_kt,
+            }
+            for q in outer_cone
         ],
         "summary": {
             "countiesImpacted": len(impacts),

@@ -31,9 +31,13 @@ const FOOTPRINT_FILL = "hurricane-footprint-fill";
 const FOOTPRINT_LINE = "hurricane-footprint-line";
 const CONE_FILL = "hurricane-cone-fill";
 const CONE_LINE = "hurricane-cone-line";
+const OUTER_CONE_FILL = "hurricane-outer-cone-fill";
+const OUTER_FOOTPRINT_FILL = "hurricane-outer-footprint-fill";
 const SOURCE = "hurricane-source";
 const FOOTPRINT_SOURCE = "hurricane-footprint";
+const OUTER_FOOTPRINT_SOURCE = "hurricane-outer-footprint";
 const CONE_SOURCE = "hurricane-cone";
+const OUTER_CONE_SOURCE = "hurricane-outer-cone";
 
 // Saffir-Simpson palette used inline in the cone + footprint fill expressions
 // via a Mapbox ["step", ["get", "windKt"], default, stop, color, ...] form
@@ -60,8 +64,8 @@ function buildFootprintFC(footprint: import("../../api/hurricanes").FootprintPoi
   const features: GeoJSON.Feature[] = [];
   if (!footprint) return { type: "FeatureCollection" as const, features };
   for (const pt of footprint) {
-    // Cap circles drawn at Rmax (eyewall) — same half-width as the cone
-    // quads, so caps and quads together form a continuous wind-max swath.
+    // Inner cap circles drawn at Rmax (eyewall) — same half-width as the
+    // inner cone quads, so caps and quads form a continuous wind-max swath.
     features.push({
       type: "Feature",
       geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, pt.rmaxNm)] },
@@ -69,6 +73,23 @@ function buildFootprintFC(footprint: import("../../api/hurricanes").FootprintPoi
         windKt: pt.windKt,
         rmaxNm: pt.rmaxNm,
         rmaxSource: pt.rmaxSource,
+      },
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
+}
+
+function buildOuterFootprintFC(footprint: import("../../api/hurricanes").FootprintPoint[] | undefined) {
+  const features: GeoJSON.Feature[] = [];
+  if (!footprint) return { type: "FeatureCollection" as const, features };
+  for (const pt of footprint) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [ringAround(pt.lat, pt.lon, pt.r64Nm)] },
+      properties: {
+        windKt: pt.windKt,
+        r64Nm: pt.r64Nm,
+        r64Source: pt.r64Source,
       },
     });
   }
@@ -293,15 +314,74 @@ export function HurricaneLayer({ map }: Props) {
   // so the swath gradients smoothly from Cat-1 yellow → Cat-5 dark red.
   const impactFootprint = useHurricaneImpactStore((s) => s.data?.footprint);
   const impactCone = useHurricaneImpactStore((s) => s.data?.cone);
+  const impactOuterCone = useHurricaneImpactStore((s) => s.data?.outerCone);
   useEffect(() => {
     if (!map) return;
     const apply = () => {
       const footprintFC = buildFootprintFC(activeImpactStormId ? impactFootprint : undefined);
+      const outerFootprintFC = buildOuterFootprintFC(activeImpactStormId ? impactFootprint : undefined);
       const coneFC = buildConeFC(activeImpactStormId ? impactCone : undefined);
+      const outerConeFC = buildConeFC(activeImpactStormId ? impactOuterCone : undefined);
 
-      // Cone fill goes down FIRST (under the circles) so the per-point caps
-      // sit on top, smoothing the bearing turns. Both layers share the same
-      // wind-driven interpolate so the fills read as one continuous swath
+      // Outer cone (R64 — hurricane-wind extent) goes down FIRST so it sits
+      // BELOW the inner Rmax cone. Painted at lower opacity so the eyewall
+      // core stays visually prominent. Same Cat-colored step palette.
+      const outerConeExisting = map.getSource(OUTER_CONE_SOURCE) as GeoJSONSource | undefined;
+      if (outerConeExisting) {
+        outerConeExisting.setData(outerConeFC as never);
+      } else {
+        map.addSource(OUTER_CONE_SOURCE, { type: "geojson", data: outerConeFC as never });
+        map.addLayer(
+          {
+            id: OUTER_CONE_FILL,
+            type: "fill",
+            source: OUTER_CONE_SOURCE,
+            paint: {
+              "fill-color": [
+                "step", ["get", "windKt"],
+                "#fde047",
+                83, "#fb923c",
+                96, "#ea580c",
+                113, "#b91c1c",
+                137, "#581c87",
+              ] as unknown as never,
+              "fill-opacity": 0.22,
+              "fill-outline-color": "rgba(0,0,0,0)",
+            },
+          },
+          map.getLayer("county-line") ? "county-line" : undefined,
+        );
+      }
+      const outerFootExisting = map.getSource(OUTER_FOOTPRINT_SOURCE) as GeoJSONSource | undefined;
+      if (outerFootExisting) {
+        outerFootExisting.setData(outerFootprintFC as never);
+      } else {
+        map.addSource(OUTER_FOOTPRINT_SOURCE, { type: "geojson", data: outerFootprintFC as never });
+        map.addLayer(
+          {
+            id: OUTER_FOOTPRINT_FILL,
+            type: "fill",
+            source: OUTER_FOOTPRINT_SOURCE,
+            paint: {
+              "fill-color": [
+                "step", ["get", "windKt"],
+                "#fde047",
+                83, "#fb923c",
+                96, "#ea580c",
+                113, "#b91c1c",
+                137, "#581c87",
+              ] as unknown as never,
+              "fill-opacity": 0.22,
+              "fill-outline-color": "rgba(0,0,0,0)",
+            },
+          },
+          map.getLayer("county-line") ? "county-line" : undefined,
+        );
+      }
+
+      // Inner cone fill goes down NEXT (above outer, under the circles) so
+      // the eyewall is the brightest band. Both inner layers share the same
+      // wind-driven step palette so the fills read as one continuous swath
       // and no outline strokes break it up into discrete shapes.
       const coneExisting = map.getSource(CONE_SOURCE) as GeoJSONSource | undefined;
       if (coneExisting) {
@@ -369,7 +449,7 @@ export function HurricaneLayer({ map }: Props) {
     };
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, activeImpactStormId, impactFootprint, impactCone]);
+  }, [map, activeImpactStormId, impactFootprint, impactCone, impactOuterCone]);
 
   // ── Spotlight the clicked storm: fade every other path almost to nothing ──
   useEffect(() => {
@@ -483,10 +563,17 @@ export function HurricaneLayer({ map }: Props) {
 // ───────────────────────── helpers ─────────────────────────
 
 function removeLayers(map: MbMap) {
-  for (const id of [CONE_LINE, CONE_FILL, FOOTPRINT_LINE, FOOTPRINT_FILL, LINE_LAYER, POINT_LAYER]) {
+  for (const id of [
+    CONE_LINE, CONE_FILL, FOOTPRINT_LINE, FOOTPRINT_FILL,
+    OUTER_CONE_FILL, OUTER_FOOTPRINT_FILL,
+    LINE_LAYER, POINT_LAYER,
+  ]) {
     if (map.getLayer(id)) map.removeLayer(id);
   }
-  for (const id of [SOURCE, `${SOURCE}-pts`, FOOTPRINT_SOURCE, CONE_SOURCE]) {
+  for (const id of [
+    SOURCE, `${SOURCE}-pts`, FOOTPRINT_SOURCE, CONE_SOURCE,
+    OUTER_FOOTPRINT_SOURCE, OUTER_CONE_SOURCE,
+  ]) {
     if (map.getSource(id)) map.removeSource(id);
   }
 }

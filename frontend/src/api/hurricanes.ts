@@ -80,8 +80,12 @@ export interface FootprintPoint {
   lon: number;
   windKt: number;
   rmaxNm: number;
-  radiusNm: number;
+  radiusNm: number;       // 2.5×Rmax legacy "damaging-winds" radius
   rmaxSource: "ibtracs" | "willoughby";
+  /** Mean radius of 64-kt winds across the four IBTrACS quadrants, or
+   * 2.5×Rmax fallback for pre-2004 storms with no R64 measurement. */
+  r64Nm: number;
+  r64Source: "ibtracs" | "fallback";
 }
 
 /** One tapered-quad cone segment between two adjacent footprint points.
@@ -113,9 +117,12 @@ export interface HurricaneImpactResponse {
    * the Rmax used. Frontend renders the visible wind buffer from these so it
    * uses IBTrACS-measured Rmax wherever recon data is available. */
   footprint: FootprintPoint[];
-  /** Tapered quads connecting adjacent footprint points — together with the
-   * circles around each point, these form the continuous wind-field cone. */
+  /** Inner cone — tapered quads at Rmax (eyewall / wind-max core). */
   cone: ConeQuad[];
+  /** Outer cone — tapered quads at R64 (hurricane-wind extent). Larger and
+   * rendered with lower opacity to convey the full footprint of damaging
+   * winds while keeping the eyewall core readable on top. */
+  outerCone: ConeQuad[];
   summary: ImpactSummary;
   counties: ImpactedCounty[];
 }

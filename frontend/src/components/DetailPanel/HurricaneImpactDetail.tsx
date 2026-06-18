@@ -227,6 +227,9 @@ function FragmentRow({
               ({c.rmaxSource === "ibtracs" ? "IBTrACS" : "Willoughby est."})
             </span>
           </div>
+          <div style={{ fontSize: "0.62rem", color: "var(--ink-500)", marginTop: 1 }}>
+            Captured at R64 — IBTrACS hurricane-wind radius (or 2.5×Rmax fallback)
+          </div>
         </td>
         <td style={{ ...td, textAlign: "center" }}>
           <span

@@ -20,12 +20,12 @@ from __future__ import annotations
 import json
 import math
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
 from .hurdat2 import category_for_wind
-from .ibtracs import Storm, TrackPoint, lookup_rmax_nm
+from .ibtracs import Storm, TrackPoint, lookup_r64_nm, lookup_rmax_nm
 
 COUNTIES_TOPO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json"
 FETCH_TIMEOUT_S = 30
@@ -286,16 +286,24 @@ class CountyImpact:
 
 @dataclass(slots=True, frozen=True)
 class FootprintPoint:
-    """One contributing track point in the impact footprint — the same Rmax
-    we used to test counties, exposed so the frontend draws the visible
-    wind-buffer from real IBTrACS-aware radii instead of recomputing."""
+    """One contributing track point in the impact footprint.
+
+    Carries BOTH radii so the frontend can render an inner cone (Rmax
+    eyewall) and a softer outer cone (R64 hurricane-wind extent):
+
+      - ``rmax_nm``       — radius of maximum winds (eyewall)
+      - ``r64_nm``        — mean radius of 64-kt winds, or 2.5×Rmax fallback
+      - ``r64_source``    — 'ibtracs' when measured, 'fallback' when synthetic
+    """
 
     lat: float
     lon: float
     wind_kt: int
     rmax_nm: float
-    radius_nm: float
-    rmax_source: str  # 'ibtracs' | 'willoughby'
+    radius_nm: float        # 2.5×Rmax — legacy "damaging-winds" radius
+    rmax_source: str        # 'ibtracs' | 'willoughby'
+    r64_nm: float
+    r64_source: str         # 'ibtracs' (measured) | 'fallback' (2.5×Rmax)
 
 
 @dataclass(slots=True, frozen=True)
@@ -342,38 +350,32 @@ def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
 
 
-def _build_cone(footprint: list[FootprintPoint]) -> list[ConeQuad]:
-    """Tapered quads between consecutive hurricane-strength fixes.
-
-    Caps at each point are NOT in the cone — they're rendered as discs by the
-    frontend (one ring per FootprintPoint) so corners read smoothly when the
-    track turns sharply. Together: disc + quad + disc + quad + … forms a
-    continuous swath colored by per-segment wind speed.
-    """
+def _quads_along_track(
+    footprint: list[FootprintPoint],
+    half_width: Callable[[FootprintPoint], float],
+) -> list[ConeQuad]:
+    """Tapered quads between consecutive footprint points. Half-width per
+    point is the value returned by ``half_width(point)`` so the same
+    machinery builds the inner Rmax cone and the outer R64 cone."""
     quads: list[ConeQuad] = []
     for i in range(len(footprint) - 1):
         a = footprint[i]
         b = footprint[i + 1]
-        # Sanity: skip a degenerate pair at the same lat/lon (shouldn't happen
-        # with IBTrACS, but defensive — we'd otherwise divide by zero in bearing).
         if a.lat == b.lat and a.lon == b.lon:
             continue
-        # Skip absurd jumps (e.g. crossing the dateline or hopping basins) —
-        # >300 nm between consecutive fixes is wrong for a 3-hour interp.
         gap = haversine_nm(a.lat, a.lon, b.lat, b.lon)
         if gap > 300:
             continue
         bearing = _bearing_deg(a.lat, a.lon, b.lat, b.lon)
         left_bearing = (bearing - 90.0) % 360.0
         right_bearing = (bearing + 90.0) % 360.0
-        # Cone half-width = Rmax (radius of MAXIMUM winds — the eyewall).
-        # The visible cone now shows the true wind-max core. The broader
-        # 2.5×Rmax "damaging-winds" zone is what flags impacted counties
-        # red on the map — different concept, different visual.
-        la_lat, la_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, left_bearing)
-        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, right_bearing)
-        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, left_bearing)
-        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, right_bearing)
+        wa, wb = half_width(a), half_width(b)
+        if wa <= 0 or wb <= 0:
+            continue
+        la_lat, la_lon = _offset_latlon(a.lat, a.lon, wa, left_bearing)
+        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, wa, right_bearing)
+        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, wb, left_bearing)
+        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, wb, right_bearing)
         quads.append(
             ConeQuad(
                 corners=(
@@ -390,11 +392,20 @@ def _build_cone(footprint: list[FootprintPoint]) -> list[ConeQuad]:
     return quads
 
 
+def _build_cones(
+    footprint: list[FootprintPoint],
+) -> tuple[list[ConeQuad], list[ConeQuad]]:
+    """(inner cone @ Rmax eyewall, outer cone @ R64 hurricane-wind extent)."""
+    inner = _quads_along_track(footprint, lambda p: p.rmax_nm)
+    outer = _quads_along_track(footprint, lambda p: p.r64_nm)
+    return inner, outer
+
+
 def compute_impact(
     storm: Storm,
     *,
     multiplier: float = DAMAGING_WIND_MULTIPLIER,
-) -> tuple[list[CountyImpact], list[FootprintPoint], list[ConeQuad]]:
+) -> tuple[list[CountyImpact], list[FootprintPoint], list[ConeQuad], list[ConeQuad]]:
     """Walk the storm's track and return every US county whose centroid falls
     within ``multiplier × Rmax`` of any on-land point, plus the list of
     contributing footprint points (one per >=85kt track fix in the US bbox).
@@ -426,6 +437,19 @@ def compute_impact(
             datetime_utc=pt.datetime_utc,
         )
         radius = rmax * multiplier
+        # R64 is the measured radius of 64-kt winds (mean across the four
+        # IBTrACS quadrants). When available it's a far better "is this
+        # county inside the hurricane wind field?" test than 2.5×Rmax,
+        # which is just a heuristic. NHC didn't systematically record R64
+        # before ~2004 so we fall back to 2.5×Rmax in that case.
+        measured_r64 = lookup_r64_nm(storm.storm_id, pt.datetime_utc)
+        if measured_r64 and measured_r64 > 0:
+            r64 = measured_r64
+            r64_src = "ibtracs"
+        else:
+            r64 = radius  # 2.5×Rmax fallback
+            r64_src = "fallback"
+        capture_radius = r64  # what we test counties against
         footprint.append(
             FootprintPoint(
                 lat=pt.lat,
@@ -434,6 +458,8 @@ def compute_impact(
                 rmax_nm=rmax,
                 radius_nm=radius,
                 rmax_source=rmax_src,
+                r64_nm=r64,
+                r64_source=r64_src,
             )
         )
         # County membership: only the more intense subset triggers a county hit.
@@ -443,14 +469,14 @@ def compute_impact(
             continue
         # Pre-filter by a generous lat/lon box (~1 deg ≈ 60 nm) to avoid 3,000
         # haversines per track point.
-        deg = radius / 50.0  # over-generous so we never miss border counties
+        deg = capture_radius / 50.0  # over-generous so we never miss border counties
         lat_lo, lat_hi = pt.lat - deg, pt.lat + deg
         lon_lo, lon_hi = pt.lon - deg, pt.lon + deg
         for c in centroids.values():
             if not (lat_lo <= c.centroid_lat <= lat_hi and lon_lo <= c.centroid_lon <= lon_hi):
                 continue
             d = haversine_nm(pt.lat, pt.lon, c.centroid_lat, c.centroid_lon)
-            if d > radius:
+            if d > capture_radius:
                 continue
             existing = impacts.get(c.geoid)
             if existing is None:
@@ -479,8 +505,13 @@ def compute_impact(
                     existing.rmax_at_closest_nm = rmax
                     existing.rmax_source = rmax_src
 
-    cone = _build_cone(footprint)
-    return sorted(impacts.values(), key=lambda i: -i.max_wind_kt), footprint, cone
+    inner_cone, outer_cone = _build_cones(footprint)
+    return (
+        sorted(impacts.values(), key=lambda i: -i.max_wind_kt),
+        footprint,
+        inner_cone,
+        outer_cone,
+    )
 
 
 def join_tiv(

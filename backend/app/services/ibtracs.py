@@ -86,8 +86,12 @@ def _parse_float(s: str) -> float | None:
 
 
 @lru_cache(maxsize=1)
-def _parse_csv() -> tuple[dict[tuple[str, str], float], dict[str, Storm]]:
-    """Single-pass fetch + parse → (rmax_index, storms_by_atcf)."""
+def _parse_csv() -> tuple[
+    dict[tuple[str, str], float],          # rmax index
+    dict[tuple[str, str], float],          # r64 (mean across non-zero quadrants) index
+    dict[str, Storm],                       # storms by ATCF id
+]:
+    """Single-pass fetch + parse → (rmax_index, r64_index, storms_by_atcf)."""
     req = urllib.request.Request(
         IBTRACS_URL, headers={"User-Agent": "exposure-eclipse-ibtracs/1.0"}
     )
@@ -113,15 +117,18 @@ def _parse_csv() -> tuple[dict[tuple[str, str], float], dict[str, Storm]]:
         i_pres = header.index("USA_PRES")
         i_status = header.index("USA_STATUS")
         i_record = header.index("USA_RECORD")
+        i_r64 = [header.index(f"USA_R64_{q}") for q in ("NE", "SE", "SW", "NW")]
     except ValueError:
         # Header layout drifted — bail out clean; downstream falls back gracefully.
-        return {}, {}
+        return {}, {}, {}
 
     rmax_index: dict[tuple[str, str], float] = {}
+    r64_index: dict[tuple[str, str], float] = {}
     storms: dict[str, Storm] = {}
     max_col = max(
         i_atcf, i_time, i_rmw, i_season, i_name,
         i_lat, i_lon, i_wind, i_pres, i_status, i_record,
+        *i_r64,
     )
 
     for row in reader:
@@ -154,6 +161,25 @@ def _parse_csv() -> tuple[dict[tuple[str, str], float], dict[str, Storm]]:
                     rmax_index[(atcf, key_dt)] = rmw
             except ValueError:
                 pass
+
+        # R64 index — IBTrACS records the radius of 64-kt winds in each of
+        # four quadrants. Many older fixes carry only NE filled in and the
+        # rest blank/zero; the mean of the *non-zero* quadrants is a fair
+        # representative size that the visible outer cone uses to convey
+        # the hurricane wind field's footprint.
+        quad_vals: list[float] = []
+        for ci in i_r64:
+            v = row[ci].strip()
+            if not v:
+                continue
+            try:
+                f = float(v)
+            except ValueError:
+                continue
+            if f > 0:
+                quad_vals.append(f)
+        if quad_vals:
+            r64_index[(atcf, key_dt)] = sum(quad_vals) / len(quad_vals)
 
         # Track point — needs at minimum lat/lon.
         lat = _parse_float(row[i_lat])
@@ -193,15 +219,19 @@ def _parse_csv() -> tuple[dict[tuple[str, str], float], dict[str, Storm]]:
     for s in storms.values():
         s.track.sort(key=lambda p: p.datetime_utc)
 
-    return rmax_index, storms
+    return rmax_index, r64_index, storms
 
 
 def _rmax_index() -> dict[tuple[str, str], float]:
     return _parse_csv()[0]
 
 
-def _storms_index() -> dict[str, Storm]:
+def _r64_index() -> dict[tuple[str, str], float]:
     return _parse_csv()[1]
+
+
+def _storms_index() -> dict[str, Storm]:
+    return _parse_csv()[2]
 
 
 # ───────────────────────── public API ─────────────────────────
@@ -244,8 +274,25 @@ def lookup_rmax_nm(storm_id: str | None, datetime_utc: str | None) -> float | No
     return _rmax_index().get((storm_id.upper(), key_dt))
 
 
-def warm_cache() -> tuple[int, int]:
-    """Prime the cache; returns (n_storms, n_rmax_records)."""
-    idx = _rmax_index()
+def lookup_r64_nm(storm_id: str | None, datetime_utc: str | None) -> float | None:
+    """Return IBTrACS-measured mean R64 (nautical miles) for one fix, or None.
+
+    R64 is the radius at which the wind field still reaches 64 kt (hurricane
+    threshold). Larger than Rmax; defines the wind footprint that flags
+    impacted counties. NHC didn't systematically record R64 before ~2004,
+    so older storms commonly return None — caller falls back to 2.5×Rmax.
+    """
+    if not storm_id or not datetime_utc:
+        return None
+    key_dt = _normalize_datetime(datetime_utc)
+    if key_dt is None:
+        return None
+    return _r64_index().get((storm_id.upper(), key_dt))
+
+
+def warm_cache() -> tuple[int, int, int]:
+    """Prime the cache; returns (n_storms, n_rmax_records, n_r64_records)."""
+    rmw = _rmax_index()
+    r64 = _r64_index()
     storms = _storms_index()
-    return len(storms), len(idx)
+    return len(storms), len(rmw), len(r64)
