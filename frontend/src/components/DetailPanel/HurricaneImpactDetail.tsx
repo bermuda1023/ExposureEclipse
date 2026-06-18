@@ -197,11 +197,11 @@ function FragmentRow({
         style={{
           borderTop: "1px solid var(--ink-200)",
           background: isFocused
-            ? "#fef3c7"
+            ? "#fee2e2"
             : c.hasData
               ? "var(--brand-50)"
               : undefined,
-          boxShadow: isFocused ? "inset 3px 0 0 #f59e0b" : undefined,
+          boxShadow: isFocused ? "inset 3px 0 0 #ef4444" : undefined,
           cursor: "pointer",
         }}
         onClick={toggle}

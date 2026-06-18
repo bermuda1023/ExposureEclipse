@@ -201,20 +201,27 @@ export function MapView({ data, isLoading, error }: Props) {
             "case",
             // Focused (clicked in the impact detail panel) takes priority over
             // the generic storm-hit outline so the user can see WHICH impacted
-            // county they just picked.
+            // county they just picked. Bright red so it stands out from the
+            // darker red stormHit ring.
             ["==", ["feature-state", "stormFocused"], true],
-            "#f59e0b",                  // amber for the focused county
+            "#ef4444",
             ["==", ["feature-state", "stormHit"], true],
-            "#dc2626",                  // red for everyone else in the swath
+            "#dc2626",
             "#2c3a52",
           ],
           "line-width": [
             "case",
             ["==", ["feature-state", "stormFocused"], true],
-            4.0,
+            5.0,
             ["==", ["feature-state", "stormHit"], true],
             2.2,
             0.3,
+          ],
+          "line-blur": [
+            "case",
+            ["==", ["feature-state", "stormFocused"], true],
+            3,
+            0,
           ],
           "line-opacity": [
             "case",
@@ -231,6 +238,27 @@ export function MapView({ data, isLoading, error }: Props) {
               COUNTY_THRESHOLD - 0.4, 0,
               COUNTY_THRESHOLD, 0.6,
             ],
+          ],
+        },
+      });
+
+      // Inner fill glow for the focused county — light red tint over the
+      // existing choropleth so the county appears to gently pulse without
+      // hiding its data.
+      map.addLayer({
+        id: "county-focus-fill",
+        type: "fill",
+        source: COUNTY_TILESET.src,
+        "source-layer": COUNTY_TILESET.layer,
+        minzoom: 0,
+        maxzoom: COUNTY_ENV[1],
+        paint: {
+          "fill-color": "#ef4444",
+          "fill-opacity": [
+            "case",
+            ["==", ["feature-state", "stormFocused"], true],
+            0.28,
+            0,
           ],
         },
       });

@@ -35,13 +35,13 @@ const SOURCE = "hurricane-source";
 const FOOTPRINT_SOURCE = "hurricane-footprint";
 const CONE_SOURCE = "hurricane-cone";
 
-// Saffir-Simpson color stops keyed by midpoint wind speed (knots). Below 64
-// the cone never paints; ≥137 is Cat 5. Vivid palette so the fill reads
-// through the underlying county choropleth without an outline.
+// Saffir-Simpson color stops for Mapbox ['interpolate', ['linear'], windKt, ...]
+// — must be PAIRED (stop_value, color), with the lowest stop = the floor for
+// rendering. Below 64 the cone never paints anyway (filtered out backend-side).
 const CONE_COLOR_STOPS: (string | number)[] = [
-  "#fde047", // 65 kt — Cat 1 bright yellow
-  83, "#fb923c", // Cat 2 orange
-  96, "#ea580c", // Cat 3 deep orange
+  64, "#fde047",  // Cat 1 bright yellow
+  83, "#fb923c",  // Cat 2 orange
+  96, "#ea580c",  // Cat 3 deep orange
   113, "#b91c1c", // Cat 4 deep red
   137, "#581c87", // Cat 5 purple — distinct from Cat 4
 ];
@@ -326,7 +326,9 @@ export function HurricaneLayer({ map }: Props) {
               "fill-opacity": 0.55,
             },
           },
-          LINE_LAYER,
+          // Insert under the county outline so storm-hit / storm-focused
+          // outlines stay visible on top of the cone fill.
+          "county-line",
         );
       }
 
@@ -348,7 +350,9 @@ export function HurricaneLayer({ map }: Props) {
               "fill-opacity": 0.55,
             },
           },
-          LINE_LAYER,
+          // Insert under the county outline so storm-hit / storm-focused
+          // outlines stay visible on top of the cone fill.
+          "county-line",
         );
       }
     };
