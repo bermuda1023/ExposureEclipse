@@ -21,13 +21,8 @@ from ..models.exposure import MapRequest
 from ..providers import ExposureDataProvider, get_provider
 from ..services.calculations import apply_filters
 from ..services.export_excel import build_hurricane_impact_xlsx
-from ..services.hurdat2 import (
-    Storm,
-    category_for_wind,
-    fetch_and_parse,
-    landfall_summary,
-    peak_wind,
-)
+from ..services.hurdat2 import category_for_wind, landfall_summary, peak_wind
+from ..services.ibtracs import Storm, fetch_storms
 from ..services.hurricane_impact import compute_impact, join_tiv
 
 
@@ -93,13 +88,13 @@ def list_hurricanes(
         )
 
     try:
-        storms = fetch_and_parse()
+        storms = fetch_storms()
     except Exception as exc:  # noqa: BLE001 — surface NOAA fetch failures cleanly
         raise HTTPException(
             status_code=502,
             detail={
                 "code": "INTERNAL_ERROR",
-                "message": "Failed to fetch HURDAT2 data from NOAA.",
+                "message": "Failed to fetch IBTrACS data from NOAA.",
                 "details": {"error": str(exc)},
             },
         ) from exc
@@ -151,13 +146,13 @@ def _compute_impact_payload(
 
     _require_exactly_one_target(payload)
     try:
-        storms = fetch_and_parse()
+        storms = fetch_storms()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
             detail={
                 "code": "INTERNAL_ERROR",
-                "message": "Failed to fetch HURDAT2 data from NOAA.",
+                "message": "Failed to fetch IBTrACS data from NOAA.",
                 "details": {"error": str(exc)},
             },
         ) from exc
@@ -180,7 +175,7 @@ def _compute_impact_payload(
     facts = _apply_peril_filter(resolved.facts, payload.perils)
     facts = apply_filters(facts, payload.filters)
 
-    impacts, footprint = compute_impact(storm, multiplier=multiplier)
+    impacts, footprint, cone = compute_impact(storm, multiplier=multiplier)
     impacts = join_tiv(impacts, facts)
 
     total_tiv = sum(i.tiv for i in impacts)
@@ -212,6 +207,19 @@ def _compute_impact_payload(
                 "rmaxSource": fp.rmax_source,
             }
             for fp in footprint
+        ],
+        "cone": [
+            {
+                # GeoJSON polygon ring (closed = first vertex repeated at end)
+                "corners": [
+                    [round(lon, 4), round(lat, 4)] for (lon, lat) in q.corners
+                ]
+                + [[round(q.corners[0][0], 4), round(q.corners[0][1], 4)]],
+                "windKt": q.wind_kt,
+                "startWindKt": q.start_wind_kt,
+                "endWindKt": q.end_wind_kt,
+            }
+            for q in cone
         ],
         "summary": {
             "countiesImpacted": len(impacts),

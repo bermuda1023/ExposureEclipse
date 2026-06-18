@@ -29,8 +29,22 @@ const LINE_LAYER = "hurricane-lines";
 const POINT_LAYER = "hurricane-landfall-points";
 const FOOTPRINT_FILL = "hurricane-footprint-fill";
 const FOOTPRINT_LINE = "hurricane-footprint-line";
+const CONE_FILL = "hurricane-cone-fill";
+const CONE_LINE = "hurricane-cone-line";
 const SOURCE = "hurricane-source";
 const FOOTPRINT_SOURCE = "hurricane-footprint";
+const CONE_SOURCE = "hurricane-cone";
+
+// Saffir-Simpson color stops keyed by midpoint wind speed (knots). Below 64
+// the cone never paints; ≥137 is Cat 5. Same palette family as the line
+// ramp in hurricaneColors.ts so the cone reads as a thickened track.
+const CONE_COLOR_STOPS: (string | number)[] = [
+  "#fbbf24", // 65 kt — Cat 1 yellow
+  83, "#fb923c", // Cat 2 orange
+  96, "#f97316", // Cat 3 darker orange
+  113, "#dc2626", // Cat 4 red
+  137, "#7f1d1d", // Cat 5 dark red
+];
 
 /** Build a 48-vertex polygon ring approximating a circle of radius (nm) around (lat, lon). */
 const NM_PER_DEG_LAT = 60;
@@ -60,6 +74,26 @@ function buildFootprintFC(footprint: import("../../api/hurricanes").FootprintPoi
         windKt: pt.windKt,
         rmaxNm: pt.rmaxNm,
         rmaxSource: pt.rmaxSource,
+      },
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
+}
+
+/** Build the cone FeatureCollection — one Polygon per tapered quad between
+ * adjacent footprint points. Coloring driven by ``properties.windKt`` via a
+ * Mapbox interpolate expression on the fill layer. */
+function buildConeFC(cone: import("../../api/hurricanes").ConeQuad[] | undefined) {
+  const features: GeoJSON.Feature[] = [];
+  if (!cone) return { type: "FeatureCollection" as const, features };
+  for (const q of cone) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [q.corners] },
+      properties: {
+        windKt: q.windKt,
+        startWindKt: q.startWindKt,
+        endWindKt: q.endWindKt,
       },
     });
   }
@@ -256,31 +290,39 @@ export function HurricaneLayer({ map }: Props) {
     };
   }, [map, enabled, query.data]);
 
-  // ── Wind-footprint overlay for the actively-clicked storm ──
-  // Uses the backend-supplied footprint (IBTrACS-measured Rmax where recon
-  // data exists, Willoughby fallback otherwise) so the visible buffer matches
-  // the same physics the county-impact set was tested against.
+  // ── Wind-field cone + endpoint circles for the actively-clicked storm ──
+  // The cone is a stack of polygons supplied by the backend:
+  //   1. Circles per ≥64 kt footprint point (rendered client-side from rmax)
+  //   2. Tapered quads between adjacent points (`data.cone[]`)
+  // Both layers are colored by wind speed via a Mapbox interpolate expression
+  // so the swath gradients smoothly from Cat-1 yellow → Cat-5 dark red.
   const impactFootprint = useHurricaneImpactStore((s) => s.data?.footprint);
+  const impactCone = useHurricaneImpactStore((s) => s.data?.cone);
   useEffect(() => {
     if (!map) return;
     const apply = () => {
-      const fc = buildFootprintFC(activeImpactStormId ? impactFootprint : undefined);
-      const existing = map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource | undefined;
-      if (existing) {
-        existing.setData(fc as never);
+      const footprintFC = buildFootprintFC(activeImpactStormId ? impactFootprint : undefined);
+      const coneFC = buildConeFC(activeImpactStormId ? impactCone : undefined);
+
+      const footExisting = map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource | undefined;
+      if (footExisting) {
+        footExisting.setData(footprintFC as never);
       } else {
-        map.addSource(FOOTPRINT_SOURCE, { type: "geojson", data: fc as never });
+        map.addSource(FOOTPRINT_SOURCE, { type: "geojson", data: footprintFC as never });
         map.addLayer(
           {
             id: FOOTPRINT_FILL,
             type: "fill",
             source: FOOTPRINT_SOURCE,
             paint: {
-              "fill-color": "#dc2626",
-              "fill-opacity": 0.12,
+              "fill-color": [
+                "interpolate", ["linear"], ["get", "windKt"],
+                ...CONE_COLOR_STOPS,
+              ] as unknown as never,
+              "fill-opacity": 0.35,
             },
           },
-          LINE_LAYER, // sit BELOW the storm lines so the highlighted line stays on top
+          LINE_LAYER,
         );
         map.addLayer(
           {
@@ -289,8 +331,43 @@ export function HurricaneLayer({ map }: Props) {
             source: FOOTPRINT_SOURCE,
             paint: {
               "line-color": "#dc2626",
-              "line-width": 1.2,
-              "line-opacity": 0.45,
+              "line-width": 0.6,
+              "line-opacity": 0.55,
+            },
+          },
+          LINE_LAYER,
+        );
+      }
+
+      const coneExisting = map.getSource(CONE_SOURCE) as GeoJSONSource | undefined;
+      if (coneExisting) {
+        coneExisting.setData(coneFC as never);
+      } else {
+        map.addSource(CONE_SOURCE, { type: "geojson", data: coneFC as never });
+        map.addLayer(
+          {
+            id: CONE_FILL,
+            type: "fill",
+            source: CONE_SOURCE,
+            paint: {
+              "fill-color": [
+                "interpolate", ["linear"], ["get", "windKt"],
+                ...CONE_COLOR_STOPS,
+              ] as unknown as never,
+              "fill-opacity": 0.40,
+            },
+          },
+          LINE_LAYER,
+        );
+        map.addLayer(
+          {
+            id: CONE_LINE,
+            type: "line",
+            source: CONE_SOURCE,
+            paint: {
+              "line-color": "#7f1d1d",
+              "line-width": 0.4,
+              "line-opacity": 0.35,
             },
           },
           LINE_LAYER,
@@ -299,17 +376,20 @@ export function HurricaneLayer({ map }: Props) {
     };
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, activeImpactStormId, impactFootprint]);
+  }, [map, activeImpactStormId, impactFootprint, impactCone]);
 
   // ── Spotlight the clicked storm: fade every other path almost to nothing ──
   useEffect(() => {
     if (!map) return;
     if (!map.getLayer(LINE_LAYER)) return;
     if (activeImpactStormId) {
+      // Selected storm: keep the line visible but dim, so it reads as the
+      // spine of the cone. Other storms fade to a hint so the user isn't
+      // distracted.
       const hl = [
         "case",
         ["==", ["get", "stormId"], activeImpactStormId],
-        1.0,
+        0.35,
         0.04,
       ] as unknown as never;
       const widthHl = [
@@ -411,10 +491,10 @@ export function HurricaneLayer({ map }: Props) {
 // ───────────────────────── helpers ─────────────────────────
 
 function removeLayers(map: MbMap) {
-  for (const id of [FOOTPRINT_LINE, FOOTPRINT_FILL, LINE_LAYER, POINT_LAYER]) {
+  for (const id of [CONE_LINE, CONE_FILL, FOOTPRINT_LINE, FOOTPRINT_FILL, LINE_LAYER, POINT_LAYER]) {
     if (map.getLayer(id)) map.removeLayer(id);
   }
-  for (const id of [SOURCE, `${SOURCE}-pts`, FOOTPRINT_SOURCE]) {
+  for (const id of [SOURCE, `${SOURCE}-pts`, FOOTPRINT_SOURCE, CONE_SOURCE]) {
     if (map.getSource(id)) map.removeSource(id);
   }
 }

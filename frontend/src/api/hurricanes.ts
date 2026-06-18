@@ -84,6 +84,16 @@ export interface FootprintPoint {
   rmaxSource: "ibtracs" | "willoughby";
 }
 
+/** One tapered-quad cone segment between two adjacent footprint points.
+ * ``corners`` is a closed GeoJSON ring (first vertex repeated at the end).
+ * ``windKt`` is the segment midpoint, used to drive Mapbox color interpolation. */
+export interface ConeQuad {
+  corners: [number, number][];
+  windKt: number;
+  startWindKt: number;
+  endWindKt: number;
+}
+
 export interface ImpactSummary {
   countiesImpacted: number;
   countiesWithData: number;
@@ -103,6 +113,9 @@ export interface HurricaneImpactResponse {
    * the Rmax used. Frontend renders the visible wind buffer from these so it
    * uses IBTrACS-measured Rmax wherever recon data is available. */
   footprint: FootprintPoint[];
+  /** Tapered quads connecting adjacent footprint points — together with the
+   * circles around each point, these form the continuous wind-field cone. */
+  cone: ConeQuad[];
   summary: ImpactSummary;
   counties: ImpactedCounty[];
 }

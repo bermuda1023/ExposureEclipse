@@ -24,8 +24,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .hurdat2 import Storm, TrackPoint, category_for_wind
-from .ibtracs import lookup_rmax_nm
+from .hurdat2 import category_for_wind
+from .ibtracs import Storm, TrackPoint, lookup_rmax_nm
 
 COUNTIES_TOPO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json"
 FETCH_TIMEOUT_S = 30
@@ -298,11 +298,99 @@ class FootprintPoint:
     rmax_source: str  # 'ibtracs' | 'willoughby'
 
 
+@dataclass(slots=True, frozen=True)
+class ConeQuad:
+    """One tapered-quad segment of the wind-field cone between two adjacent
+    footprint points. Four corners in (lon, lat) so the frontend can build a
+    GeoJSON polygon directly; ``wind_kt`` drives the color via a Mapbox
+    interpolate expression."""
+
+    corners: tuple[
+        tuple[float, float],  # left-of-A
+        tuple[float, float],  # left-of-B
+        tuple[float, float],  # right-of-B
+        tuple[float, float],  # right-of-A
+    ]
+    wind_kt: int          # midpoint of the segment, for color interpolation
+    start_wind_kt: int
+    end_wind_kt: int
+
+
+_NM_PER_DEG_LAT = 60.0
+
+
+def _offset_latlon(
+    lat: float, lon: float, distance_nm: float, bearing_deg: float
+) -> tuple[float, float]:
+    """Move (lat, lon) by ``distance_nm`` along compass bearing — small-distance
+    flat-earth approximation. Accurate to <1% within typical Rmax distances."""
+    if distance_nm <= 0:
+        return lat, lon
+    br = math.radians(bearing_deg)
+    cos_lat = math.cos(math.radians(lat))
+    d_lat = (distance_nm * math.cos(br)) / _NM_PER_DEG_LAT
+    d_lon = (distance_nm * math.sin(br)) / (_NM_PER_DEG_LAT * max(cos_lat, 0.01))
+    return lat + d_lat, lon + d_lon
+
+
+def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Initial compass bearing from point 1 to point 2 (degrees, 0=N, 90=E)."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
+    y = math.sin(dlon) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlon)
+    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def _build_cone(footprint: list[FootprintPoint]) -> list[ConeQuad]:
+    """Tapered quads between consecutive hurricane-strength fixes.
+
+    Caps at each point are NOT in the cone — they're rendered as discs by the
+    frontend (one ring per FootprintPoint) so corners read smoothly when the
+    track turns sharply. Together: disc + quad + disc + quad + … forms a
+    continuous swath colored by per-segment wind speed.
+    """
+    quads: list[ConeQuad] = []
+    for i in range(len(footprint) - 1):
+        a = footprint[i]
+        b = footprint[i + 1]
+        # Sanity: skip a degenerate pair at the same lat/lon (shouldn't happen
+        # with IBTrACS, but defensive — we'd otherwise divide by zero in bearing).
+        if a.lat == b.lat and a.lon == b.lon:
+            continue
+        # Skip absurd jumps (e.g. crossing the dateline or hopping basins) —
+        # >300 nm between consecutive fixes is wrong for a 3-hour interp.
+        gap = haversine_nm(a.lat, a.lon, b.lat, b.lon)
+        if gap > 300:
+            continue
+        bearing = _bearing_deg(a.lat, a.lon, b.lat, b.lon)
+        left_bearing = (bearing - 90.0) % 360.0
+        right_bearing = (bearing + 90.0) % 360.0
+        la_lat, la_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, left_bearing)
+        ra_lat, ra_lon = _offset_latlon(a.lat, a.lon, a.rmax_nm, right_bearing)
+        lb_lat, lb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, left_bearing)
+        rb_lat, rb_lon = _offset_latlon(b.lat, b.lon, b.rmax_nm, right_bearing)
+        quads.append(
+            ConeQuad(
+                corners=(
+                    (la_lon, la_lat),
+                    (lb_lon, lb_lat),
+                    (rb_lon, rb_lat),
+                    (ra_lon, ra_lat),
+                ),
+                wind_kt=(a.wind_kt + b.wind_kt) // 2,
+                start_wind_kt=a.wind_kt,
+                end_wind_kt=b.wind_kt,
+            )
+        )
+    return quads
+
+
 def compute_impact(
     storm: Storm,
     *,
     multiplier: float = DAMAGING_WIND_MULTIPLIER,
-) -> tuple[list[CountyImpact], list[FootprintPoint]]:
+) -> tuple[list[CountyImpact], list[FootprintPoint], list[ConeQuad]]:
     """Walk the storm's track and return every US county whose centroid falls
     within ``multiplier × Rmax`` of any on-land point, plus the list of
     contributing footprint points (one per >=85kt track fix in the US bbox).
@@ -381,7 +469,8 @@ def compute_impact(
                     existing.rmax_at_closest_nm = rmax
                     existing.rmax_source = rmax_src
 
-    return sorted(impacts.values(), key=lambda i: -i.max_wind_kt), footprint
+    cone = _build_cone(footprint)
+    return sorted(impacts.values(), key=lambda i: -i.max_wind_kt), footprint, cone
 
 
 def join_tiv(
