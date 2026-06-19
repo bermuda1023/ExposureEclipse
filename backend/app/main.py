@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import cedents, counties, dataset_groups, ert_jobs, exports, exposures, hurricanes
+from .api import calc, cedents, counties, dataset_groups, ert_jobs, exports, exposures, hurricanes
 from .config import get_settings
 from .models.enums import ErrorCode
 from .models.warnings import ErrorEnvelope, ErrorEnvelopeBody
@@ -63,6 +63,7 @@ def health() -> dict[str, object]:
 
 
 app.include_router(api)
+app.include_router(calc.router, prefix="/api")
 app.include_router(cedents.router, prefix="/api")
 app.include_router(counties.router, prefix="/api")
 app.include_router(dataset_groups.router, prefix="/api")

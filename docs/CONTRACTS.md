@@ -77,6 +77,20 @@ Ordered coarse → fine.
 | `ERT_READY_PRIOR_RUN_DETECTED` | ERT Ready - Prior Run Detected | Ready, but outputs may be stale |
 | `ERT_ERROR` | ERT Error | Detection or last run errored |
 
+## 3b. Programme status (`ProgrammeStatus`)
+
+Deal lifecycle. **In-force today** = `BOUND` AND `today ∈ [inceptionDate,
+expiryDate]`. The "portfolio mode" view in the map / pivot / export
+aggregates every in-force programme across all cedents.
+
+| Code | Display | Counts in portfolio? |
+|---|---|---|
+| `BOUND` | Bound | yes (when dates in window) |
+| `QUOTED` | Quoted | no |
+| `DECLINED` | Declined | no |
+| `NTU` | Not Taken Up | no |
+| `EXPIRED` | Expired | no |
+
 ## 4. Dataset group combination methods (`CombinationMethod`)
 
 | Code | Display | Behavior | Default? |
@@ -221,3 +235,31 @@ confirm full set incl. Steel/Other/Unknown)*.
 `PORTNAME` (a.k.a. `Portname`) is the exposure-data snapshot date as `MMDDYYYY`
 (e.g. `09302025` = 2025-09-30). It is the dataset's `ExposureDataCutoffDate` and the de-facto
 portfolio label. Parse it to a date; display it ISO (`2025-09-30`).
+
+## 16. Hurricane impact + R64 sourcing
+
+`rmaxSource` per impacted county and per footprint point:
+
+| Code | Source |
+|---|---|
+| `ibtracs` | NOAA IBTrACS `USA_RMW` (recon-measured) |
+| `willoughby` | Willoughby (2006) parametric estimate fallback |
+
+`r64Source` per impacted county and per footprint point:
+
+| Code | Source |
+|---|---|
+| `ibtracs` | NOAA IBTrACS `USA_R64_{NE,SE,SW,NW}` mean of non-zero quadrants |
+| `fallback` | symmetric 2.5×Rmax (used for pre-~2004 storms with no R64) |
+
+## 17. Layer terms (`LayerTerms`)
+
+One XOL layer's contract terms on the wire. See `docs/CALCULATIONS.md`
+for the math.
+
+| Field | Type | Notes |
+|---|---|---|
+| `deductible` | money | attachment point (ground-up $); ≥ 0 |
+| `limit` | money | layer width; > 0; layer covers `[ded, ded+limit]` |
+| `share` | ratio in `[0,1]` | reinsurer signed line on the layer |
+| `name` | string \| null | display label (e.g. "1st XOL") |

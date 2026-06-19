@@ -140,3 +140,54 @@ Every returned metric must be reconstructible from: source dataset(s) +
 filters + this formula + currency (+ conversion assumption if any) +
 combination method. The Excel export and tooltips expose enough of this to
 audit a number.
+
+## Hurricane impact (IBTrACS-driven)
+
+`services/hurricane_impact.compute_impact(storm)` returns
+`(impacts, footprint, inner_cone, outer_cone, outer_rings)`.
+
+Filters applied to every storm fix before inclusion in the footprint:
+
+- `wind_kt ≥ 64` (Cat 1 threshold)
+- `status == "HU"` (true hurricane phase; excludes the extratropical "EX"
+  phase where IBTrACS reports a much larger Rmax that isn't a hurricane
+  wind field — Michael 2018 jumps from 15 nm to 120 nm post-EX)
+- `lat/lon` inside US bbox
+
+**Rmax (eyewall)** uses IBTrACS `USA_RMW` if present, else Willoughby
+(2006) parametric fallback `Rmax(km) = 46.6 · exp(-0.0155·V_ms + 0.0169·|lat|)`.
+
+**R64 (hurricane-wind extent)** uses IBTrACS `USA_R64_{NE,SE,SW,NW}` per
+quadrant. `r64_at_bearing(quads, bearing)` linearly interpolates between
+adjacent quadrant centers (NE=45°, SE=135°, SW=225°, NW=315°) so any
+bearing yields a smooth lopsided value. Fallback (pre-~2004 storms with
+no R64): symmetric 2.5×Rmax.
+
+**County capture** — for each candidate county within a generous bbox:
+
+    bearing_to_county = compass bearing from eye to centroid
+    threshold = r64_at_bearing(quads, bearing_to_county, fallback=2.5×Rmax)
+    capture iff haversine(eye, centroid) ≤ threshold
+                AND fix.wind_kt ≥ 85   # MIN_IMPACT_WIND_KT
+
+**TIV join** — fact rows joined by `geography_id`, summed per county and
+also indexed per `dataset_id` for the per-programme breakdown in the
+right-rail impact detail view.
+
+## Layered loss scenarios
+
+`services/layer_calc.run_scenario(layers, …)` runs deterministic XOL math:
+
+    ground_up_loss = tiv × damage_ratio        (or supplied directly)
+    loss_to_layer  = max(0, min(gross − ded, limit))
+    ceded_loss     = loss_to_layer × share
+
+Stacked layers evaluate INDEPENDENTLY against the same gross loss (no
+cumulative carry-over). The reinsurer's total payout is the sum of
+`ceded_loss` across the stack; the cedent's net loss is
+`ground_up_loss − total_ceded`.
+
+`run_sweep(layers, tiv)` runs a default damage-ratio series
+`(0.5%, 1%, 2%, 5%, 10%, 15%, 20%, 30%, 50%, 75%, 100%)` to produce a
+payout curve. Reinstatements / aggregate limits / event-vs-occurrence
+wording are out of scope for v1.

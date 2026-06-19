@@ -26,13 +26,16 @@ ExposureEclipse/
 │   ├── app/
 │   │   ├── main.py           FastAPI app, CORS, exception → ErrorEnvelope
 │   │   ├── config.py         Pydantic Settings
-│   │   ├── api/              thin routers (cedents, exposures, ert_jobs, exports, hurricanes, dataset_groups)
+│   │   ├── api/              thin routers (cedents, counties, exposures, ert_jobs, exports, hurricanes, dataset_groups, calc)
 │   │   ├── models/           Pydantic v2 (cedent, exposure, dataset, jobs, warnings, enums, common)
 │   │   ├── providers/        ExposureDataProvider ABC + MockExposureDataProvider
-│   │   ├── services/         calculations, grouping, jobs, email, export_excel, hurdat2
+│   │   ├── services/         calculations, grouping, jobs, email, export_excel,
+│   │   │                     hurdat2 (helpers), ibtracs (storms + Rmax + R64 quads),
+│   │   │                     hurricane_impact (cone + asymmetric capture),
+│   │   │                     county_reference, layer_calc
 │   │   └── ert/              ExpectedERTTable registry
 │   ├── scripts/              data-generation/merge helpers
-│   └── tests/                pytest (72)
+│   └── tests/                pytest (87)
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
@@ -45,13 +48,16 @@ ExposureEclipse/
 │       ├── api/              the ONLY place that hits the backend (client, hooks, cedents, exposures, exports, hurricanes, jobs, types)
 │       ├── components/
 │       │   ├── layout/       Shell, Header, WarningsPanel
-│       │   ├── CedentTree/   tree rail + ErtBadge
-│       │   ├── Map/          MapView, MetricSelector, PerilSelector, YoyToggle, HurricaneLayer + Controls, colour ramp, fipsToUsps, Tooltip
-│       │   ├── DetailPanel/  side-panel detail
+│       │   ├── CedentTree/   tree rail + ErtBadge + StatusBadge (BOUND/QUOTED/...)
+│       │   ├── Map/          MapView, MetricSelector, PerilSelector, YoyToggle,
+│       │   │                 HurricaneLayer (path + cone + R64 wash), HurricaneControls,
+│       │   │                 HurricaneImpactPanel (floating), colour ramp, fipsToUsps, Tooltip
+│       │   ├── DetailPanel/  DetailPanel + CountyReferenceSection + HurricaneImpactDetail (right-rail push view)
 │       │   ├── Pivot/        pivot workbench
 │       │   ├── ErtJob/       run/poll indicator + hook
 │       │   └── ExportButton/
-│       ├── state/            Zustand stores (selection, filters, view, hurricanes)
+│       ├── state/            Zustand stores (selection, filters, view, hurricanes,
+│       │                     scopeFilters, hurricaneImpact) + useEffectiveScope hook
 │       ├── lib/              formatting (currency, percent, count)
 │       ├── styles/tokens.css design tokens
 │       └── types/contracts.ts  canonical enums (mirror of docs/CONTRACTS.md)
@@ -74,7 +80,8 @@ ExposureEclipse/
 | Frontend tests | Vitest + Testing Library | `npx vitest run` |
 | Backend | Python 3.12, FastAPI, Pydantic v2, openpyxl | uvicorn dev on 8000 |
 | Backend tests | pytest + httpx | `pytest -q` |
-| Hurricanes | stdlib `urllib` + lru_cache | live HURDAT2 fetch, no persistence |
+| Hurricanes | stdlib `urllib` + lru_cache | live IBTrACS NA fetch, one parse → 3 indexes (tracks + Rmax + R64 quads); HURDAT2 helpers stay for category/landfall logic |
+| County reference | stdlib `urllib` + lru_cached us-atlas TopoJSON parse | centroids + curated census / synthetic per-county stats |
 
 **Not shipped in prod:** pandas, pytest, httpx — `backend/pyproject.toml` keeps
 them in `[dev]` extras; `api/requirements.txt` lists only the runtime deps
@@ -155,3 +162,15 @@ polygons visible, state stats shown" bug.
 7. **CRLF warnings on `git add`** on Windows are harmless line-ending
    normalisation. The repo doesn't ship a `.gitattributes`; add one if
    it bothers you.
+8. **Mapbox `interpolate` color expression silently fails** if the first
+   stop pair is malformed (e.g. missing input value). The cone fills
+   stayed invisible for a while because of this — we now use the `step`
+   form everywhere for color ramps, matching `LINE_LAYER`.
+9. **`addLayer(layer, beforeId)` throws** if `beforeId` doesn't exist
+   yet. Guard with `map.getLayer('county-line') ? 'county-line' : undefined`
+   when inserting hurricane layers below the county outline.
+10. **Single source of effective scope.** `frontend/src/state/useEffectiveScope.ts`
+    is the only place that decides "what programmes are we operating on"
+    (selection ∪ scope-filter ∪ portfolio fallback). Map, pivot, export,
+    hurricane impact all consume it — never reimplement that logic per
+    component.
