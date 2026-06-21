@@ -45,6 +45,12 @@ const LAYER_OBS_RINGS = "live-obs-rings-fill";
 const LAYER_FCST_INNER = "live-fcst-inner-fill";
 const LAYER_FCST_OUTER = "live-fcst-outer-fill";
 const LAYER_FCST_RINGS = "live-fcst-rings-fill";
+const LAYER_BUOYS_TEXT = "live-buoys-text";
+const LAYER_LAND_TEXT = "live-land-text";
+
+// Zoom at which buoy + station wind speed labels appear right next to the
+// marker (no hover needed). Below this they'd visually clutter the map.
+const OBS_LABEL_MIN_ZOOM = 6.5;
 
 // Cat-colored step palette for the wind-field cones (matches historical
 // impact view so the visual language is consistent across the app).
@@ -434,6 +440,53 @@ export function LiveStormLayer({ map }: Props) {
         },
       });
 
+      // Wind-speed text labels right at each marker, kicking in when the
+      // user zooms in past the marker-cluster zoom. text-allow-overlap=false
+      // keeps the map readable; closely-spaced stations drop their label
+      // rather than stacking. Halo gives contrast over the SST fill.
+      ensureLayer(map, LAYER_BUOYS_TEXT, {
+        id: LAYER_BUOYS_TEXT, type: "symbol", source: SRC_BUOYS,
+        minzoom: OBS_LABEL_MIN_ZOOM,
+        layout: {
+          "text-field": [
+            "concat",
+            ["to-string", ["round", ["get", "windKt"]]],
+            " kt",
+          ] as unknown as never,
+          "text-size": 10,
+          "text-offset": [0, -1.1] as unknown as never,
+          "text-anchor": "bottom",
+          "text-allow-overlap": false,
+          "text-ignore-placement": false,
+        },
+        paint: {
+          "text-color": "#0f172a",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+      ensureLayer(map, LAYER_LAND_TEXT, {
+        id: LAYER_LAND_TEXT, type: "symbol", source: SRC_LAND,
+        minzoom: OBS_LABEL_MIN_ZOOM,
+        layout: {
+          "text-field": [
+            "concat",
+            ["to-string", ["round", ["get", "windKt"]]],
+            " kt",
+          ] as unknown as never,
+          "text-size": 10,
+          "text-offset": [0, -1.1] as unknown as never,
+          "text-anchor": "bottom",
+          "text-allow-overlap": false,
+          "text-ignore-placement": false,
+        },
+        paint: {
+          "text-color": "#064e3b",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+
       // ── Visibility — driven purely by the panel toggles. ──
       setVis(map, LAYER_SST, showSst);
       setVis(map, LAYER_ALERTS_FILL, showAlerts);
@@ -443,7 +496,9 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_FORECAST_LATEST, true);
       setVis(map, LAYER_OBSERVED, true);
       setVis(map, LAYER_BUOYS, showBuoys);
+      setVis(map, LAYER_BUOYS_TEXT, showBuoys);
       setVis(map, LAYER_LAND, showLand);
+      setVis(map, LAYER_LAND_TEXT, showLand);
       setVis(map, LAYER_OBS_OUTER, showWindField);
       setVis(map, LAYER_OBS_RINGS, showWindField);
       setVis(map, LAYER_OBS_INNER, showWindField);
@@ -456,43 +511,90 @@ export function LiveStormLayer({ map }: Props) {
     else map.once("style.load", apply);
   }, [map, data, showForecastHistory, showAlerts, showBuoys, showLand, showSst, showWindField]);
 
-  // Tooltip on hover for the buoys.
+  // Hover popups for buoys and land stations.
   useEffect(() => {
     if (!map) return;
     let popup: mapboxgl.Popup | null = null;
-    const onEnter = async (e: mapboxgl.MapMouseEvent) => {
+    const fmt = (v: number | null | undefined, suffix: string, digits = 0) =>
+      v == null || Number.isNaN(v) ? "—" : `${Number(v).toFixed(digits)}${suffix}`;
+
+    const onEnterBuoy = async (e: mapboxgl.MapMouseEvent) => {
       const f = (e as any).features?.[0];
       if (!f) return;
-      const p = f.properties as { stationId: string; windKt: number; gustKt: number; pressureMb: number };
+      const p = f.properties as {
+        stationId: string;
+        windKt: number | null;
+        gustKt: number | null;
+        pressureMb: number | null;
+      };
       const mb = await import("mapbox-gl");
+      popup?.remove();
       popup = new mb.default.Popup({ closeButton: false, closeOnClick: false })
         .setLngLat(e.lngLat)
         .setHTML(
           `<div style="font-size:11px;line-height:1.4">
-            <div><strong>${p.stationId}</strong> (NDBC buoy)</div>
-            <div>Wind: ${Number(p.windKt).toFixed(0)} kt · Gust: ${Number(p.gustKt || 0).toFixed(0)} kt</div>
-            <div>Pressure: ${p.pressureMb ? Number(p.pressureMb).toFixed(0) + " mb" : "—"}</div>
+            <div><strong>${p.stationId}</strong> · NDBC buoy</div>
+            <div>Wind ${fmt(p.windKt, " kt")} · Gust ${fmt(p.gustKt, " kt")}</div>
+            <div>Pressure ${fmt(p.pressureMb, " mb")}</div>
           </div>`,
         )
         .addTo(map);
       map.getCanvas().style.cursor = "pointer";
     };
+
+    const onEnterLand = async (e: mapboxgl.MapMouseEvent) => {
+      const f = (e as any).features?.[0];
+      if (!f) return;
+      const p = f.properties as {
+        stationId: string;
+        name: string;
+        windKt: number | null;
+      };
+      // Fetch the full record from the store so we can show gust + pressure +
+      // temp without bloating the feature properties.
+      const full = (
+        useLiveStormStore.getState().data?.landStations ?? []
+      ).find((ls) => ls.stationId === p.stationId);
+      const mb = await import("mapbox-gl");
+      popup?.remove();
+      popup = new mb.default.Popup({ closeButton: false, closeOnClick: false })
+        .setLngLat(e.lngLat)
+        .setHTML(
+          `<div style="font-size:11px;line-height:1.4;max-width:240px">
+            <div><strong>${p.stationId}</strong> · NWS land station</div>
+            <div style="color:#475569">${p.name ?? ""}</div>
+            <div>Wind ${fmt(full?.windKt, " kt")} · Gust ${fmt(full?.gustKt, " kt")}</div>
+            <div>Pressure ${fmt(full?.pressureMb, " mb")} · Temp ${fmt(full?.tempF, "°F")}</div>
+          </div>`,
+        )
+        .addTo(map);
+      map.getCanvas().style.cursor = "pointer";
+    };
+
     const onLeave = () => {
       popup?.remove();
       popup = null;
       map.getCanvas().style.cursor = "";
     };
+
     const reg = () => {
-      if (!map.getLayer(LAYER_BUOYS)) return;
-      map.on("mouseenter", LAYER_BUOYS, onEnter as never);
-      map.on("mouseleave", LAYER_BUOYS, onLeave);
+      if (map.getLayer(LAYER_BUOYS)) {
+        map.on("mouseenter", LAYER_BUOYS, onEnterBuoy as never);
+        map.on("mouseleave", LAYER_BUOYS, onLeave);
+      }
+      if (map.getLayer(LAYER_LAND)) {
+        map.on("mouseenter", LAYER_LAND, onEnterLand as never);
+        map.on("mouseleave", LAYER_LAND, onLeave);
+      }
     };
     if (map.isStyleLoaded()) reg();
     else map.once("idle", reg);
     return () => {
       try {
-        map.off("mouseenter", LAYER_BUOYS, onEnter as never);
+        map.off("mouseenter", LAYER_BUOYS, onEnterBuoy as never);
         map.off("mouseleave", LAYER_BUOYS, onLeave);
+        map.off("mouseenter", LAYER_LAND, onEnterLand as never);
+        map.off("mouseleave", LAYER_LAND, onLeave);
       } catch {
         /* layer was already torn down */
       }
