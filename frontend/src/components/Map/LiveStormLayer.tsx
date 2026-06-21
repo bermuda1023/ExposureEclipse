@@ -16,6 +16,19 @@
 import type { GeoJSONSource, Map as MbMap } from "mapbox-gl";
 import { useEffect, useRef } from "react";
 import { useLiveStormStore } from "../../state/liveStorm";
+import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
+
+// SSHWS-palette `step` expression for wind speed (kt) → category color.
+// Single source of truth for any line/marker keyed on observed wind speed.
+const SSHWS_STEP_COLOR: (string | number)[] = [
+  SAFFIR_SIMPSON_COLORS[-1],  // <34 kt → TD slate
+  34, SAFFIR_SIMPSON_COLORS[0],   // TS cyan
+  64, SAFFIR_SIMPSON_COLORS[1],   // Cat 1 yellow
+  83, SAFFIR_SIMPSON_COLORS[2],   // Cat 2 orange
+  96, SAFFIR_SIMPSON_COLORS[3],   // Cat 3 red
+  113, SAFFIR_SIMPSON_COLORS[4],  // Cat 4 dark red
+  137, SAFFIR_SIMPSON_COLORS[5],  // Cat 5 magenta
+];
 
 const SRC_OBSERVED = "live-observed";
 const SRC_FORECAST_LATEST = "live-forecast-latest";
@@ -402,11 +415,10 @@ export function LiveStormLayer({ map }: Props) {
       ensureLayer(map, LAYER_OBSERVED, {
         id: LAYER_OBSERVED, type: "line", source: SRC_OBSERVED,
         paint: {
-          "line-color": [
-            "step", ["get", "windKt"],
-            "#9ca3af", 34, "#0ea5e9", 64, "#fde047",
-            83, "#fb923c", 96, "#ea580c", 113, "#dc2626", 137, "#7f1d1d",
-          ] as unknown as never,
+          // Same SSHWS swatch palette as the legend at top of the map, so
+          // the observed track reads consistently with what users see in the
+          // historical IBTrACS overlay.
+          "line-color": ["step", ["get", "windKt"], ...SSHWS_STEP_COLOR] as unknown as never,
           "line-width": 3.5,
           "line-opacity": 0.95,
         },
@@ -417,10 +429,7 @@ export function LiveStormLayer({ map }: Props) {
         id: LAYER_BUOYS, type: "circle", source: SRC_BUOYS,
         paint: {
           "circle-radius": 5,
-          "circle-color": [
-            "step", ["get", "windKt"],
-            "#22d3ee", 17, "#fde047", 34, "#fb923c", 50, "#dc2626", 64, "#7f1d1d",
-          ] as unknown as never,
+          "circle-color": ["step", ["get", "windKt"], ...SSHWS_STEP_COLOR] as unknown as never,
           "circle-stroke-color": "#0f172a",
           "circle-stroke-width": 1.0,
           "circle-opacity": 0.95,
