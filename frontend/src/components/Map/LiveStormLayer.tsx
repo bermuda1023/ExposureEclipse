@@ -187,87 +187,10 @@ export function LiveStormLayer({ map }: Props) {
   useEffect(() => {
     if (!map) return;
     const apply = () => {
-      // Below = drawn first; we want SST at the bottom, then alerts, then
-      // tracks, then observation markers on top.
-
-      // SST grid
-      setSource(map, SRC_SST, buildSstFC(data?.sst ?? [], 1.5), false);
-      ensureLayer(map, LAYER_SST, {
-        id: LAYER_SST,
-        type: "fill",
-        source: SRC_SST,
-        paint: {
-          "fill-color": [
-            "step", ["get", "tempC"], ...SST_COLOR_STOPS,
-          ] as unknown as never,
-          "fill-opacity": showSst && data ? 0.30 : 0,
-          "fill-outline-color": "rgba(0,0,0,0)",
-        },
-      }, "county-line");
-
-      // Alerts (polygons) — above SST, below tracks
-      setSource(map, SRC_ALERTS, buildAlertsFC(data?.alerts ?? []), false);
-      ensureLayer(map, LAYER_ALERTS_FILL, {
-        id: LAYER_ALERTS_FILL,
-        type: "fill",
-        source: SRC_ALERTS,
-        paint: {
-          "fill-color": [
-            "match", ["get", "severity"],
-            "Extreme", SEVERITY_COLOR.Extreme,
-            "Severe", SEVERITY_COLOR.Severe,
-            "Moderate", SEVERITY_COLOR.Moderate,
-            "Minor", SEVERITY_COLOR.Minor,
-            SEVERITY_COLOR.Unknown,
-          ] as unknown as never,
-          "fill-opacity": showAlerts && data ? 0.20 : 0,
-          "fill-outline-color": "rgba(0,0,0,0)",
-        },
-      }, "county-line");
-      ensureLayer(map, LAYER_ALERTS_LINE, {
-        id: LAYER_ALERTS_LINE,
-        type: "line",
-        source: SRC_ALERTS,
-        paint: {
-          "line-color": [
-            "match", ["get", "severity"],
-            "Extreme", SEVERITY_COLOR.Extreme,
-            "Severe", SEVERITY_COLOR.Severe,
-            "Moderate", SEVERITY_COLOR.Moderate,
-            "Minor", SEVERITY_COLOR.Minor,
-            SEVERITY_COLOR.Unknown,
-          ] as unknown as never,
-          "line-width": 0.8,
-          "line-opacity": showAlerts && data ? 0.55 : 0,
-        },
-      }, "county-line");
-
-      // Forecast history (ghost lines, older advisories)
-      setSource(map, SRC_FORECAST_HISTORY, buildForecastHistoryFC(data?.forecasts ?? []), false);
-      ensureLayer(map, LAYER_FORECAST_HISTORY, {
-        id: LAYER_FORECAST_HISTORY,
-        type: "line",
-        source: SRC_FORECAST_HISTORY,
-        paint: {
-          "line-color": "#475569",
-          "line-width": 1.6,
-          "line-dasharray": [3, 2],
-          // Older advisories more transparent: opacity = clamp(0.35 - 0.05*age, 0.05, 0.4)
-          "line-opacity": [
-            "case",
-            [">", ["get", "age"], 0],
-            [
-              "max",
-              0.05,
-              ["-", 0.40, ["*", 0.05, ["get", "age"]]],
-            ],
-            0.6,
-          ] as unknown as never,
-        },
-        layout: { "line-cap": "round", "line-join": "round" },
-      });
-
-      // Latest forecast (single bold polyline)
+      // ── Sources (data) — always set, even empty (no features = no draw). ──
+      setSource(map, SRC_SST, buildSstFC(data?.sst ?? [], 1.5));
+      setSource(map, SRC_ALERTS, buildAlertsFC(data?.alerts ?? []));
+      setSource(map, SRC_FORECAST_HISTORY, buildForecastHistoryFC(data?.forecasts ?? []));
       const latestForecast = (() => {
         if (!data?.forecasts.length) return [];
         const latest = data.forecasts.reduce((a, b) =>
@@ -275,30 +198,90 @@ export function LiveStormLayer({ map }: Props) {
         );
         return latest.points.map((p) => ({ lat: p.lat, lon: p.lon, windKt: p.windKt }));
       })();
-      setSource(map, SRC_FORECAST_LATEST, buildLineFC(latestForecast), false);
-      ensureLayer(map, LAYER_FORECAST_LATEST, {
-        id: LAYER_FORECAST_LATEST,
-        type: "line",
-        source: SRC_FORECAST_LATEST,
-        paint: {
-          "line-color": "#1d4ed8",
-          "line-width": 3.0,
-          "line-opacity": data ? 0.85 : 0,
-        },
-        layout: { "line-cap": "round", "line-join": "round" },
-      });
-
-      // Observed track (solid line, current intensity colour)
+      setSource(map, SRC_FORECAST_LATEST, buildLineFC(latestForecast));
       const observed = (data?.observedTrack ?? []).map((p) => ({
         lat: p.lat,
         lon: p.lon,
         windKt: p.windKt,
       }));
-      setSource(map, SRC_OBSERVED, buildLineFC(observed), false);
+      setSource(map, SRC_OBSERVED, buildLineFC(observed));
+      setSource(map, SRC_BUOYS, buildBuoyFC(data?.buoys ?? []));
+      setSource(map, SRC_LAND, buildLandFC(data?.landStations ?? []));
+
+      // ── Layers (stable paint, no data-dependent opacity). Visibility is
+      //    flipped via setLayoutProperty below so toggling without remounting
+      //    Just Works. Stacking: SST (bottom) → alerts → forecast history →
+      //    latest forecast → observed track → markers (top). ──
+
+      ensureLayer(map, LAYER_SST, {
+        id: LAYER_SST, type: "fill", source: SRC_SST,
+        paint: {
+          "fill-color": ["step", ["get", "tempC"], ...SST_COLOR_STOPS] as unknown as never,
+          "fill-opacity": 0.30,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+
+      ensureLayer(map, LAYER_ALERTS_FILL, {
+        id: LAYER_ALERTS_FILL, type: "fill", source: SRC_ALERTS,
+        paint: {
+          "fill-color": [
+            "match", ["get", "severity"],
+            "Extreme", SEVERITY_COLOR.Extreme,
+            "Severe", SEVERITY_COLOR.Severe,
+            "Moderate", SEVERITY_COLOR.Moderate,
+            "Minor", SEVERITY_COLOR.Minor,
+            SEVERITY_COLOR.Unknown,
+          ] as unknown as never,
+          "fill-opacity": 0.25,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_ALERTS_LINE, {
+        id: LAYER_ALERTS_LINE, type: "line", source: SRC_ALERTS,
+        paint: {
+          "line-color": [
+            "match", ["get", "severity"],
+            "Extreme", SEVERITY_COLOR.Extreme,
+            "Severe", SEVERITY_COLOR.Severe,
+            "Moderate", SEVERITY_COLOR.Moderate,
+            "Minor", SEVERITY_COLOR.Minor,
+            SEVERITY_COLOR.Unknown,
+          ] as unknown as never,
+          "line-width": 1.0,
+          "line-opacity": 0.65,
+        },
+      }, "county-line");
+
+      ensureLayer(map, LAYER_FORECAST_HISTORY, {
+        id: LAYER_FORECAST_HISTORY, type: "line", source: SRC_FORECAST_HISTORY,
+        paint: {
+          "line-color": "#475569",
+          "line-width": 1.6,
+          "line-dasharray": [3, 2],
+          // Older advisories fade out; latest (age=0) stays brightest.
+          "line-opacity": [
+            "case",
+            [">", ["get", "age"], 0],
+            ["max", 0.05, ["-", 0.40, ["*", 0.05, ["get", "age"]]]],
+            0.6,
+          ] as unknown as never,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
+      ensureLayer(map, LAYER_FORECAST_LATEST, {
+        id: LAYER_FORECAST_LATEST, type: "line", source: SRC_FORECAST_LATEST,
+        paint: {
+          "line-color": "#1d4ed8",
+          "line-width": 3.0,
+          "line-opacity": 0.85,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+
       ensureLayer(map, LAYER_OBSERVED, {
-        id: LAYER_OBSERVED,
-        type: "line",
-        source: SRC_OBSERVED,
+        id: LAYER_OBSERVED, type: "line", source: SRC_OBSERVED,
         paint: {
           "line-color": [
             "step", ["get", "windKt"],
@@ -306,61 +289,48 @@ export function LiveStormLayer({ map }: Props) {
             83, "#fb923c", 96, "#ea580c", 113, "#dc2626", 137, "#7f1d1d",
           ] as unknown as never,
           "line-width": 3.5,
-          "line-opacity": data ? 0.95 : 0,
+          "line-opacity": 0.95,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
 
-      // Buoy markers
-      setSource(map, SRC_BUOYS, buildBuoyFC(data?.buoys ?? []), false);
       ensureLayer(map, LAYER_BUOYS, {
-        id: LAYER_BUOYS,
-        type: "circle",
-        source: SRC_BUOYS,
+        id: LAYER_BUOYS, type: "circle", source: SRC_BUOYS,
         paint: {
-          "circle-radius": 4,
+          "circle-radius": 5,
           "circle-color": [
             "step", ["get", "windKt"],
             "#22d3ee", 17, "#fde047", 34, "#fb923c", 50, "#dc2626", 64, "#7f1d1d",
           ] as unknown as never,
           "circle-stroke-color": "#0f172a",
-          "circle-stroke-width": 0.8,
-          "circle-opacity": showBuoys && data ? 0.95 : 0,
-          "circle-stroke-opacity": showBuoys && data ? 0.95 : 0,
+          "circle-stroke-width": 1.0,
+          "circle-opacity": 0.95,
+          "circle-stroke-opacity": 0.95,
         },
       });
 
-      // Land stations
-      setSource(map, SRC_LAND, buildLandFC(data?.landStations ?? []), false);
       ensureLayer(map, LAYER_LAND, {
-        id: LAYER_LAND,
-        type: "circle",
-        source: SRC_LAND,
+        id: LAYER_LAND, type: "circle", source: SRC_LAND,
         paint: {
-          "circle-radius": 3,
+          "circle-radius": 3.5,
           "circle-color": "#10b981",
           "circle-stroke-color": "#064e3b",
-          "circle-stroke-width": 0.6,
-          "circle-opacity": showLand && data ? 0.95 : 0,
-          "circle-stroke-opacity": showLand && data ? 0.95 : 0,
+          "circle-stroke-width": 0.8,
+          "circle-opacity": 0.95,
+          "circle-stroke-opacity": 0.95,
         },
       });
 
-      // Toggle forecast history visibility on the dash layer
-      if (map.getLayer(LAYER_FORECAST_HISTORY)) {
-        map.setPaintProperty(
-          LAYER_FORECAST_HISTORY,
-          "line-opacity",
-          showForecastHistory && data
-            ? ([
-                "case",
-                [">", ["get", "age"], 0],
-                ["max", 0.05, ["-", 0.40, ["*", 0.05, ["get", "age"]]]],
-                0.6,
-              ] as unknown as never)
-            : 0,
-        );
-      }
+      // ── Visibility — driven purely by the panel toggles. ──
+      setVis(map, LAYER_SST, showSst);
+      setVis(map, LAYER_ALERTS_FILL, showAlerts);
+      setVis(map, LAYER_ALERTS_LINE, showAlerts);
+      setVis(map, LAYER_FORECAST_HISTORY, showForecastHistory);
+      // Latest forecast + observed track always visible when a storm is loaded.
+      setVis(map, LAYER_FORECAST_LATEST, true);
+      setVis(map, LAYER_OBSERVED, true);
+      setVis(map, LAYER_BUOYS, showBuoys);
+      setVis(map, LAYER_LAND, showLand);
     };
 
     if (map.isStyleLoaded()) apply();
@@ -420,18 +390,13 @@ function setSource(
   map: MbMap,
   id: string,
   data: GeoJSON.FeatureCollection,
-  promote: boolean,
 ): void {
   const existing = map.getSource(id) as GeoJSONSource | undefined;
   if (existing) {
     existing.setData(data as never);
     return;
   }
-  map.addSource(id, {
-    type: "geojson",
-    data: data as never,
-    ...(promote ? { promoteId: "id" } : {}),
-  });
+  map.addSource(id, { type: "geojson", data: data as never });
 }
 
 function ensureLayer(
@@ -446,4 +411,9 @@ function ensureLayer(
   } else {
     map.addLayer(layer as never);
   }
+}
+
+function setVis(map: MbMap, id: string, visible: boolean): void {
+  if (!map.getLayer(id)) return;
+  map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
 }
