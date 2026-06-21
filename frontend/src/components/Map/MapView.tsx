@@ -29,6 +29,8 @@ import {
 } from "./fipsToUsps";
 import { HurricaneLayer } from "./HurricaneLayer";
 import { HurricaneImpactPanel } from "./HurricaneImpactPanel";
+import { LiveStormLayer } from "./LiveStormLayer";
+import { LiveStormPanel } from "./LiveStormPanel";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { MapTooltip } from "./Tooltip";
 
@@ -531,6 +533,8 @@ export function MapView({ data, isLoading, error }: Props) {
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
       <HurricaneLayer map={mapInstance} />
       <HurricaneImpactPanel />
+      <LiveStormLayer map={mapInstance} />
+      <LiveStormPanel />
       {isLoading && (
         <Pill>
           <Spinner />

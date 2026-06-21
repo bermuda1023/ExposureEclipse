@@ -23,7 +23,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import calc, cedents, counties, dataset_groups, ert_jobs, exports, exposures, hurricanes
+from .api import (
+    calc,
+    cedents,
+    counties,
+    dataset_groups,
+    ert_jobs,
+    exports,
+    exposures,
+    hurricanes,
+    live,
+)
 from .config import get_settings
 from .models.enums import ErrorCode
 from .models.warnings import ErrorEnvelope, ErrorEnvelopeBody
@@ -71,6 +81,7 @@ app.include_router(exposures.router, prefix="/api")
 app.include_router(ert_jobs.router, prefix="/api")
 app.include_router(exports.router, prefix="/api")
 app.include_router(hurricanes.router, prefix="/api")
+app.include_router(live.router, prefix="/api")
 
 
 # ───────────────────────── Exception handlers ─────────────────────────
