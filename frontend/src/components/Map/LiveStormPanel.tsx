@@ -13,7 +13,12 @@ import {
   fetchLiveStormList,
   type LiveStormRow,
 } from "../../api/live";
+import { fetchHurricaneImpact } from "../../api/hurricanes";
+import { useFiltersStore } from "../../state/filters";
+import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { useLiveStormStore, type ToggleKey } from "../../state/liveStorm";
+import { useEffectiveScope } from "../../state/useEffectiveScope";
+import { useViewStore } from "../../state/view";
 
 export function LiveStormPanel() {
   const [open, setOpen] = useState(false);
@@ -25,6 +30,43 @@ export function LiveStormPanel() {
 
   const store = useLiveStormStore();
   const activeId = store.activeStormId;
+  const impactStore = useHurricaneImpactStore();
+  const scope = useEffectiveScope();
+  const perils = useViewStore((s) => s.perils);
+  const filters = useFiltersStore();
+
+  // Trigger the existing historical-impact flow on the live storm — same
+  // engine (R64 asymmetric capture, per-programme TIV breakdown). Pushes
+  // straight to the right-rail detail view so the user sees the full
+  // county/programme rollup for "if this storm's track plays out".
+  function runImpact() {
+    if (!activeId) return;
+    const payload = {
+      cedentId: scope.cedentId,
+      chainId: scope.chainId,
+      chainIds: scope.chainIds,
+      programmeId: scope.programmeId,
+      aggregationLevel: "COUNTY",
+      metric: "TIV",
+      perils,
+      filters: {
+        peril: filters.peril,
+        occupancy: filters.occupancy,
+        distanceToCoast: filters.distanceToCoast,
+        geocoding: filters.geocoding,
+        construction: filters.construction,
+        numberOfStories: filters.numberOfStories,
+        yearBuilt: filters.yearBuilt,
+      },
+    };
+    impactStore.start(activeId, payload);
+    fetchHurricaneImpact(activeId, payload)
+      .then((d) => {
+        impactStore.setData(d);
+        impactStore.pushToDetail();
+      })
+      .catch((e) => impactStore.setError(String(e?.message ?? e)));
+  }
 
   // Fetch the full bundle whenever activeId changes, throttled to once per
   // 60s while a storm is live (cache).
@@ -163,7 +205,29 @@ export function LiveStormPanel() {
             <div style={{ color: "var(--error-700)", fontSize: "0.7rem" }}>{store.error}</div>
           )}
           {store.data && (
-            <BundleSummary data={store.data} />
+            <>
+              <BundleSummary data={store.data} />
+              <button
+                onClick={runImpact}
+                style={{
+                  all: "unset",
+                  cursor: "pointer",
+                  textAlign: "center",
+                  padding: "6px 8px",
+                  border: "1px solid var(--brand-500)",
+                  borderRadius: 4,
+                  background: "var(--brand-500)",
+                  color: "white",
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                }}
+                title="Run the county-impact + per-programme TIV breakdown for this storm's track"
+              >
+                Run county impact
+              </button>
+            </>
           )}
         </div>
       )}

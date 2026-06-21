@@ -162,15 +162,27 @@ function buildLandFC(stations: import("../../api/live").LandObs[]) {
   };
 }
 
-function buildSstFC(sst: import("../../api/live").SSTPoint[]) {
-  // Each grid cell rendered as a Point — the SST layer then paints them as
-  // soft-blurred circles which interpolate visually into a continuous
-  // heatmap, regardless of the backend's grid step.
+function buildSstFC(
+  sst: import("../../api/live").SSTPoint[],
+  stepDeg: number,
+) {
+  // One square fill polygon per cell, sized to the backend's native step so
+  // cells tile the bbox without gaps. Looks like a real SST heatmap.
+  const half = stepDeg / 2;
   return {
     type: "FeatureCollection" as const,
     features: sst.map((p) => ({
       type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [p.lon, p.lat] },
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [[
+          [p.lon - half, p.lat - half],
+          [p.lon + half, p.lat - half],
+          [p.lon + half, p.lat + half],
+          [p.lon - half, p.lat + half],
+          [p.lon - half, p.lat - half],
+        ]],
+      },
       properties: { tempC: p.tempC },
     })),
   };
@@ -217,7 +229,7 @@ export function LiveStormLayer({ map }: Props) {
     if (!map) return;
     const apply = () => {
       // ── Sources (data) — always set, even empty (no features = no draw). ──
-      setSource(map, SRC_SST, buildSstFC(data?.sst ?? []));
+      setSource(map, SRC_SST, buildSstFC(data?.sst ?? [], data?.sstMeta?.stepDeg ?? 0.1));
       setSource(map, SRC_ALERTS, buildAlertsFC(data?.alerts ?? []));
       setSource(map, SRC_FORECAST_HISTORY, buildForecastHistoryFC(data?.forecasts ?? []));
       const latestForecast = (() => {
@@ -248,15 +260,13 @@ export function LiveStormLayer({ map }: Props) {
       //    Just Works. Stacking: SST (bottom) → alerts → forecast history →
       //    latest forecast → observed track → markers (top). ──
 
-      // SST as soft circles — circle-blur smears each point into its
-      // neighbours so overlapping cells form a continuous heatmap regardless
-      // of the backend grid step (0.25° in the warm Caribbean, coarser for
-      // a basin-wide bbox). Radius scales with zoom so it stays smooth at
-      // every level.
+      // SST as small abutting fill polygons sized to backend step. Smooth
+      // interpolate palette (cool blue → warm yellow → red). Reads as a
+      // continuous heatmap because cells tile the bbox without gaps.
       ensureLayer(map, LAYER_SST, {
-        id: LAYER_SST, type: "circle", source: SRC_SST,
+        id: LAYER_SST, type: "fill", source: SRC_SST,
         paint: {
-          "circle-color": [
+          "fill-color": [
             "interpolate", ["linear"], ["get", "tempC"],
             16, "#1e3a8a",
             20, "#2563eb",
@@ -265,15 +275,10 @@ export function LiveStormLayer({ map }: Props) {
             26.5, "#facc15",
             28, "#fb923c",
             29, "#dc2626",
-            30, "#7f1d1d",
+            30.5, "#7f1d1d",
           ] as unknown as never,
-          "circle-radius": [
-            "interpolate", ["linear"], ["zoom"],
-            3, 8, 5, 14, 7, 26, 10, 60,
-          ] as unknown as never,
-          "circle-blur": 1.0,
-          "circle-opacity": 0.45,
-          "circle-stroke-width": 0,
+          "fill-opacity": 0.55,
+          "fill-outline-color": "rgba(0,0,0,0)",
         },
       }, "county-line");
 

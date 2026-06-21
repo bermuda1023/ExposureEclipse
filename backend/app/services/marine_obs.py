@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -164,23 +165,67 @@ def _nws_get(path: str, params: dict | None = None) -> dict | None:
         return None
 
 
+@lru_cache(maxsize=1)
+def _nws_all_stations() -> list[dict]:
+    """All NWS observation stations (paginated until exhausted, capped).
+
+    NWS's /stations endpoint returns metadata + GeoJSON Point geometry per
+    station. We pull up to ~4,000 stations (limit=500 per page × 8 pages)
+    which covers CONUS comfortably. Cached once per cold start.
+    """
+    out: list[dict] = []
+    cursor = None
+    for _ in range(8):
+        params = {"limit": 500}
+        if cursor:
+            params["cursor"] = cursor
+        page = _nws_get("/stations", params=params)
+        if not page:
+            break
+        out.extend(page.get("features") or [])
+        cursor = ((page.get("pagination") or {}).get("next") or "")
+        # `next` is a full URL — extract the cursor token.
+        if "cursor=" in cursor:
+            cursor = cursor.split("cursor=")[-1].split("&")[0]
+        else:
+            break
+    return out
+
+
+def _fetch_latest_obs(sid: str, name: str, lat: float, lon: float) -> LandObservation | None:
+    obs = _nws_get(f"/stations/{sid}/observations/latest")
+    if not obs:
+        return None
+    p = (obs.get("properties") or {})
+    wind_kt = _mps_to_kt((p.get("windSpeed") or {}).get("value"))
+    wind_dir = (p.get("windDirection") or {}).get("value")
+    gust_kt = _mps_to_kt((p.get("windGust") or {}).get("value"))
+    pres_pa = (p.get("barometricPressure") or {}).get("value")
+    temp_c = (p.get("temperature") or {}).get("value")
+    return LandObservation(
+        station_id=sid,
+        name=name,
+        lat=lat,
+        lon=lon,
+        wind_kt=wind_kt,
+        wind_dir_deg=wind_dir,
+        gust_kt=gust_kt,
+        pressure_mb=pres_pa / 100.0 if pres_pa else None,
+        temp_f=_c_to_f(temp_c),
+        observed_at=p.get("timestamp") or "",
+    )
+
+
 def land_stations_in_bbox(
     west: float, south: float, east: float, north: float,
-    *, max_stations: int = 80,
+    *, max_stations: int = 250,
 ) -> list[LandObservation]:
-    """Fetch NWS observation stations inside the bbox, then their latest fix.
-
-    NWS API doesn't accept a bbox directly for /stations; we pull a fairly
-    big page and filter client-side. The user's bbox is the forecast cone +
-    a margin, so this is usually <100 stations.
-    """
-    # Pull stations via the gridpoint API per state could work, but the
-    # /stations endpoint with limit=500 returns evenly across CONUS.
-    data = _nws_get("/stations", params={"limit": 500})
-    if not data:
-        return []
-    out: list[LandObservation] = []
-    for f in (data.get("features") or [])[:5000]:
+    """NWS observation stations in ``bbox``, each enriched with the latest
+    observation. Concurrent fetch (12 workers) keeps response time bounded
+    even at 200+ stations — sequential previously took >1 minute for that
+    many. NWS API has no rate-limit headers; 12 parallel reads is polite."""
+    candidates: list[tuple[str, str, float, float]] = []
+    for f in _nws_all_stations():
         geom = f.get("geometry") or {}
         coords = geom.get("coordinates") or [None, None]
         lon, lat = coords[0], coords[1]
@@ -190,32 +235,23 @@ def land_stations_in_bbox(
             continue
         props = f.get("properties") or {}
         sid = props.get("stationIdentifier") or ""
-        name = props.get("name") or sid
-        # Fetch latest observation per station — that's a separate call each;
-        # cap to keep this responsive.
-        if len(out) >= max_stations:
-            break
-        obs = _nws_get(f"/stations/{sid}/observations/latest")
-        if not obs:
+        if not sid:
             continue
-        p = (obs.get("properties") or {})
-        wind_kt = _mps_to_kt((p.get("windSpeed") or {}).get("value"))
-        wind_dir = (p.get("windDirection") or {}).get("value")
-        gust_kt = _mps_to_kt((p.get("windGust") or {}).get("value"))
-        pres_pa = (p.get("barometricPressure") or {}).get("value")
-        temp_c = (p.get("temperature") or {}).get("value")
-        out.append(
-            LandObservation(
-                station_id=sid,
-                name=name,
-                lat=lat,
-                lon=lon,
-                wind_kt=wind_kt,
-                wind_dir_deg=wind_dir,
-                gust_kt=gust_kt,
-                pressure_mb=pres_pa / 100.0 if pres_pa else None,
-                temp_f=_c_to_f(temp_c),
-                observed_at=p.get("timestamp") or "",
-            )
-        )
+        candidates.append((sid, props.get("name") or sid, lat, lon))
+        if len(candidates) >= max_stations:
+            break
+
+    out: list[LandObservation] = []
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = [
+            pool.submit(_fetch_latest_obs, sid, name, lat, lon)
+            for sid, name, lat, lon in candidates
+        ]
+        for fut in as_completed(futures, timeout=30):
+            try:
+                rec = fut.result()
+                if rec is not None:
+                    out.append(rec)
+            except Exception:  # noqa: BLE001
+                continue
     return out

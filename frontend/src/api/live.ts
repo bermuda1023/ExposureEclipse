@@ -100,6 +100,11 @@ export interface SSTPoint {
   favorableForIntensification: boolean;
 }
 
+export interface SSTMeta {
+  source: "mur" | "synthetic";
+  stepDeg: number;
+}
+
 export interface ConeQuad {
   corners: [number, number][];   // closed ring
   windKt: number;
@@ -131,6 +136,7 @@ export interface LiveStormBundle {
   sst: SSTPoint[];
   sstMinC: number | null;
   sstMaxC: number | null;
+  sstMeta: SSTMeta;
   observedWindField: WindField;
   forecastWindField: WindField;
 }

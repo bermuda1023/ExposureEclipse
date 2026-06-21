@@ -25,7 +25,7 @@ from ..services.live_hurricane import (
     storm_and_forecasts,
 )
 from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
-from ..services.sea_surface_temp import sst_grid
+from ..services.sea_surface_temp import sst_field
 from ..services.weather_alerts import fetch_active_alerts
 
 router = APIRouter(prefix="/live", tags=["live"])
@@ -125,6 +125,11 @@ class SSTOut(CamelModel):
     favorable_for_intensification: bool
 
 
+class SSTMeta(CamelModel):
+    source: str        # 'mur' | 'synthetic'
+    step_deg: float    # native cell size — frontend uses this to size polygons
+
+
 class ConeQuadOut(CamelModel):
     corners: list[list[float]]   # closed ring [[lon,lat], ...]
     wind_kt: int
@@ -156,6 +161,7 @@ class LiveStormBundle(CamelModel):
     sst: list[SSTOut]
     sst_min_c: float | None
     sst_max_c: float | None
+    sst_meta: SSTMeta
     # Wind fields built from the same IBTrACS-driven Rmax + R64 quads we use
     # for historical impact. `observed` covers the track to date; `forecast`
     # is the latest advisory's projected track.
@@ -349,7 +355,7 @@ def live_storm_bundle(
                 )
             )
     if include_land:
-        for ls in land_stations_in_bbox(*bbox, max_stations=40):
+        for ls in land_stations_in_bbox(*bbox, max_stations=250):
             land_out.append(
                 LandObsOut(
                     station_id=ls.station_id,
@@ -367,17 +373,11 @@ def live_storm_bundle(
 
     sst_out: list[SSTOut] = []
     sst_min = sst_max = None
+    sst_source = "synthetic"
+    span = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
+    sst_step = 0.05 if span < 6 else 0.10 if span < 12 else 0.25 if span < 25 else 0.5
     if include_sst:
-        # 0.25° step (the OISST native resolution) for a real heatmap look;
-        # bbox-adaptive so we don't ship 100k+ cells for a basin-wide storm.
-        span = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
-        if span < 12:
-            step = 0.25
-        elif span < 25:
-            step = 0.5
-        else:
-            step = 1.0
-        grid = sst_grid(bbox=bbox, step_deg=step)
+        grid, sst_source = sst_field(bbox)
         sst_out = [
             SSTOut(
                 lat=p.lat,
@@ -465,6 +465,7 @@ def live_storm_bundle(
         sst=sst_out,
         sst_min_c=sst_min,
         sst_max_c=sst_max,
+        sst_meta=SSTMeta(source=sst_source, step_deg=sst_step),
         observed_wind_field=observed_wind,
         forecast_wind_field=forecast_wind,
     )

@@ -17,7 +17,9 @@ water under the storm = bad) so SST does the job here.
 from __future__ import annotations
 
 import math
+import urllib.request
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 @dataclass(slots=True, frozen=True)
@@ -125,6 +127,102 @@ def sst_at_point(lat: float, lon: float) -> SSTPoint:
         temp_c=round(t, 1),
         favorable_for_intensification=t >= INTENSIFICATION_THRESHOLD_C,
     )
+
+
+# ─────────────────────────── Real MUR SST via ERDDAP ───────────────────────────
+
+# NOAA JPL MUR (Multi-scale Ultra-high Resolution) SST monthly, 0.01° native.
+# We request with a stride so the returned grid is ~0.1° (manageable cell
+# count). Monthly product is stable + always available with ~6 week lag.
+MUR_BASE = (
+    "https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41mday.csv"
+)
+MUR_USER_AGENT = "exposure-eclipse-sst/1.0"
+MUR_TIMEOUT_S = 30
+# Peak-hurricane month with reliable late-summer Atlantic warmth — used for
+# the demo when we want a "what the ocean looks like during a hurricane".
+DEMO_MUR_MONTH = "2024-09-16T00:00:00Z"
+
+
+def _mur_stride_for_bbox(span_deg: float) -> int:
+    """Pick a stride that keeps the response under a few thousand cells:
+       span ≤  6° → 0.05° (stride  5)
+       span ≤ 12° → 0.10° (stride 10)
+       span ≤ 25° → 0.25° (stride 25)
+       else       → 0.50° (stride 50)
+    """
+    if span_deg <= 6:
+        return 5
+    if span_deg <= 12:
+        return 10
+    if span_deg <= 25:
+        return 25
+    return 50
+
+
+@lru_cache(maxsize=32)
+def _mur_csv(west: float, south: float, east: float, north: float, time_iso: str) -> str | None:
+    """Cached ERDDAP fetch. Returns CSV body or None on failure."""
+    span = max(east - west, north - south)
+    stride = _mur_stride_for_bbox(span)
+    url = (
+        f"{MUR_BASE}?sst[({time_iso})]"
+        f"[({south}):{stride}:({north})]"
+        f"[({west}):{stride}:({east})]"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": MUR_USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=MUR_TIMEOUT_S) as r:
+            return r.read().decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _try_real_mur(bbox: tuple[float, float, float, float]) -> list[SSTPoint] | None:
+    """Hit ERDDAP for real MUR SST in the bbox. Returns None on any failure
+    so the caller can fall back to the synthetic field."""
+    west, south, east, north = bbox
+    body = _mur_csv(round(west, 2), round(south, 2), round(east, 2), round(north, 2), DEMO_MUR_MONTH)
+    if not body:
+        return None
+    pts: list[SSTPoint] = []
+    for line in body.splitlines()[2:]:  # skip header + units row
+        cols = line.split(",")
+        if len(cols) < 4:
+            continue
+        try:
+            lat = float(cols[1])
+            lon = float(cols[2])
+            sst_str = cols[3].strip()
+            if not sst_str or sst_str == "NaN":
+                continue
+            t = float(sst_str)
+        except ValueError:
+            continue
+        pts.append(
+            SSTPoint(
+                lat=round(lat, 3),
+                lon=round(lon, 3),
+                temp_c=round(t, 2),
+                favorable_for_intensification=t >= INTENSIFICATION_THRESHOLD_C,
+            )
+        )
+    return pts if pts else None
+
+
+def sst_field(bbox: tuple[float, float, float, float]) -> tuple[list[SSTPoint], str]:
+    """Return (cells, source). Tries real MUR first, falls back to synthetic.
+
+    ``source`` ∈ {``"mur"``, ``"synthetic"``} so the API can disclose it.
+    """
+    real = _try_real_mur(bbox)
+    if real:
+        return real, "mur"
+    # Match the previous synthetic call's behaviour but at the same resolution
+    # as the MUR stride would have produced — visually consistent fallback.
+    span = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
+    step = 0.1 if span < 6 else 0.25 if span < 12 else 0.5 if span < 25 else 1.0
+    return sst_grid(bbox=bbox, step_deg=step), "synthetic"
 
 
 # Suppress lint about an unused import — math is intentionally kept available
