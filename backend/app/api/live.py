@@ -19,6 +19,7 @@ from ..models.common import CamelModel
 from ..services.hurdat2 import category_for_wind
 from ..services.live_hurricane import (
     LiveStormSummary,
+    build_wind_cones,
     fetch_active_summaries,
     replay_summaries,
     storm_and_forecasts,
@@ -124,6 +125,26 @@ class SSTOut(CamelModel):
     favorable_for_intensification: bool
 
 
+class ConeQuadOut(CamelModel):
+    corners: list[list[float]]   # closed ring [[lon,lat], ...]
+    wind_kt: int
+    start_wind_kt: int
+    end_wind_kt: int
+
+
+class OuterRingOut(CamelModel):
+    corners: list[list[float]]
+    wind_kt: int
+    r64_nm: float
+    r64_source: str
+
+
+class WindFieldOut(CamelModel):
+    inner_cone: list[ConeQuadOut]
+    outer_cone: list[ConeQuadOut]
+    outer_rings: list[OuterRingOut]
+
+
 class LiveStormBundle(CamelModel):
     storm: LiveStormRow
     observed_track: list[ObservedFix]
@@ -135,6 +156,11 @@ class LiveStormBundle(CamelModel):
     sst: list[SSTOut]
     sst_min_c: float | None
     sst_max_c: float | None
+    # Wind fields built from the same IBTrACS-driven Rmax + R64 quads we use
+    # for historical impact. `observed` covers the track to date; `forecast`
+    # is the latest advisory's projected track.
+    observed_wind_field: WindFieldOut
+    forecast_wind_field: WindFieldOut
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -342,8 +368,16 @@ def live_storm_bundle(
     sst_out: list[SSTOut] = []
     sst_min = sst_max = None
     if include_sst:
-        # 1.5° step keeps cell count <300 for a typical storm bbox.
-        grid = sst_grid(bbox=bbox, step_deg=1.5)
+        # 0.25° step (the OISST native resolution) for a real heatmap look;
+        # bbox-adaptive so we don't ship 100k+ cells for a basin-wide storm.
+        span = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
+        if span < 12:
+            step = 0.25
+        elif span < 25:
+            step = 0.5
+        else:
+            step = 1.0
+        grid = sst_grid(bbox=bbox, step_deg=step)
         sst_out = [
             SSTOut(
                 lat=p.lat,
@@ -370,6 +404,56 @@ def live_storm_bundle(
         label=f"{observed_storm.name} ({observed_storm.year})",
     )
 
+    # Wind fields: inner Rmax + outer asymmetric R64, same machinery as
+    # historical impact. Built for the OBSERVED track (history) and the
+    # LATEST forecast advisory (projection).
+    observed_fixes_for_cone = [
+        (p.lat, p.lon, p.wind_kt, p.datetime_utc) for p in observed_storm.track
+    ]
+    obs_fp, obs_inner, obs_outer, obs_rings = build_wind_cones(
+        observed_storm.storm_id, observed_fixes_for_cone
+    )
+
+    if forecasts:
+        latest = max(forecasts, key=lambda f: f.advisory_number)
+        forecast_fixes_for_cone = [
+            (fp.lat, fp.lon, fp.wind_kt, fp.valid_time) for fp in latest.points
+        ]
+        _fp_fcst, fcst_inner, fcst_outer, fcst_rings = build_wind_cones(
+            observed_storm.storm_id, forecast_fixes_for_cone
+        )
+    else:
+        fcst_inner, fcst_outer, fcst_rings = [], [], []
+
+    def _q_out(q) -> ConeQuadOut:
+        return ConeQuadOut(
+            corners=[
+                [round(lon, 4), round(lat, 4)] for (lon, lat) in q.corners
+            ] + [[round(q.corners[0][0], 4), round(q.corners[0][1], 4)]],
+            wind_kt=q.wind_kt,
+            start_wind_kt=q.start_wind_kt,
+            end_wind_kt=q.end_wind_kt,
+        )
+
+    def _r_out(r: dict) -> OuterRingOut:
+        return OuterRingOut(
+            corners=r["ring"],
+            wind_kt=r["wind_kt"],
+            r64_nm=round(r["r64_nm"], 1),
+            r64_source=r["r64_source"],
+        )
+
+    observed_wind = WindFieldOut(
+        inner_cone=[_q_out(q) for q in obs_inner],
+        outer_cone=[_q_out(q) for q in obs_outer],
+        outer_rings=[_r_out(r) for r in obs_rings],
+    )
+    forecast_wind = WindFieldOut(
+        inner_cone=[_q_out(q) for q in fcst_inner],
+        outer_cone=[_q_out(q) for q in fcst_outer],
+        outer_rings=[_r_out(r) for r in fcst_rings],
+    )
+
     return LiveStormBundle(
         storm=storm_row,
         observed_track=observed_fixes,
@@ -381,6 +465,8 @@ def live_storm_bundle(
         sst=sst_out,
         sst_min_c=sst_min,
         sst_max_c=sst_max,
+        observed_wind_field=observed_wind,
+        forecast_wind_field=forecast_wind,
     )
 
 

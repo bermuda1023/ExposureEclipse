@@ -136,6 +136,7 @@ export function LiveStormPanel() {
             >
               Layers
             </div>
+            <ToggleRow store={store} k="showWindField" label="Wind field (Rmax + R64)" />
             <ToggleRow store={store} k="showForecastHistory" label="Forecast evolution (ghost tracks)" />
             <ToggleRow store={store} k="showAlerts" label="NWS active alerts" />
             <ToggleRow store={store} k="showBuoys" label="NDBC buoys" />

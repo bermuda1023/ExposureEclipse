@@ -53,8 +53,9 @@ def test_replay_bundle_sst_layer_bounded() -> None:
     )
     assert r.status_code == 200
     b = r.json()
-    # SST grid is bounded to the storm bbox; under 1500 cells for any single storm.
-    assert 0 < len(b["sst"]) < 1500
+    # SST grid is bounded to the storm bbox — even a basin-wide replay stays
+    # under 10k cells thanks to the adaptive step (0.25° / 0.5° / 1.0°).
+    assert 0 < len(b["sst"]) < 10000
     assert b["sstMinC"] is not None and b["sstMaxC"] is not None
     assert b["sstMinC"] <= b["sstMaxC"]
 

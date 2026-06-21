@@ -30,31 +30,48 @@ class SSTPoint:
 
 # Anchors that give a vaguely realistic late-summer Atlantic field. Values
 # in °C. Each entry is (lat, lon, sst). We interpolate via inverse-distance
-# weighting at query time.
+# weighting at query time. Denser anchor net = smoother gradients without
+# obvious "pull" toward a single point.
 _ANCHORS: tuple[tuple[float, float, float], ...] = (
     # Caribbean / Gulf — the warm pool
+    (12.0,  -65.0, 29.0),
     (15.0,  -75.0, 29.5),
+    (18.0,  -78.0, 29.6),
     (20.0,  -85.0, 30.0),  # Western Caribbean / Gulf
+    (22.0,  -88.0, 30.2),
     (24.0,  -84.0, 29.7),  # Loop Current
+    (25.0,  -87.0, 29.5),
     (26.0,  -82.0, 29.5),  # SW Florida shelf
+    (27.0,  -90.0, 29.0),
     (25.0,  -78.0, 29.0),  # Bahamas
+    (24.0,  -76.0, 28.8),
     # SE US coast
     (30.0,  -80.0, 27.5),
     (32.0,  -78.0, 26.8),
+    (34.0,  -76.0, 25.5),
+    (30.0,  -86.0, 28.5),  # Gulf Coast FL panhandle
+    (29.0,  -93.0, 28.0),  # TX/LA coast
     # Mid-Atlantic
     (36.0,  -73.0, 25.0),
+    (38.0,  -71.0, 24.0),
     (40.0,  -70.0, 22.5),
+    (42.0,  -68.0, 21.0),
     # Tropical Atlantic (MDR)
+    (10.0,  -40.0, 28.0),
     (12.0,  -45.0, 28.5),
     (15.0,  -55.0, 28.7),
+    (18.0,  -50.0, 28.5),
     (20.0,  -55.0, 28.0),
+    (12.0,  -25.0, 27.5),  # Cape Verde area
     # Subtropical Atlantic
     (28.0,  -60.0, 27.0),
     (32.0,  -55.0, 25.5),
+    (35.0,  -60.0, 24.5),
     (38.0,  -50.0, 23.0),
     # Northern
     (44.0,  -55.0, 18.0),
     (47.0,  -45.0, 16.0),
+    (45.0,  -35.0, 17.5),
 )
 
 INTENSIFICATION_THRESHOLD_C = 26.5

@@ -23,6 +23,7 @@ interface LiveStormState {
   showBuoys: boolean;
   showLand: boolean;
   showSst: boolean;
+  showWindField: boolean;     // Rmax + R64 cones on observed + forecast tracks
 
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
@@ -36,7 +37,8 @@ export type ToggleKey =
   | "showAlerts"
   | "showBuoys"
   | "showLand"
-  | "showSst";
+  | "showSst"
+  | "showWindField";
 
 export const useLiveStormStore = create<LiveStormState>((set) => ({
   activeStormId: null,
@@ -48,6 +50,7 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   showBuoys: true,
   showLand: false,
   showSst: true,
+  showWindField: true,
 
   start: (stormId) =>
     set({ activeStormId: stormId, isLoading: true, error: null, data: null }),

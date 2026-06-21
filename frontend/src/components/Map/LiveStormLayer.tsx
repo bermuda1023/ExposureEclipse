@@ -24,6 +24,12 @@ const SRC_ALERTS = "live-alerts";
 const SRC_BUOYS = "live-buoys";
 const SRC_LAND = "live-land";
 const SRC_SST = "live-sst";
+const SRC_OBS_INNER = "live-obs-inner-cone";
+const SRC_OBS_OUTER = "live-obs-outer-cone";
+const SRC_OBS_RINGS = "live-obs-outer-rings";
+const SRC_FCST_INNER = "live-fcst-inner-cone";
+const SRC_FCST_OUTER = "live-fcst-outer-cone";
+const SRC_FCST_RINGS = "live-fcst-outer-rings";
 
 const LAYER_OBSERVED = "live-observed-line";
 const LAYER_FORECAST_LATEST = "live-forecast-latest-line";
@@ -33,6 +39,22 @@ const LAYER_ALERTS_LINE = "live-alerts-line";
 const LAYER_BUOYS = "live-buoys-circle";
 const LAYER_LAND = "live-land-circle";
 const LAYER_SST = "live-sst-fill";
+const LAYER_OBS_INNER = "live-obs-inner-fill";
+const LAYER_OBS_OUTER = "live-obs-outer-fill";
+const LAYER_OBS_RINGS = "live-obs-rings-fill";
+const LAYER_FCST_INNER = "live-fcst-inner-fill";
+const LAYER_FCST_OUTER = "live-fcst-outer-fill";
+const LAYER_FCST_RINGS = "live-fcst-rings-fill";
+
+// Cat-colored step palette for the wind-field cones (matches historical
+// impact view so the visual language is consistent across the app).
+const CONE_STEP_COLOR: (string | number)[] = [
+  "#fde047",        // < 83 (Cat 1)
+  83, "#fb923c",   // Cat 2
+  96, "#ea580c",   // Cat 3
+  113, "#b91c1c",  // Cat 4
+  137, "#581c87",  // Cat 5
+];
 
 // NWS severity → colour for the alert polygons.
 const SEVERITY_COLOR: Record<string, string> = {
@@ -43,17 +65,8 @@ const SEVERITY_COLOR: Record<string, string> = {
   Unknown: "#a3a3a3",
 };
 
-// SST step palette (°C → hex). Cooler = blue; warmer through orange to red.
-const SST_COLOR_STOPS: (number | string)[] = [
-  "#1e3a8a",        // < 18 (cold)
-  18, "#2563eb",
-  22, "#22d3ee",
-  25, "#a3e635",
-  26.5, "#facc15",  // intensification threshold (warm)
-  28, "#fb923c",
-  29, "#dc2626",
-  30, "#7f1d1d",
-];
+// SST colour ramp is inlined as an ["interpolate"] expression on the SST
+// circle layer below; no constant kept here.
 
 interface Props {
   map: MbMap | null;
@@ -149,29 +162,44 @@ function buildLandFC(stations: import("../../api/live").LandObs[]) {
   };
 }
 
-function buildSstFC(sst: import("../../api/live").SSTPoint[], step = 1.5) {
-  // Each grid cell rendered as a small square polygon centred on (lat, lon).
-  // Step matches the backend's sst_grid step.
-  const half = step / 2;
+function buildSstFC(sst: import("../../api/live").SSTPoint[]) {
+  // Each grid cell rendered as a Point — the SST layer then paints them as
+  // soft-blurred circles which interpolate visually into a continuous
+  // heatmap, regardless of the backend's grid step.
   return {
     type: "FeatureCollection" as const,
     features: sst.map((p) => ({
       type: "Feature" as const,
-      geometry: {
-        type: "Polygon" as const,
-        coordinates: [
-          [
-            [p.lon - half, p.lat - half],
-            [p.lon + half, p.lat - half],
-            [p.lon + half, p.lat + half],
-            [p.lon - half, p.lat + half],
-            [p.lon - half, p.lat - half],
-          ],
-        ],
-      },
+      geometry: { type: "Point" as const, coordinates: [p.lon, p.lat] },
       properties: { tempC: p.tempC },
     })),
   };
+}
+
+function buildConeQuadFC(quads: import("../../api/live").ConeQuad[] | undefined) {
+  const features: GeoJSON.Feature[] = [];
+  if (!quads) return { type: "FeatureCollection" as const, features };
+  for (const q of quads) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [q.corners] },
+      properties: { windKt: q.windKt },
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
+}
+
+function buildRingFC(rings: import("../../api/live").OuterRing[] | undefined) {
+  const features: GeoJSON.Feature[] = [];
+  if (!rings) return { type: "FeatureCollection" as const, features };
+  for (const r of rings) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [r.corners] },
+      properties: { windKt: r.windKt },
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
 }
 
 export function LiveStormLayer({ map }: Props) {
@@ -181,6 +209,7 @@ export function LiveStormLayer({ map }: Props) {
   const showBuoys = useLiveStormStore((s) => s.showBuoys);
   const showLand = useLiveStormStore((s) => s.showLand);
   const showSst = useLiveStormStore((s) => s.showSst);
+  const showWindField = useLiveStormStore((s) => s.showWindField);
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -188,7 +217,7 @@ export function LiveStormLayer({ map }: Props) {
     if (!map) return;
     const apply = () => {
       // ── Sources (data) — always set, even empty (no features = no draw). ──
-      setSource(map, SRC_SST, buildSstFC(data?.sst ?? [], 1.5));
+      setSource(map, SRC_SST, buildSstFC(data?.sst ?? []));
       setSource(map, SRC_ALERTS, buildAlertsFC(data?.alerts ?? []));
       setSource(map, SRC_FORECAST_HISTORY, buildForecastHistoryFC(data?.forecasts ?? []));
       const latestForecast = (() => {
@@ -207,18 +236,44 @@ export function LiveStormLayer({ map }: Props) {
       setSource(map, SRC_OBSERVED, buildLineFC(observed));
       setSource(map, SRC_BUOYS, buildBuoyFC(data?.buoys ?? []));
       setSource(map, SRC_LAND, buildLandFC(data?.landStations ?? []));
+      setSource(map, SRC_OBS_OUTER, buildConeQuadFC(data?.observedWindField.outerCone));
+      setSource(map, SRC_OBS_RINGS, buildRingFC(data?.observedWindField.outerRings));
+      setSource(map, SRC_OBS_INNER, buildConeQuadFC(data?.observedWindField.innerCone));
+      setSource(map, SRC_FCST_OUTER, buildConeQuadFC(data?.forecastWindField.outerCone));
+      setSource(map, SRC_FCST_RINGS, buildRingFC(data?.forecastWindField.outerRings));
+      setSource(map, SRC_FCST_INNER, buildConeQuadFC(data?.forecastWindField.innerCone));
 
       // ── Layers (stable paint, no data-dependent opacity). Visibility is
       //    flipped via setLayoutProperty below so toggling without remounting
       //    Just Works. Stacking: SST (bottom) → alerts → forecast history →
       //    latest forecast → observed track → markers (top). ──
 
+      // SST as soft circles — circle-blur smears each point into its
+      // neighbours so overlapping cells form a continuous heatmap regardless
+      // of the backend grid step (0.25° in the warm Caribbean, coarser for
+      // a basin-wide bbox). Radius scales with zoom so it stays smooth at
+      // every level.
       ensureLayer(map, LAYER_SST, {
-        id: LAYER_SST, type: "fill", source: SRC_SST,
+        id: LAYER_SST, type: "circle", source: SRC_SST,
         paint: {
-          "fill-color": ["step", ["get", "tempC"], ...SST_COLOR_STOPS] as unknown as never,
-          "fill-opacity": 0.30,
-          "fill-outline-color": "rgba(0,0,0,0)",
+          "circle-color": [
+            "interpolate", ["linear"], ["get", "tempC"],
+            16, "#1e3a8a",
+            20, "#2563eb",
+            24, "#22d3ee",
+            26, "#a3e635",
+            26.5, "#facc15",
+            28, "#fb923c",
+            29, "#dc2626",
+            30, "#7f1d1d",
+          ] as unknown as never,
+          "circle-radius": [
+            "interpolate", ["linear"], ["zoom"],
+            3, 8, 5, 14, 7, 26, 10, 60,
+          ] as unknown as never,
+          "circle-blur": 1.0,
+          "circle-opacity": 0.45,
+          "circle-stroke-width": 0,
         },
       }, "county-line");
 
@@ -250,6 +305,59 @@ export function LiveStormLayer({ map }: Props) {
           ] as unknown as never,
           "line-width": 1.0,
           "line-opacity": 0.65,
+        },
+      }, "county-line");
+
+      // ── Wind-field cones: same Cat palette as historical impact. Outer
+      //    R64 (asymmetric) first at low opacity, inner Rmax on top. Forecast
+      //    cone uses the same style but with a dashed border on the rings so
+      //    you can tell observed vs projected. ──
+      ensureLayer(map, LAYER_OBS_OUTER, {
+        id: LAYER_OBS_OUTER, type: "fill", source: SRC_OBS_OUTER,
+        paint: {
+          "fill-color": ["step", ["get", "windKt"], ...CONE_STEP_COLOR] as unknown as never,
+          "fill-opacity": 0.22,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_OBS_RINGS, {
+        id: LAYER_OBS_RINGS, type: "fill", source: SRC_OBS_RINGS,
+        paint: {
+          "fill-color": ["step", ["get", "windKt"], ...CONE_STEP_COLOR] as unknown as never,
+          "fill-opacity": 0.22,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_OBS_INNER, {
+        id: LAYER_OBS_INNER, type: "fill", source: SRC_OBS_INNER,
+        paint: {
+          "fill-color": ["step", ["get", "windKt"], ...CONE_STEP_COLOR] as unknown as never,
+          "fill-opacity": 0.55,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_FCST_OUTER, {
+        id: LAYER_FCST_OUTER, type: "fill", source: SRC_FCST_OUTER,
+        paint: {
+          "fill-color": ["step", ["get", "windKt"], ...CONE_STEP_COLOR] as unknown as never,
+          "fill-opacity": 0.18,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_FCST_RINGS, {
+        id: LAYER_FCST_RINGS, type: "fill", source: SRC_FCST_RINGS,
+        paint: {
+          "fill-color": ["step", ["get", "windKt"], ...CONE_STEP_COLOR] as unknown as never,
+          "fill-opacity": 0.18,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_FCST_INNER, {
+        id: LAYER_FCST_INNER, type: "fill", source: SRC_FCST_INNER,
+        paint: {
+          "fill-color": ["step", ["get", "windKt"], ...CONE_STEP_COLOR] as unknown as never,
+          "fill-opacity": 0.45,
+          "fill-outline-color": "rgba(0,0,0,0)",
         },
       }, "county-line");
 
@@ -331,11 +439,17 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_OBSERVED, true);
       setVis(map, LAYER_BUOYS, showBuoys);
       setVis(map, LAYER_LAND, showLand);
+      setVis(map, LAYER_OBS_OUTER, showWindField);
+      setVis(map, LAYER_OBS_RINGS, showWindField);
+      setVis(map, LAYER_OBS_INNER, showWindField);
+      setVis(map, LAYER_FCST_OUTER, showWindField);
+      setVis(map, LAYER_FCST_RINGS, showWindField);
+      setVis(map, LAYER_FCST_INNER, showWindField);
     };
 
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, data, showForecastHistory, showAlerts, showBuoys, showLand, showSst]);
+  }, [map, data, showForecastHistory, showAlerts, showBuoys, showLand, showSst, showWindField]);
 
   // Tooltip on hover for the buoys.
   useEffect(() => {

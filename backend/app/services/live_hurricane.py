@@ -27,7 +27,15 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from .hurdat2 import category_for_wind
-from .ibtracs import Storm, TrackPoint, fetch_storms
+from .hurricane_impact import (
+    ConeQuad,
+    FootprintPoint,
+    _asymmetric_ring,
+    _quads_asymmetric_r64,
+    _quads_symmetric,
+    rmax_nm,
+)
+from .ibtracs import Storm, TrackPoint, fetch_storms, lookup_r64_quads_nm
 
 CURRENT_STORMS_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
 FETCH_TIMEOUT_S = 30
@@ -43,6 +51,80 @@ REPLAY_CANDIDATES: tuple[tuple[str, str, int], ...] = (
     ("AL122005", "Katrina", 2005),
     ("AL052019", "Dorian",  2019),
 )
+
+
+DAMAGING_WIND_MULTIPLIER = 2.5  # mirrors hurricane_impact for the synthetic fallback
+
+
+def _fixes_to_footprint(
+    storm_id: str,
+    fixes: list[tuple[float, float, int, str]],
+    *,
+    min_wind_kt: int = 34,
+) -> list[FootprintPoint]:
+    """Convert (lat, lon, wind_kt, datetime_iso) tuples → FootprintPoints.
+
+    Rmax: IBTrACS measured if present, else Willoughby fallback.
+    R64 quadrants: IBTrACS measured if present, else None (symmetric fallback).
+    ``min_wind_kt`` defaults to 34 (TS strength) so the forecast cone is
+    drawn for tropical-storm-strength forecasts too, not just hurricane.
+    """
+    out: list[FootprintPoint] = []
+    for lat, lon, wind, dt in fixes:
+        if wind < min_wind_kt:
+            continue
+        rmax, rmax_src = rmax_nm(
+            wind, lat, storm_id=storm_id, datetime_utc=dt,
+        )
+        if rmax <= 0:
+            continue
+        measured_quads = lookup_r64_quads_nm(storm_id, dt)
+        if measured_quads:
+            nonzero = [v for v in measured_quads if v > 0]
+            r64_mean = sum(nonzero) / len(nonzero) if nonzero else rmax * DAMAGING_WIND_MULTIPLIER
+            r64_src = "ibtracs"
+        else:
+            r64_mean = rmax * DAMAGING_WIND_MULTIPLIER
+            r64_src = "fallback"
+        out.append(
+            FootprintPoint(
+                lat=lat,
+                lon=lon,
+                wind_kt=wind,
+                rmax_nm=rmax,
+                radius_nm=rmax * DAMAGING_WIND_MULTIPLIER,
+                rmax_source=rmax_src,
+                r64_nm=r64_mean,
+                r64_source=r64_src,
+                r64_quads_nm=measured_quads,
+            )
+        )
+    return out
+
+
+def build_wind_cones(
+    storm_id: str,
+    fixes: list[tuple[float, float, int, str]],
+) -> tuple[list[FootprintPoint], list[ConeQuad], list[ConeQuad], list[dict]]:
+    """Build inner (Rmax) + outer (asymmetric R64) cones + asymmetric outer
+    cap rings for the given track of fixes. Returns
+    ``(footprint, inner_cone, outer_cone, outer_rings)``.
+    """
+    fp = _fixes_to_footprint(storm_id, fixes)
+    inner = _quads_symmetric(fp, lambda p: p.rmax_nm)
+    outer = _quads_asymmetric_r64(fp)
+    outer_rings: list[dict] = []
+    for pt in fp:
+        ring = _asymmetric_ring(pt.lat, pt.lon, pt.r64_quads_nm, fallback_nm=pt.r64_nm)
+        outer_rings.append(
+            {
+                "ring": ring,
+                "wind_kt": pt.wind_kt,
+                "r64_nm": pt.r64_nm,
+                "r64_source": pt.r64_source,
+            }
+        )
+    return fp, inner, outer, outer_rings
 
 
 @dataclass(slots=True, frozen=True)

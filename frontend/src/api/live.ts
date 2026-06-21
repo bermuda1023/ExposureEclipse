@@ -100,6 +100,26 @@ export interface SSTPoint {
   favorableForIntensification: boolean;
 }
 
+export interface ConeQuad {
+  corners: [number, number][];   // closed ring
+  windKt: number;
+  startWindKt: number;
+  endWindKt: number;
+}
+
+export interface OuterRing {
+  corners: [number, number][];
+  windKt: number;
+  r64Nm: number;
+  r64Source: "ibtracs" | "fallback";
+}
+
+export interface WindField {
+  innerCone: ConeQuad[];
+  outerCone: ConeQuad[];
+  outerRings: OuterRing[];
+}
+
 export interface LiveStormBundle {
   storm: LiveStormRow;
   observedTrack: ObservedFix[];
@@ -111,6 +131,8 @@ export interface LiveStormBundle {
   sst: SSTPoint[];
   sstMinC: number | null;
   sstMaxC: number | null;
+  observedWindField: WindField;
+  forecastWindField: WindField;
 }
 
 export const fetchLiveStormList = () =>
