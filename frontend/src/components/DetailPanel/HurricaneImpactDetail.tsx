@@ -15,6 +15,7 @@ import {
   useDamageAssumptionsStore,
   type LossBand,
 } from "../../state/damageAssumptions";
+import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "../Map/hurricaneColors";
 import { CountyReferenceSection } from "./CountyReferenceSection";
@@ -25,20 +26,29 @@ export function HurricaneImpactDetail() {
   const focusedGeoid = useHurricaneImpactStore((s) => s.focusedGeoid);
   const cedents = useCedents();
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
+  const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
+  const setOverride = useCountyOverridesStore((s) => s.set);
+  const resetCounty = useCountyOverridesStore((s) => s.resetCounty);
+  const resetStorm = useCountyOverridesStore((s) => s.resetStorm);
   const [openGeoid, setOpenGeoid] = useState<string | null>(null);
 
-  // Apply the user's assumptions to every impacted county. Memoised on the
-  // assumptions + counties so re-renders are cheap.
+  // Apply the user's assumptions to every impacted county, scaling each
+  // county's TIV by its exposed-fraction override (default 100%). Memoised
+  // on assumptions + overrides + counties so re-renders are cheap.
+  const stormOverrides = data ? (overridesByStorm[data.stormId] ?? {}) : {};
   const totals = useMemo(() => {
-    if (!data) return { mean: 0, low: 0, high: 0 };
+    if (!data) return { mean: 0, low: 0, high: 0, anyOverride: false };
     let mean = 0, low = 0, high = 0;
+    let anyOverride = false;
     for (const c of data.counties) {
       if (!c.hasData) continue;
-      const b = applyAssumption(c.tiv, c.maxWindKt, byCategory);
+      const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
+      if (exp !== 1.0) anyOverride = true;
+      const b = applyAssumption(c.tiv * exp, c.maxWindKt, byCategory);
       mean += b.mean; low += b.low; high += b.high;
     }
-    return { mean, low, high };
-  }, [data, byCategory]);
+    return { mean, low, high, anyOverride };
+  }, [data, byCategory, stormOverrides]);
 
   // dataset_id → human-friendly programme label.
   const programmeLabel = useMemo(() => {
@@ -137,6 +147,28 @@ export function HurricaneImpactDetail() {
         </div>
         <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
           Rmax multiplier {data.multiplier}× — counties exposed to ≥ 85 kt sustained winds.
+          {totals.anyOverride && (
+            <>
+              {" · "}
+              <strong style={{ color: "#7d5400" }}>
+                exposed-fraction overrides active
+              </strong>
+              {" "}
+              <button
+                onClick={() => resetStorm(data.stormId)}
+                style={{
+                  all: "unset",
+                  cursor: "pointer",
+                  color: "var(--brand-700)",
+                  textDecoration: "underline",
+                  fontSize: "0.62rem",
+                }}
+                title="Reset every county's exposed fraction back to 100% for this storm"
+              >
+                reset all
+              </button>
+            </>
+          )}
         </div>
       </section>
 
@@ -168,8 +200,9 @@ export function HurricaneImpactDetail() {
             {data.counties.map((c) => {
               const isOpen = openGeoid === c.geoid;
               const isFocused = focusedGeoid === c.geoid;
+              const exposed = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
               const band = c.hasData
-                ? applyAssumption(c.tiv, c.maxWindKt, byCategory)
+                ? applyAssumption(c.tiv * exposed, c.maxWindKt, byCategory)
                 : null;
               return (
                 <FragmentRow
@@ -179,6 +212,11 @@ export function HurricaneImpactDetail() {
                   isFocused={isFocused}
                   band={band}
                   byCategory={byCategory}
+                  exposedFraction={exposed}
+                  onExposedChange={(v) =>
+                    setOverride(data.stormId, c.geoid, { exposedFraction: v })
+                  }
+                  onResetExposed={() => resetCounty(data.stormId, c.geoid)}
                   toggle={() => {
                     // Single click both expands the per-programme breakdown
                     // AND tells the map which county to spotlight. Toggling
@@ -217,6 +255,9 @@ function FragmentRow({
   isFocused,
   band,
   byCategory,
+  exposedFraction,
+  onExposedChange,
+  onResetExposed,
   toggle,
   currency,
   programmeLabel,
@@ -226,10 +267,14 @@ function FragmentRow({
   isFocused: boolean;
   band: LossBand | null;
   byCategory: ReturnType<typeof useDamageAssumptionsStore.getState>["byCategory"];
+  exposedFraction: number;
+  onExposedChange: (v: number) => void;
+  onResetExposed: () => void;
   toggle: () => void;
   currency: string;
   programmeLabel: Map<string, string>;
 }) {
+  const isOverridden = exposedFraction !== 1.0;
   return (
     <>
       <tr
@@ -265,6 +310,59 @@ function FragmentRow({
             >
               ({c.rmaxSource === "ibtracs" ? "IBTrACS" : "Willoughby est."})
             </span>
+          </div>
+          {/* Exposed-fraction override — stops event bubbling so editing
+              the field doesn't toggle the row's expansion. */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              marginTop: 3,
+              fontSize: "0.62rem",
+              color: isOverridden ? "#7d5400" : "var(--ink-500)",
+            }}
+          >
+            <span>Exposed</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round(exposedFraction * 100)}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                onExposedChange(Number.isFinite(v) ? Math.max(0, Math.min(100, v)) / 100 : 1);
+              }}
+              style={{
+                width: 48,
+                padding: "1px 4px",
+                fontSize: "0.62rem",
+                textAlign: "right",
+                border: `1px solid ${isOverridden ? "#fbbf24" : "var(--ink-300)"}`,
+                background: isOverridden ? "#fef3c7" : "white",
+                borderRadius: 3,
+                fontFamily: "ui-monospace, monospace",
+              }}
+            />
+            <span>%</span>
+            {isOverridden && (
+              <button
+                onClick={onResetExposed}
+                style={{
+                  all: "unset",
+                  cursor: "pointer",
+                  color: "var(--brand-700)",
+                  textDecoration: "underline",
+                  fontSize: "0.6rem",
+                  marginLeft: 4,
+                }}
+                title="Reset to 100%"
+              >
+                reset
+              </button>
+            )}
           </div>
         </td>
         <td style={{ ...td, textAlign: "center" }}>
@@ -324,7 +422,11 @@ function FragmentRow({
                 </thead>
                 <tbody>
                   {c.byProgramme.map((p) => {
-                    const pb = applyAssumption(p.tiv, c.maxWindKt, byCategory);
+                    // Same exposed-fraction scaling we apply to the county
+                    // total — programme TIV inside the wind field is the
+                    // county fraction × programme TIV (assumes uniform
+                    // distribution of programme TIV across the county).
+                    const pb = applyAssumption(p.tiv * exposedFraction, c.maxWindKt, byCategory);
                     return (
                       <tr key={p.datasetId}>
                         <td style={subTd}>
@@ -332,6 +434,11 @@ function FragmentRow({
                         </td>
                         <td style={{ ...subTd, textAlign: "right" }}>
                           {formatMoneyCompact(p.tiv, currency)}
+                          {isOverridden && (
+                            <div style={{ fontSize: "0.56rem", color: "#7d5400" }}>
+                              eff {formatMoneyCompact(p.tiv * exposedFraction, currency)}
+                            </div>
+                          )}
                         </td>
                         <td style={{ ...subTd, textAlign: "right", color: "#b91c1c", fontWeight: 600 }}>
                           {formatMoneyCompact(pb.mean, currency)}

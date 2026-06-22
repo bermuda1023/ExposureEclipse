@@ -11,6 +11,7 @@ import {
   applyAssumption,
   useDamageAssumptionsStore,
 } from "../../state/damageAssumptions";
+import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
 import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
@@ -29,17 +30,20 @@ export function HurricaneImpactPanel() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
+  const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
+  const stormOverrides = data ? (overridesByStorm[data.stormId] ?? {}) : {};
 
   const totals = useMemo(() => {
     if (!data) return { mean: 0, low: 0, high: 0 };
     let mean = 0, low = 0, high = 0;
     for (const c of data.counties) {
       if (!c.hasData) continue;
-      const b = applyAssumption(c.tiv, c.maxWindKt, byCategory);
+      const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
+      const b = applyAssumption(c.tiv * exp, c.maxWindKt, byCategory);
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high };
-  }, [data, byCategory]);
+  }, [data, byCategory, stormOverrides]);
 
   // When the impact has been pushed to the right-rail detail panel, hide the
   // floating panel — the detail view shows the same content + per-programme
@@ -269,19 +273,27 @@ export function HurricaneImpactPanel() {
                     <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
                       {c.hasData ? formatMoneyCompact(c.tiv, data.currency) : "—"}
                       {c.hasData && (() => {
-                        const b = applyAssumption(c.tiv, c.maxWindKt, byCategory);
+                        const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
+                        const b = applyAssumption(c.tiv * exp, c.maxWindKt, byCategory);
                         return (
-                          <div
-                            style={{
-                              fontSize: "0.6rem",
-                              color: "#b91c1c",
-                              fontWeight: 600,
-                              marginTop: 1,
-                            }}
-                          >
-                            {formatMoneyCompact(b.mean, data.currency)} ±{" "}
-                            {formatMoneyCompact(b.high - b.mean, data.currency)}
-                          </div>
+                          <>
+                            <div
+                              style={{
+                                fontSize: "0.6rem",
+                                color: "#b91c1c",
+                                fontWeight: 600,
+                                marginTop: 1,
+                              }}
+                            >
+                              {formatMoneyCompact(b.mean, data.currency)} ±{" "}
+                              {formatMoneyCompact(b.high - b.mean, data.currency)}
+                            </div>
+                            {exp !== 1.0 && (
+                              <div style={{ fontSize: "0.56rem", color: "#7d5400" }}>
+                                exposed {Math.round(exp * 100)}%
+                              </div>
+                            )}
+                          </>
                         );
                       })()}
                       <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
