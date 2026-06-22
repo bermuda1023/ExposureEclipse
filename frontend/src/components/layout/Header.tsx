@@ -21,7 +21,7 @@ export function Header() {
           <div style={{ fontWeight: 600, fontSize: "1rem", letterSpacing: "0.01em" }}>
             Exposure Eclipse{" "}
             <span style={{ fontWeight: 400, opacity: 0.75, fontSize: "0.85rem" }}>
-              (Will Jackson and Billy Sacks)
+              built by Anfossi Capital
             </span>
           </div>
           <div style={{ fontSize: "0.72rem", opacity: 0.75 }}>
@@ -30,21 +30,8 @@ export function Header() {
         </div>
       </div>
       <div style={{ display: "flex", gap: 16, alignItems: "center", fontSize: "0.72rem", opacity: 0.85 }}>
-        <a
-          href="/admin/programmes"
-          style={{
-            color: "white",
-            opacity: 0.9,
-            textDecoration: "none",
-            padding: "4px 10px",
-            borderRadius: 4,
-            background: "rgba(255,255,255,0.10)",
-            fontWeight: 600,
-          }}
-          title="Treaty metadata + EDM linkage admin"
-        >
-          Programmes admin →
-        </a>
+        {/* Programmes admin link hidden per request — the page still
+            exists at /admin/programmes for direct navigation. */}
         {error && (
           <span
             style={{
