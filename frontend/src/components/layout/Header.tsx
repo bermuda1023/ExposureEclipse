@@ -19,7 +19,10 @@ export function Header() {
         <Logo />
         <div>
           <div style={{ fontWeight: 600, fontSize: "1rem", letterSpacing: "0.01em" }}>
-            Exposure Eclipse
+            Exposure Eclipse{" "}
+            <span style={{ fontWeight: 400, opacity: 0.75, fontSize: "0.85rem" }}>
+              (Will Jackson and Billy Sacks)
+            </span>
           </div>
           <div style={{ fontSize: "0.72rem", opacity: 0.75 }}>
             Property Cat exposure management workbench
