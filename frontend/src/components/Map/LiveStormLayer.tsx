@@ -440,12 +440,17 @@ export function LiveStormLayer({ map }: Props) {
       ensureLayer(map, LAYER_LAND, {
         id: LAYER_LAND, type: "circle", source: SRC_LAND,
         paint: {
-          "circle-radius": 3.5,
+          // Bumped — these were getting visually buried under the cone
+          // fills, alerts, and SST. Bigger radius + white halo so they
+          // pop out as the "human" indicator on top of the modelled wind
+          // field. Distinct from buoys (cyan-coded) by both colour and
+          // the white halo.
+          "circle-radius": 6,
           "circle-color": "#10b981",
-          "circle-stroke-color": "#064e3b",
-          "circle-stroke-width": 0.8,
-          "circle-opacity": 0.95,
-          "circle-stroke-opacity": 0.95,
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-opacity": 1.0,
+          "circle-stroke-opacity": 1.0,
         },
       });
 

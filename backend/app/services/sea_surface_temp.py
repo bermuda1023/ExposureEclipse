@@ -210,19 +210,61 @@ def _try_real_mur(bbox: tuple[float, float, float, float]) -> list[SSTPoint] | N
     return pts if pts else None
 
 
+# Drop SST cells whose centre is within this many nautical miles of any US
+# county centroid — proxy for "on land" so the heatmap doesn't visibly
+# bleed across the Florida peninsula etc. 25 nm ≈ 28 mi, roughly the
+# half-diameter of an average US county.
+LAND_MASK_RADIUS_NM = 25.0
+
+
+def _is_us_land(lat: float, lon: float, county_grid: dict) -> bool:
+    """Bbox-coarse + haversine check against US county centroids."""
+    # Quick CONUS+PR bbox cull — anything well outside the US is "ocean" as
+    # far as we're concerned (Caribbean, Atlantic, Gulf, Pacific).
+    if not (15.0 <= lat <= 50.0 and -125.0 <= lon <= -65.0):
+        return False
+    deg = LAND_MASK_RADIUS_NM / 50.0  # generous bounding box
+    lat_lo, lat_hi = lat - deg, lat + deg
+    lon_lo, lon_hi = lon - deg, lon + deg
+    for c in county_grid.values():
+        if not (lat_lo <= c.centroid_lat <= lat_hi and lon_lo <= c.centroid_lon <= lon_hi):
+            continue
+        # Cheap squared-degree distance suffices at this scale.
+        dlat = lat - c.centroid_lat
+        dlon = lon - c.centroid_lon
+        if (dlat * dlat + dlon * dlon) ** 0.5 * 60 <= LAND_MASK_RADIUS_NM:
+            return True
+    return False
+
+
+def _drop_us_land(cells: list[SSTPoint]) -> list[SSTPoint]:
+    # Lazy import to avoid a circular dep with hurricane_impact at module load.
+    from .hurricane_impact import county_centroids
+
+    grid = county_centroids()
+    return [p for p in cells if not _is_us_land(p.lat, p.lon, grid)]
+
+
 def sst_field(bbox: tuple[float, float, float, float]) -> tuple[list[SSTPoint], str]:
     """Return (cells, source). Tries real MUR first, falls back to synthetic.
+
+    Both sources are passed through a US-land mask so the SST heatmap stays
+    over water. MUR already returns NaN over land (we drop those at parse
+    time); the synthetic IDW field doesn't know what land is, so the mask
+    is essential there. The mask covers CONUS + Alaska + Puerto Rico via
+    county centroids; small Caribbean islands fall through (they have no
+    US county nearby and will paint as ocean, which is fine at this zoom).
 
     ``source`` ∈ {``"mur"``, ``"synthetic"``} so the API can disclose it.
     """
     real = _try_real_mur(bbox)
     if real:
-        return real, "mur"
+        return _drop_us_land(real), "mur"
     # Match the previous synthetic call's behaviour but at the same resolution
     # as the MUR stride would have produced — visually consistent fallback.
     span = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
     step = 0.1 if span < 6 else 0.25 if span < 12 else 0.5 if span < 25 else 1.0
-    return sst_grid(bbox=bbox, step_deg=step), "synthetic"
+    return _drop_us_land(sst_grid(bbox=bbox, step_deg=step)), "synthetic"
 
 
 # Suppress lint about an unused import — math is intentionally kept available
