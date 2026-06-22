@@ -5,8 +5,12 @@
  * by max wind speed.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
+import {
+  applyAssumption,
+  useDamageAssumptionsStore,
+} from "../../state/damageAssumptions";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
 import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
@@ -24,6 +28,18 @@ export function HurricaneImpactPanel() {
   } = useHurricaneImpactStore();
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
+
+  const totals = useMemo(() => {
+    if (!data) return { mean: 0, low: 0, high: 0 };
+    let mean = 0, low = 0, high = 0;
+    for (const c of data.counties) {
+      if (!c.hasData) continue;
+      const b = applyAssumption(c.tiv, c.maxWindKt, byCategory);
+      mean += b.mean; low += b.low; high += b.high;
+    }
+    return { mean, low, high };
+  }, [data, byCategory]);
 
   // When the impact has been pushed to the right-rail detail panel, hide the
   // floating panel — the detail view shows the same content + per-programme
@@ -184,16 +200,12 @@ export function HurricaneImpactPanel() {
                 value={formatCount(data.summary.totalLocationCount)}
               />
               <Stat
-                label="Projected loss (ground-up)"
-                value={formatMoneyCompact(data.summary.totalProjectedLoss, data.currency)}
+                label="Loss (mean)"
+                value={formatMoneyCompact(totals.mean, data.currency)}
               />
               <Stat
-                label="Avg damage ratio"
-                value={
-                  data.summary.totalTiv > 0
-                    ? `${((data.summary.totalProjectedLoss / data.summary.totalTiv) * 100).toFixed(1)}%`
-                    : "—"
-                }
+                label="Loss band ±1SD"
+                value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
               />
             </div>
             {data.footprint.length > 0 && (
@@ -256,18 +268,22 @@ export function HurricaneImpactPanel() {
                     </td>
                     <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
                       {c.hasData ? formatMoneyCompact(c.tiv, data.currency) : "—"}
-                      <div
-                        style={{
-                          fontSize: "0.6rem",
-                          color: c.hasData ? "#b91c1c" : "var(--ink-500)",
-                          fontWeight: 600,
-                          marginTop: 1,
-                        }}
-                      >
-                        {c.hasData
-                          ? `${(c.damageRatio * 100).toFixed(1)}% loss · ${formatMoneyCompact(c.projectedLoss, data.currency)}`
-                          : `${(c.damageRatio * 100).toFixed(1)}% est. loss`}
-                      </div>
+                      {c.hasData && (() => {
+                        const b = applyAssumption(c.tiv, c.maxWindKt, byCategory);
+                        return (
+                          <div
+                            style={{
+                              fontSize: "0.6rem",
+                              color: "#b91c1c",
+                              fontWeight: 600,
+                              marginTop: 1,
+                            }}
+                          >
+                            {formatMoneyCompact(b.mean, data.currency)} ±{" "}
+                            {formatMoneyCompact(b.high - b.mean, data.currency)}
+                          </div>
+                        );
+                      })()}
                       <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
                         Rmax {c.rmaxAtClosestNm.toFixed(0)}nm ·{" "}
                         <SourceTag source={c.rmaxSource} />

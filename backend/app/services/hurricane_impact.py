@@ -24,7 +24,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .damage_ratio import damage_ratio
 from .hurdat2 import category_for_wind
 from .ibtracs import (
     Storm,
@@ -678,25 +677,21 @@ def join_tiv(
         cur_p_tiv, cur_p_loc = prog_map.get(ds_id, (0.0, 0))
         prog_map[ds_id] = (cur_p_tiv + (f.tiv or 0.0), cur_p_loc + (f.location_count or 0))
 
+    # NOTE: damage_ratio + projected_loss are intentionally NOT computed
+    # server-side. The user supplies their own mean + SD per Saffir-Simpson
+    # category from the impact panel; the frontend applies it to each
+    # county's TIV (and per-programme TIV) to produce a probabilistic loss
+    # range. The legacy fields stay on the wire for back-compat but are
+    # always zero in the API response.
     for imp in impacts:
-        # Damage ratio is wind-only — applies whether or not we have portfolio
-        # TIV for this county. With no portfolio data, projected_loss stays 0.
-        dr = damage_ratio(imp.max_wind_kt)
-        imp.damage_ratio = dr
         if imp.geography_id in by_geo:
             tiv, loc = by_geo[imp.geography_id]
             imp.tiv = tiv
             imp.location_count = loc
             imp.has_data = True
-            imp.projected_loss = tiv * dr
             prog_map = by_geo_prog.get(imp.geography_id, {})
             imp.by_programme = [
-                ProgrammeContribution(
-                    dataset_id=ds,
-                    tiv=t,
-                    location_count=lc,
-                    projected_loss=t * dr,
-                )
+                ProgrammeContribution(dataset_id=ds, tiv=t, location_count=lc)
                 for ds, (t, lc) in sorted(prog_map.items(), key=lambda kv: -kv[1][0])
             ]
     return impacts

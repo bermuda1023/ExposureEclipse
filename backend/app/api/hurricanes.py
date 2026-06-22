@@ -183,7 +183,6 @@ def _compute_impact_payload(
     total_tiv = sum(i.tiv for i in impacts)
     total_loc = sum(i.location_count for i in impacts)
     counties_with_data = sum(1 for i in impacts if i.has_data)
-    total_projected_loss = sum(i.projected_loss for i in impacts)
 
     # Bounding box of impacted-county centroids, padded ~0.3deg so fitBounds
     # leaves a comfortable margin around the wind footprint.
@@ -262,7 +261,6 @@ def _compute_impact_payload(
             "countiesWithData": counties_with_data,
             "totalTiv": total_tiv,
             "totalLocationCount": total_loc,
-            "totalProjectedLoss": total_projected_loss,
         },
         "counties": [
             {
@@ -280,14 +278,11 @@ def _compute_impact_payload(
                 "tiv": i.tiv,
                 "locationCount": i.location_count,
                 "hasData": i.has_data,
-                "damageRatio": round(i.damage_ratio, 4),
-                "projectedLoss": round(i.projected_loss, 2),
                 "byProgramme": [
                     {
                         "datasetId": p.dataset_id,
                         "tiv": p.tiv,
                         "locationCount": p.location_count,
-                        "projectedLoss": round(p.projected_loss, 2),
                     }
                     for p in i.by_programme
                 ],

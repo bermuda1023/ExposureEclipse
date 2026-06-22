@@ -365,7 +365,6 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
             ("Counties Impacted", summary.get("countiesImpacted")),
             ("Counties With Portfolio Data", summary.get("countiesWithData")),
             ("Total TIV (in selection)", summary.get("totalTiv")),
-            ("Total Projected Loss (ground-up)", summary.get("totalProjectedLoss")),
             ("Total Location Count", summary.get("totalLocationCount")),
         ],
     )
@@ -382,8 +381,6 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         "Rmax at Closest (nm)",
         "Rmax Source",
         "TIV",
-        "Damage Ratio",
-        "Projected Loss",
         "Location Count",
         "Has Portfolio Data",
         "Centroid Lat",
@@ -401,12 +398,10 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         ws.cell(row=r, column=8, value=c.get("rmaxAtClosestNm"))
         ws.cell(row=r, column=9, value=c.get("rmaxSource"))
         ws.cell(row=r, column=10, value=c.get("tiv"))
-        ws.cell(row=r, column=11, value=c.get("damageRatio"))
-        ws.cell(row=r, column=12, value=c.get("projectedLoss"))
-        ws.cell(row=r, column=13, value=c.get("locationCount"))
-        ws.cell(row=r, column=14, value=c.get("hasData"))
-        ws.cell(row=r, column=15, value=c.get("centroidLat"))
-        ws.cell(row=r, column=16, value=c.get("centroidLon"))
+        ws.cell(row=r, column=11, value=c.get("locationCount"))
+        ws.cell(row=r, column=12, value=c.get("hasData"))
+        ws.cell(row=r, column=13, value=c.get("centroidLat"))
+        ws.cell(row=r, column=14, value=c.get("centroidLon"))
 
     buf = io.BytesIO()
     wb.save(buf)

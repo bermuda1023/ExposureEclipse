@@ -10,15 +10,35 @@
 import { useMemo, useState } from "react";
 import { useCedents } from "../../api/hooks";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
+import {
+  applyAssumption,
+  useDamageAssumptionsStore,
+  type LossBand,
+} from "../../state/damageAssumptions";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "../Map/hurricaneColors";
 import { CountyReferenceSection } from "./CountyReferenceSection";
+import { DamageAssumptionsEditor } from "./DamageAssumptionsEditor";
 
 export function HurricaneImpactDetail() {
   const { data, clear, popFromDetail, setFocusedGeoid } = useHurricaneImpactStore();
   const focusedGeoid = useHurricaneImpactStore((s) => s.focusedGeoid);
   const cedents = useCedents();
+  const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
   const [openGeoid, setOpenGeoid] = useState<string | null>(null);
+
+  // Apply the user's assumptions to every impacted county. Memoised on the
+  // assumptions + counties so re-renders are cheap.
+  const totals = useMemo(() => {
+    if (!data) return { mean: 0, low: 0, high: 0 };
+    let mean = 0, low = 0, high = 0;
+    for (const c of data.counties) {
+      if (!c.hasData) continue;
+      const b = applyAssumption(c.tiv, c.maxWindKt, byCategory);
+      mean += b.mean; low += b.low; high += b.high;
+    }
+    return { mean, low, high };
+  }, [data, byCategory]);
 
   // dataset_id → human-friendly programme label.
   const programmeLabel = useMemo(() => {
@@ -107,22 +127,20 @@ export function HurricaneImpactDetail() {
             value={formatCount(data.summary.totalLocationCount)}
           />
           <Stat
-            label="Projected loss (ground-up)"
-            value={formatMoneyCompact(data.summary.totalProjectedLoss, data.currency)}
+            label="Projected loss (mean)"
+            value={formatMoneyCompact(totals.mean, data.currency)}
           />
           <Stat
-            label="Avg damage ratio"
-            value={
-              data.summary.totalTiv > 0
-                ? `${((data.summary.totalProjectedLoss / data.summary.totalTiv) * 100).toFixed(1)}%`
-                : "—"
-            }
+            label="Loss band (± 1 SD)"
+            value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
           />
         </div>
         <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
           Rmax multiplier {data.multiplier}× — counties exposed to ≥ 85 kt sustained winds.
         </div>
       </section>
+
+      <DamageAssumptionsEditor compact />
 
       <div style={{ display: "grid", gap: 4 }}>
         <div
@@ -150,12 +168,17 @@ export function HurricaneImpactDetail() {
             {data.counties.map((c) => {
               const isOpen = openGeoid === c.geoid;
               const isFocused = focusedGeoid === c.geoid;
+              const band = c.hasData
+                ? applyAssumption(c.tiv, c.maxWindKt, byCategory)
+                : null;
               return (
                 <FragmentRow
                   key={c.geoid}
                   county={c}
                   isOpen={isOpen}
                   isFocused={isFocused}
+                  band={band}
+                  byCategory={byCategory}
                   toggle={() => {
                     // Single click both expands the per-programme breakdown
                     // AND tells the map which county to spotlight. Toggling
@@ -192,6 +215,8 @@ function FragmentRow({
   county: c,
   isOpen,
   isFocused,
+  band,
+  byCategory,
   toggle,
   currency,
   programmeLabel,
@@ -199,6 +224,8 @@ function FragmentRow({
   county: import("../../api/hurricanes").ImpactedCounty;
   isOpen: boolean;
   isFocused: boolean;
+  band: LossBand | null;
+  byCategory: ReturnType<typeof useDamageAssumptionsStore.getState>["byCategory"];
   toggle: () => void;
   currency: string;
   programmeLabel: Map<string, string>;
@@ -259,19 +286,23 @@ function FragmentRow({
         </td>
         <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
           {c.hasData ? formatMoneyCompact(c.tiv, currency) : "—"}
-          <div
-            style={{
-              fontSize: "0.62rem",
-              color: c.hasData ? "#b91c1c" : "var(--ink-500)",
-              fontWeight: 600,
-              marginTop: 1,
-            }}
-          >
-            {`DR ${(c.damageRatio * 100).toFixed(1)}%`}
-            {c.hasData
-              ? ` · ${formatMoneyCompact(c.projectedLoss, currency)}`
-              : ""}
-          </div>
+          {band && (
+            <>
+              <div
+                style={{
+                  fontSize: "0.62rem",
+                  color: "#b91c1c",
+                  fontWeight: 600,
+                  marginTop: 1,
+                }}
+              >
+                {`DR ${(band.drMean * 100).toFixed(1)}% · ${formatMoneyCompact(band.mean, currency)}`}
+              </div>
+              <div style={{ fontSize: "0.58rem", color: "var(--ink-500)" }}>
+                ± {formatMoneyCompact(band.high - band.mean, currency)} (±{(band.drSd * 100).toFixed(1)}%)
+              </div>
+            </>
+          )}
         </td>
       </tr>
       {isOpen && (
@@ -292,22 +323,28 @@ function FragmentRow({
                   </tr>
                 </thead>
                 <tbody>
-                  {c.byProgramme.map((p) => (
-                    <tr key={p.datasetId}>
-                      <td style={subTd}>
-                        {programmeLabel.get(p.datasetId) ?? p.datasetId}
-                      </td>
-                      <td style={{ ...subTd, textAlign: "right" }}>
-                        {formatMoneyCompact(p.tiv, currency)}
-                      </td>
-                      <td style={{ ...subTd, textAlign: "right", color: "#b91c1c", fontWeight: 600 }}>
-                        {formatMoneyCompact(p.projectedLoss, currency)}
-                      </td>
-                      <td style={{ ...subTd, textAlign: "right", color: "var(--ink-500)" }}>
-                        {formatCount(p.locationCount)}
-                      </td>
-                    </tr>
-                  ))}
+                  {c.byProgramme.map((p) => {
+                    const pb = applyAssumption(p.tiv, c.maxWindKt, byCategory);
+                    return (
+                      <tr key={p.datasetId}>
+                        <td style={subTd}>
+                          {programmeLabel.get(p.datasetId) ?? p.datasetId}
+                        </td>
+                        <td style={{ ...subTd, textAlign: "right" }}>
+                          {formatMoneyCompact(p.tiv, currency)}
+                        </td>
+                        <td style={{ ...subTd, textAlign: "right", color: "#b91c1c", fontWeight: 600 }}>
+                          {formatMoneyCompact(pb.mean, currency)}
+                          <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
+                            {formatMoneyCompact(pb.low, currency)}–{formatMoneyCompact(pb.high, currency)}
+                          </div>
+                        </td>
+                        <td style={{ ...subTd, textAlign: "right", color: "var(--ink-500)" }}>
+                          {formatCount(p.locationCount)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
