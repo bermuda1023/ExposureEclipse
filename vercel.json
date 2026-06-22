@@ -6,7 +6,8 @@
   "installCommand": "echo 'install handled per workspace'",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/api", "destination": "/api/index" }
+    { "source": "/api", "destination": "/api/index" },
+    { "source": "/admin/(.*)", "destination": "/index.html" }
   ],
   "functions": {
     "api/index.py": {

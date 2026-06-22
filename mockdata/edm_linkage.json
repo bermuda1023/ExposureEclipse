@@ -1,0 +1,14 @@
+{
+  "BMU-2027-200007": {
+    "serverName": "BERMUDA-SQL01",
+    "edmDatabaseName": "Re_BER_27_CoastalRe_WS_EDM_01"
+  },
+  "BMU-2027-200005": {
+    "serverName": "BERMUDA-SQL01",
+    "edmDatabaseName": "Re_BER_27_Farmers_BDA_EDM_01"
+  },
+  "BMU-2025-200866": {
+    "serverName": "LONDON-SQL01",
+    "edmDatabaseName": "Re_LON_25_Munich_WS_EDM_01"
+  }
+}

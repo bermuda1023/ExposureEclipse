@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api import (
+    admin,
     calc,
     cedents,
     counties,
@@ -73,6 +74,7 @@ def health() -> dict[str, object]:
 
 
 app.include_router(api)
+app.include_router(admin.router, prefix="/api")
 app.include_router(calc.router, prefix="/api")
 app.include_router(cedents.router, prefix="/api")
 app.include_router(counties.router, prefix="/api")
