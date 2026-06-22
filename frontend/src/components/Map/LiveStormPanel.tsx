@@ -90,7 +90,7 @@ export function LiveStormPanel() {
         position: "absolute",
         top: 14,
         right: 14,
-        width: open ? 320 : 130,
+        width: open ? 360 : 130,
         zIndex: 7,
         background: "rgba(255,255,255,0.97)",
         border: "1px solid var(--ink-300)",
@@ -173,17 +173,19 @@ export function LiveStormPanel() {
                 fontWeight: 700,
                 textTransform: "uppercase",
                 letterSpacing: "0.05em",
-                marginBottom: 4,
+                marginBottom: 6,
               }}
             >
               Layers
             </div>
-            <ToggleRow store={store} k="showWindField" label="Wind field (Rmax + R64)" />
-            <ToggleRow store={store} k="showForecastHistory" label="Forecast evolution (ghost tracks)" />
-            <ToggleRow store={store} k="showAlerts" label="NWS active alerts" />
-            <ToggleRow store={store} k="showBuoys" label="NDBC buoys" />
-            <ToggleRow store={store} k="showLand" label="NWS land stations (slow)" />
-            <ToggleRow store={store} k="showSst" label="Sea-surface temperature" />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64" color="#b91c1c" />
+              <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Ghost tracks" color="#475569" />
+              <LayerChip store={store} k="showAlerts" label="NWS alerts" hint="Watches + warnings" color="#ea580c" />
+              <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
+              <LayerChip store={store} k="showLand" label="NWS land stations" hint="Slow source" color="#10b981" />
+              <LayerChip store={store} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
+            </div>
           </div>
           {store.activeStormId && (
             <button
@@ -287,35 +289,56 @@ function StormPicker({
   );
 }
 
-function ToggleRow({
+function LayerChip({
   store,
   k,
   label,
+  hint,
+  color,
 }: {
   store: ReturnType<typeof useLiveStormStore.getState>;
   k: ToggleKey;
   label: string;
+  hint?: string;
+  color: string;
 }) {
-  const value = store[k] as boolean;
+  const active = store[k] as boolean;
   return (
-    <label
+    <button
+      type="button"
+      onClick={() => store.setToggle(k, !active)}
+      title={hint ? `${label} — ${hint}` : label}
       style={{
+        all: "unset",
+        cursor: "pointer",
         display: "flex",
         alignItems: "center",
         gap: 6,
-        cursor: "pointer",
+        padding: "5px 7px",
+        borderRadius: 4,
+        border: `1px solid ${active ? color : "var(--ink-200)"}`,
+        background: active ? "#fff" : "transparent",
         fontSize: "0.7rem",
-        padding: "2px 0",
-        color: "var(--ink-800)",
+        color: active ? "var(--ink-900)" : "var(--ink-500)",
+        opacity: active ? 1 : 0.7,
+        minHeight: 24,
       }}
     >
-      <input
-        type="checkbox"
-        checked={value}
-        onChange={(e) => store.setToggle(k, e.target.checked)}
+      <span
+        aria-hidden
+        style={{
+          width: 9,
+          height: 9,
+          borderRadius: 2,
+          background: active ? color : "transparent",
+          border: `1.5px solid ${color}`,
+          flexShrink: 0,
+        }}
       />
-      {label}
-    </label>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {label}
+      </span>
+    </button>
   );
 }
 
