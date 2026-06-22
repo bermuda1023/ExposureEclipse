@@ -53,6 +53,8 @@ export interface ImpactProgrammeContribution {
   datasetId: string;
   tiv: number;
   locationCount: number;
+  /** TIV × damageRatio at the county's max sustained wind. */
+  projectedLoss: number;
 }
 
 export interface ImpactedCounty {
@@ -72,6 +74,10 @@ export interface ImpactedCounty {
   tiv: number;
   locationCount: number;
   hasData: boolean;
+  /** Parametric damage ratio in [0, 1] for the county's max sustained wind. */
+  damageRatio: number;
+  /** TIV × damageRatio — projected ground-up loss for the in-scope TIV. */
+  projectedLoss: number;
   byProgramme: ImpactProgrammeContribution[];
 }
 
@@ -117,6 +123,9 @@ export interface ImpactSummary {
   countiesWithData: number;
   totalTiv: number;
   totalLocationCount: number;
+  /** Σ projectedLoss across all impacted counties — total ground-up loss
+   * estimate for the user's in-scope portfolio. */
+  totalProjectedLoss: number;
 }
 
 export interface HurricaneImpactResponse {

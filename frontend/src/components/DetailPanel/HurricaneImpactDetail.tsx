@@ -106,6 +106,18 @@ export function HurricaneImpactDetail() {
             label="Total locations"
             value={formatCount(data.summary.totalLocationCount)}
           />
+          <Stat
+            label="Projected loss (ground-up)"
+            value={formatMoneyCompact(data.summary.totalProjectedLoss, data.currency)}
+          />
+          <Stat
+            label="Avg damage ratio"
+            value={
+              data.summary.totalTiv > 0
+                ? `${((data.summary.totalProjectedLoss / data.summary.totalTiv) * 100).toFixed(1)}%`
+                : "—"
+            }
+          />
         </div>
         <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
           Rmax multiplier {data.multiplier}× — counties exposed to ≥ 85 kt sustained winds.
@@ -247,6 +259,19 @@ function FragmentRow({
         </td>
         <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
           {c.hasData ? formatMoneyCompact(c.tiv, currency) : "—"}
+          <div
+            style={{
+              fontSize: "0.62rem",
+              color: c.hasData ? "#b91c1c" : "var(--ink-500)",
+              fontWeight: 600,
+              marginTop: 1,
+            }}
+          >
+            {`DR ${(c.damageRatio * 100).toFixed(1)}%`}
+            {c.hasData
+              ? ` · ${formatMoneyCompact(c.projectedLoss, currency)}`
+              : ""}
+          </div>
         </td>
       </tr>
       {isOpen && (
@@ -262,7 +287,8 @@ function FragmentRow({
                   <tr style={{ color: "var(--ink-500)", textAlign: "left" }}>
                     <th style={subTh}>Programme</th>
                     <th style={{ ...subTh, textAlign: "right" }}>TIV</th>
-                    <th style={{ ...subTh, textAlign: "right" }}>Locations</th>
+                    <th style={{ ...subTh, textAlign: "right" }}>Proj. loss</th>
+                    <th style={{ ...subTh, textAlign: "right" }}>Locs</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -273,6 +299,9 @@ function FragmentRow({
                       </td>
                       <td style={{ ...subTd, textAlign: "right" }}>
                         {formatMoneyCompact(p.tiv, currency)}
+                      </td>
+                      <td style={{ ...subTd, textAlign: "right", color: "#b91c1c", fontWeight: 600 }}>
+                        {formatMoneyCompact(p.projectedLoss, currency)}
                       </td>
                       <td style={{ ...subTd, textAlign: "right", color: "var(--ink-500)" }}>
                         {formatCount(p.locationCount)}

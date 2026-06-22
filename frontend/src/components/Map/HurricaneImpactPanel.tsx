@@ -183,6 +183,18 @@ export function HurricaneImpactPanel() {
                 label="Total locations"
                 value={formatCount(data.summary.totalLocationCount)}
               />
+              <Stat
+                label="Projected loss (ground-up)"
+                value={formatMoneyCompact(data.summary.totalProjectedLoss, data.currency)}
+              />
+              <Stat
+                label="Avg damage ratio"
+                value={
+                  data.summary.totalTiv > 0
+                    ? `${((data.summary.totalProjectedLoss / data.summary.totalTiv) * 100).toFixed(1)}%`
+                    : "—"
+                }
+              />
             </div>
             {data.footprint.length > 0 && (
               <RmaxSourceLine footprint={data.footprint} />
@@ -244,6 +256,18 @@ export function HurricaneImpactPanel() {
                     </td>
                     <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
                       {c.hasData ? formatMoneyCompact(c.tiv, data.currency) : "—"}
+                      <div
+                        style={{
+                          fontSize: "0.6rem",
+                          color: c.hasData ? "#b91c1c" : "var(--ink-500)",
+                          fontWeight: 600,
+                          marginTop: 1,
+                        }}
+                      >
+                        {c.hasData
+                          ? `${(c.damageRatio * 100).toFixed(1)}% loss · ${formatMoneyCompact(c.projectedLoss, data.currency)}`
+                          : `${(c.damageRatio * 100).toFixed(1)}% est. loss`}
+                      </div>
                       <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
                         Rmax {c.rmaxAtClosestNm.toFixed(0)}nm ·{" "}
                         <SourceTag source={c.rmaxSource} />

@@ -24,6 +24,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
+from .damage_ratio import damage_ratio
 from .hurdat2 import category_for_wind
 from .ibtracs import (
     Storm,
@@ -260,11 +261,13 @@ def _within_us_bbox(pt: TrackPoint) -> bool:
 
 @dataclass(slots=True)
 class ProgrammeContribution:
-    """Per-programme slice of a single county's impacted TIV."""
+    """Per-programme slice of a single county's impacted TIV. ``projected_loss``
+    is the TIV × damage_ratio at the county's max sustained wind."""
 
     dataset_id: str
     tiv: float
     location_count: int
+    projected_loss: float = 0.0
 
 
 @dataclass(slots=True)
@@ -283,6 +286,11 @@ class CountyImpact:
     tiv: float                  # joined from the user's selection
     location_count: int
     has_data: bool             # true if any fact row exists for this county
+    # Parametric damage ratio + projected ground-up loss for the user's
+    # in-scope TIV, computed from the county's max sustained wind. See
+    # services/damage_ratio.py for the curve.
+    damage_ratio: float = 0.0
+    projected_loss: float = 0.0
     by_programme: list[ProgrammeContribution] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -671,14 +679,24 @@ def join_tiv(
         prog_map[ds_id] = (cur_p_tiv + (f.tiv or 0.0), cur_p_loc + (f.location_count or 0))
 
     for imp in impacts:
+        # Damage ratio is wind-only — applies whether or not we have portfolio
+        # TIV for this county. With no portfolio data, projected_loss stays 0.
+        dr = damage_ratio(imp.max_wind_kt)
+        imp.damage_ratio = dr
         if imp.geography_id in by_geo:
             tiv, loc = by_geo[imp.geography_id]
             imp.tiv = tiv
             imp.location_count = loc
             imp.has_data = True
+            imp.projected_loss = tiv * dr
             prog_map = by_geo_prog.get(imp.geography_id, {})
             imp.by_programme = [
-                ProgrammeContribution(dataset_id=ds, tiv=t, location_count=lc)
+                ProgrammeContribution(
+                    dataset_id=ds,
+                    tiv=t,
+                    location_count=lc,
+                    projected_loss=t * dr,
+                )
                 for ds, (t, lc) in sorted(prog_map.items(), key=lambda kv: -kv[1][0])
             ]
     return impacts
