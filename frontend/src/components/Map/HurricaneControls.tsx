@@ -20,6 +20,29 @@ const CATEGORIES = [
   { value: 5, label: "Cat 5 only" },
 ];
 
+// Hurricane-landfall states — Atlantic + Gulf coastline + PR.
+// Order is rough north-to-south so the picker reads geographically.
+const LANDFALL_STATES: { code: string; label: string }[] = [
+  { code: "ME", label: "ME" },
+  { code: "MA", label: "MA" },
+  { code: "RI", label: "RI" },
+  { code: "CT", label: "CT" },
+  { code: "NY", label: "NY" },
+  { code: "NJ", label: "NJ" },
+  { code: "DE", label: "DE" },
+  { code: "MD", label: "MD" },
+  { code: "VA", label: "VA" },
+  { code: "NC", label: "NC" },
+  { code: "SC", label: "SC" },
+  { code: "GA", label: "GA" },
+  { code: "FL", label: "FL" },
+  { code: "AL", label: "AL" },
+  { code: "MS", label: "MS" },
+  { code: "LA", label: "LA" },
+  { code: "TX", label: "TX" },
+  { code: "PR", label: "PR" },
+];
+
 export function HurricaneControls() {
   const {
     enabled,
@@ -27,10 +50,13 @@ export function HurricaneControls() {
     yearMax,
     minCategory,
     landfallOnly,
+    landfallStates,
     setEnabled,
     setYearRange,
     setMinCategory,
     setLandfallOnly,
+    toggleLandfallState,
+    setLandfallStates,
   } = useHurricaneStore();
 
   return (
@@ -129,8 +155,84 @@ export function HurricaneControls() {
             />
             Landfall only
           </button>
+          <LandfallStatePicker
+            selected={landfallStates}
+            onToggle={toggleLandfallState}
+            onClear={() => setLandfallStates([])}
+          />
           <HurricaneLegend />
         </>
+      )}
+    </div>
+  );
+}
+
+function LandfallStatePicker({
+  selected,
+  onToggle,
+  onClear,
+}: {
+  selected: string[];
+  onToggle: (code: string) => void;
+  onClear: () => void;
+}) {
+  const active = new Set(selected);
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "2px 5px 2px 6px",
+        background: "var(--ink-50)",
+        border: "1px solid var(--ink-200)",
+        borderRadius: 999,
+        fontSize: "0.66rem",
+        color: "var(--ink-600)",
+        flexWrap: "wrap",
+      }}
+      title="Filter to storms that made landfall in these states. Empty = all states."
+    >
+      <span style={{ marginRight: 4, fontWeight: 600 }}>Landfall:</span>
+      {LANDFALL_STATES.map((s) => {
+        const on = active.has(s.code);
+        return (
+          <button
+            key={s.code}
+            type="button"
+            onClick={() => onToggle(s.code)}
+            style={{
+              all: "unset",
+              cursor: "pointer",
+              padding: "1px 5px",
+              borderRadius: 3,
+              fontSize: "0.62rem",
+              fontWeight: 700,
+              color: on ? "white" : "var(--ink-600)",
+              background: on ? "var(--accent-500)" : "transparent",
+              border: `1px solid ${on ? "var(--accent-500)" : "var(--ink-300)"}`,
+            }}
+            title={`${on ? "Remove" : "Add"} ${s.code} from landfall filter`}
+          >
+            {s.label}
+          </button>
+        );
+      })}
+      {selected.length > 0 && (
+        <button
+          type="button"
+          onClick={onClear}
+          style={{
+            all: "unset",
+            cursor: "pointer",
+            marginLeft: 4,
+            color: "var(--brand-700)",
+            textDecoration: "underline",
+            fontSize: "0.62rem",
+          }}
+        >
+          clear
+        </button>
       )}
     </div>
   );

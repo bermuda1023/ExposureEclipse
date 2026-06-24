@@ -77,6 +77,11 @@ def list_hurricanes(
     year_max: int = Query(2100, ge=1950, le=2100, alias="yearMax"),
     min_category: int = Query(1, ge=-2, le=5, alias="minCategory"),
     landfall_only: bool = Query(True, alias="landfallOnly"),
+    landfall_states: str | None = Query(
+        default=None,
+        alias="landfallStates",
+        description="Comma-separated USPS state codes (e.g. 'LA,MS,AL'). Only storms whose strongest US landfall hit one of these states are returned. Implies landfallOnly=true.",
+    ),
 ) -> dict:
     if year_max < year_min:
         raise HTTPException(
@@ -86,6 +91,12 @@ def list_hurricanes(
                 "message": "yearMax must be >= yearMin.",
             },
         )
+
+    state_filter: set[str] | None = None
+    if landfall_states:
+        state_filter = {
+            s.strip().upper() for s in landfall_states.split(",") if s.strip()
+        } or None
 
     try:
         storms = fetch_storms()
@@ -106,6 +117,10 @@ def list_hurricanes(
         cat, state = landfall_summary(s)
         if landfall_only and cat == -2:
             continue
+        if state_filter is not None:
+            # A state filter implicitly requires a US landfall.
+            if state is None or state not in state_filter:
+                continue
         peak_cat = category_for_wind(peak_wind(s))
         effective = _effective_category(cat, peak_cat)
         if effective < min_category:
@@ -120,6 +135,7 @@ def list_hurricanes(
             "yearMax": year_max,
             "minCategory": min_category,
             "landfallOnly": landfall_only,
+            "landfallStates": sorted(state_filter) if state_filter else None,
         },
     }
 

@@ -42,10 +42,21 @@ export interface HurricaneFiltersParams {
   yearMax?: number;
   minCategory?: number;
   landfallOnly?: boolean;
+  /** USPS state codes the storm's strongest US landfall must match. */
+  landfallStates?: string[];
 }
 
-export const listHurricanes = (params: HurricaneFiltersParams = {}) =>
-  apiGet<HurricaneListResponse>("/hurricanes", { ...params });
+export const listHurricanes = (params: HurricaneFiltersParams = {}) => {
+  const { landfallStates, ...rest } = params;
+  return apiGet<HurricaneListResponse>("/hurricanes", {
+    ...rest,
+    // Backend takes a comma-separated string; omit when empty so the
+    // backend defaults to "all states".
+    landfallStates: landfallStates && landfallStates.length > 0
+      ? landfallStates.join(",")
+      : undefined,
+  });
+};
 
 // ───────────────────────── impact ─────────────────────────
 

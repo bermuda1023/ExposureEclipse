@@ -138,7 +138,8 @@ interface HoveredSegment {
 }
 
 export function HurricaneLayer({ map }: Props) {
-  const { enabled, yearMin, yearMax, minCategory, landfallOnly } = useHurricaneStore();
+  const { enabled, yearMin, yearMax, minCategory, landfallOnly, landfallStates } =
+    useHurricaneStore();
   const startImpact = useHurricaneImpactStore((s) => s.start);
   const setImpactData = useHurricaneImpactStore((s) => s.setData);
   const setImpactError = useHurricaneImpactStore((s) => s.setError);
@@ -155,8 +156,12 @@ export function HurricaneLayer({ map }: Props) {
   const cleanupRef = useRef<(() => void) | null>(null);
 
   const query = useQuery({
-    queryKey: ["hurricanes", { yearMin, yearMax, minCategory, landfallOnly }],
-    queryFn: () => listHurricanes({ yearMin, yearMax, minCategory, landfallOnly }),
+    queryKey: [
+      "hurricanes",
+      { yearMin, yearMax, minCategory, landfallOnly, landfallStates },
+    ],
+    queryFn: () =>
+      listHurricanes({ yearMin, yearMax, minCategory, landfallOnly, landfallStates }),
     enabled,
     staleTime: 10 * 60_000,
   });

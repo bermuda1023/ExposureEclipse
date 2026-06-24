@@ -14,11 +14,16 @@ export interface HurricaneFiltersState {
   yearMax: number;
   minCategory: number; // -2..5 (-2 = include no-landfall storms, 0 = TS+, 1..5 = Cat 1..5)
   landfallOnly: boolean;
+  /** USPS state codes; empty = all states. Filter implicitly forces a US
+   * landfall (sub-tropical storms that never made landfall are dropped). */
+  landfallStates: string[];
 
   setEnabled: (v: boolean) => void;
   setYearRange: (yearMin: number, yearMax: number) => void;
   setMinCategory: (c: number) => void;
   setLandfallOnly: (v: boolean) => void;
+  setLandfallStates: (states: string[]) => void;
+  toggleLandfallState: (code: string) => void;
   reset: () => void;
 }
 
@@ -28,13 +33,26 @@ const DEFAULTS = {
   yearMax: 2024,
   minCategory: 3,
   landfallOnly: true,
+  landfallStates: [] as string[],
 } as const;
 
-export const useHurricaneStore = create<HurricaneFiltersState>((set) => ({
+export const useHurricaneStore = create<HurricaneFiltersState>((set, get) => ({
   ...DEFAULTS,
+  landfallStates: [...DEFAULTS.landfallStates],
   setEnabled: (v) => set({ enabled: v }),
   setYearRange: (yearMin, yearMax) => set({ yearMin, yearMax }),
   setMinCategory: (c) => set({ minCategory: c }),
   setLandfallOnly: (v) => set({ landfallOnly: v }),
-  reset: () => set({ ...DEFAULTS }),
+  setLandfallStates: (states) =>
+    set({ landfallStates: states.map((s) => s.toUpperCase()) }),
+  toggleLandfallState: (code) => {
+    const up = code.toUpperCase();
+    const cur = get().landfallStates;
+    set({
+      landfallStates: cur.includes(up)
+        ? cur.filter((s) => s !== up)
+        : [...cur, up],
+    });
+  },
+  reset: () => set({ ...DEFAULTS, landfallStates: [] }),
 }));
