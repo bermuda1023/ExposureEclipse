@@ -1,35 +1,36 @@
-"""County-level hazard overlays — hail, tornado, wildfire.
+"""Hazard overlays — tornado, hail, wildfire.
 
-Each peril returns a per-county score normalised to [0, 1] for the
-frontend choropleth, plus the raw count / index for the tooltip. v1
-ships **synthetic patterns anchored on the real geographic
-distributions** that the cited data sources publish, so the maps look
-right for demos without bundling 100+ MB of CSV. Swapping to real data
-is a single function change per peril — the calling code only sees
-``HazardScore`` dataclasses.
+Tornado is REAL DATA: a 0.4° KDE of NOAA SPC's 1950-2025 SVRGIS
+tornado-touchdown shapefile, with a linear recency weight (1950 = 0.5×
+→ 2025 = 2.0×) so the heatmap reflects current climatology (Tornado
+Alley shifting east) rather than a flat 75-year average. EF3+ get a
+small magnitude boost so the damage signal isn't drowned by weak
+short-track EF0s. The grid is pre-baked by
+``backend/scripts/build_tornado_grid.py`` into
+``mockdata/hazard_tornado_grid.json`` — runtime just loads + normalises.
 
-Data sources we'd swap in for production:
+Hail + wildfire still ship as synthetic patterns anchored on published
+distributions; same swap pattern when real data is wired in.
 
-- **Tornado**: NOAA Storm Prediction Center "SVRGIS" CSV, 1950-present
-  tornado tracks. Aggregate count per county, optionally weight by
-  EF-scale or path length.
+Data sources / swap targets:
+
+- **Tornado** (REAL): NOAA SPC SVRGIS 1950-2025 tornado shapefile
   https://www.spc.noaa.gov/gis/svrgis/
 
-- **Hail**: NOAA SPC severe weather event database, ≥1 inch hail
-  reports per county, 1955-present. Same aggregation pattern.
+- **Hail** (synthetic): NOAA SPC severe weather event DB, ≥1″ reports
   https://www.spc.noaa.gov/wcm/#data
 
-- **Wildfire**: USFS Wildfire Hazard Potential (WHP), a 1-5 integer
-  index per ~270m raster cell from the LANDFIRE program. County
-  aggregation = area-weighted mean.
+- **Wildfire** (synthetic): USFS Wildfire Hazard Potential (LANDFIRE)
   https://www.firelab.org/project/wildfire-hazard-potential
 """
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 HazardType = Literal["tornado", "hail", "wildfire"]
@@ -66,15 +67,25 @@ def _dist_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return math.sqrt(dlat * dlat + dlon * dlon)
 
 
-def _tornado_raw(lat: float, lon: float) -> float:
-    """Synthetic 1950-2023 tornado count per county, anchored on:
-       - Tornado Alley centroid ~35°N, -98°W (OK / KS / TX panhandle)
-       - Dixie Alley centroid  ~33°N, -88°W (MS / AL / LA / W. TN)
-       - Florida + SE coast secondary peak (mostly weak EF0-1)
-    The headline 1950-2023 counts published by SPC peak around 250-400
-    per county in TX/OK/KS, 40-150 in Dixie, 50-120 in central FL, and
-    <20 across the Mountain West / NE.
-    """
+_TORNADO_JSON = (
+    Path(__file__).resolve().parents[3] / "mockdata" / "hazard_tornado_grid.json"
+)
+
+
+@lru_cache(maxsize=1)
+def _tornado_cells() -> list[tuple[float, float, float]]:
+    """Pre-baked tornado-density grid (real SPC SVRGIS, recency-weighted KDE).
+    Returns ``[(lat, lon, raw), ...]``. Empty if the JSON is missing — in
+    that case ``build_grid`` falls back to the synthetic anchor pattern."""
+    if not _TORNADO_JSON.exists():
+        return []
+    raw = json.loads(_TORNADO_JSON.read_text(encoding="utf-8"))
+    return [(float(d["lat"]), float(d["lon"]), float(d["raw"])) for d in raw]
+
+
+def _tornado_raw_synthetic(lat: float, lon: float) -> float:
+    """Fallback synthetic pattern when the pre-baked SPC grid isn't
+    available (e.g. local dev without the shapefile build)."""
     if not (24.0 <= lat <= 49.5 and -125.0 <= lon <= -66.0):
         return 0.0
     d_alley = _dist_km(lat, lon, 35.0, -98.0)
@@ -85,10 +96,8 @@ def _tornado_raw(lat: float, lon: float) -> float:
         140 * math.exp(-(d_dixie / 320) ** 2) +
          95 * math.exp(-(d_fl    / 220) ** 2)
     )
-    # Eastern seaboard + Ohio Valley baseline
     if -90.0 <= lon <= -75.0 and 36.0 <= lat <= 43.0:
         score += 15
-    # Mountain West suppression
     if -120.0 <= lon <= -103.0 and lat >= 35.0:
         score *= 0.20
     return max(0.0, score)
@@ -177,17 +186,35 @@ def build_grid(
     hazard: HazardType,
     step_deg: float = 0.4,
 ) -> tuple[list[HazardGridPoint], HazardLegend, float]:
-    """Sample the hazard scoring function on a regular lat/lon grid covering
-    CONUS, clipped to US land. Returned cells tile contiguously when the
-    frontend draws each as a step_deg square fill — gives a smooth heatmap
-    that ignores county / state lines.
+    """Sample the hazard scoring on a 0.4° lat/lon grid covering CONUS.
+    Returned cells tile contiguously when the frontend draws each as a
+    step_deg square fill — a smooth heatmap that ignores county / state
+    lines. Cached per peril (deterministic).
 
-    Cached per peril (the synthetic scoring is deterministic).
+    Tornado branch: loads the pre-baked SPC SVRGIS KDE grid directly so
+    the heatmap reflects real 1950-2025 tornado touchdowns (recency-
+    weighted), not a synthetic pattern.
     """
+    if hazard == "tornado":
+        cells = _tornado_cells()
+        if cells:
+            raws = [r for _, _, r in cells]
+            raw_min, raw_max = 0.0, max(raws)
+            span = max(raw_max - raw_min, 1e-9)
+            out = [
+                HazardGridPoint(
+                    lat=lat, lon=lon, raw=round(r, 2),
+                    normalised=round((r - raw_min) / span, 4),
+                )
+                for lat, lon, r in cells
+            ]
+            return out, _legend_for(hazard, raw_min, raw_max), step_deg
+        # Fall through to synthetic if the JSON isn't present.
+
     from .hurricane_impact import county_centroids
 
     raw_fn = {
-        "tornado": _tornado_raw,
+        "tornado": _tornado_raw_synthetic,
         "hail": _hail_raw,
         "wildfire": _wildfire_raw,
     }[hazard]
@@ -197,7 +224,7 @@ def build_grid(
     west, east = -125.0, -66.0
 
     points: list[HazardGridPoint] = []
-    raws: list[float] = []
+    raws_s: list[float] = []
     lat = south
     while lat <= north + 1e-9:
         lon = west
@@ -205,14 +232,13 @@ def build_grid(
             if _us_land_filter(lat, lon, county_grid):
                 r = raw_fn(lat, lon)
                 points.append(HazardGridPoint(lat=round(lat, 3), lon=round(lon, 3), raw=r, normalised=0.0))
-                raws.append(r)
+                raws_s.append(r)
             lon += step_deg
         lat += step_deg
 
-    raw_min = min(raws) if raws else 0.0
-    raw_max = max(raws) if raws else 1.0
+    raw_min = min(raws_s) if raws_s else 0.0
+    raw_max = max(raws_s) if raws_s else 1.0
     span = max(raw_max - raw_min, 1e-9)
-    # Re-pack with normalised scores (frozen dataclass → new instances).
     out = [
         HazardGridPoint(
             lat=p.lat,
@@ -228,19 +254,21 @@ def build_grid(
 
 def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLegend:
     if hazard == "tornado":
-        # Cool→warm palette; stops chosen so colour reads at intuitive count breaks
         palette = ["#f1f5f9", "#fde68a", "#fdba74", "#f97316", "#dc2626", "#7f1d1d"]
-        stops = [0, 25, 75, 150, 250, 400]
+        # Stops chosen against the real KDE distribution: most CONUS land
+        # sits in 0-50, Alley peaks reach ~450. Six stops over [0, 400]
+        # gives intuitive colour breaks for the underwriter eye.
+        stops = [0, 30, 90, 180, 280, 400]
         return HazardLegend(
-            title="Tornado frequency",
-            unit="tornadoes 1950–2023",
-            source="NOAA SPC SVRGIS — pattern (production: raw SPC counts)",
+            title="Tornado density (recency-weighted)",
+            unit="weighted touchdowns / 0.4° cell",
+            source="NOAA SPC SVRGIS 1950-2025 tornado initpoints, KDE-smoothed",
             source_url="https://www.spc.noaa.gov/gis/svrgis/",
             raw_min=raw_min,
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Synthetic pattern calibrated to SPC tornado-database peaks in Tornado Alley + Dixie Alley + FL.",
+            note="Real SPC touchdowns aggregated to 0.4° via a Gaussian kernel (sigma ≈ 0.45°). Recency weight 0.5× (1950) → 2.0× (2025), with EF3+ mag boost, to reflect the eastward shift of Tornado Alley.",
         )
     if hazard == "hail":
         palette = ["#f1f5f9", "#e0f2fe", "#bae6fd", "#93c5fd", "#6366f1", "#3730a3"]
