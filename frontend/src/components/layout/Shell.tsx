@@ -27,6 +27,7 @@ const MapView = lazy(() =>
   import("../Map/MapView").then((m) => ({ default: m.MapView })),
 );
 import { HurricaneControls } from "../Map/HurricaneControls";
+import { HazardOverlayControls } from "../Map/HazardOverlayControls";
 import { MetricSelector } from "../Map/MetricSelector";
 import { PerilSelector } from "../Map/PerilSelector";
 import { YoyToggle } from "../Map/YoyToggle";
@@ -364,6 +365,7 @@ function MapToolbar() {
         <PortfolioScopeBadge />
         <PerilSelector />
         <HurricaneControls />
+        <HazardOverlayControls />
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", rowGap: 6 }}>
         <MetricSelector />

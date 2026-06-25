@@ -29,6 +29,8 @@ import {
 } from "./fipsToUsps";
 import { HurricaneLayer } from "./HurricaneLayer";
 import { HurricaneImpactPanel } from "./HurricaneImpactPanel";
+import { HazardOverlayLayer } from "./HazardOverlayLayer";
+import { HazardOverlayLegend } from "./HazardOverlayLegend";
 import { LiveStormLayer } from "./LiveStormLayer";
 import { LiveStormPanel } from "./LiveStormPanel";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
@@ -186,6 +188,27 @@ export function MapView({ data, isLoading, error }: Props) {
             0.8,
             0.04,
           ],
+        },
+      });
+      // Hazard overlay choropleth — sits above the exposure choropleth so a
+      // selected peril (tornado/hail/wildfire) replaces the data wash. Always
+      // present; visibility is flipped by HazardOverlayLayer when a peril is
+      // active vs cleared.
+      map.addLayer({
+        id: "county-hazard-fill",
+        type: "fill",
+        source: COUNTY_TILESET.src,
+        "source-layer": COUNTY_TILESET.layer,
+        minzoom: 0,
+        maxzoom: COUNTY_ENV[1],
+        layout: { visibility: "none" },
+        paint: {
+          "fill-color": [
+            "coalesce",
+            ["feature-state", "hazardColor"],
+            "rgba(0,0,0,0)",
+          ],
+          "fill-opacity": 0.72,
         },
       });
       map.addLayer({
@@ -533,6 +556,8 @@ export function MapView({ data, isLoading, error }: Props) {
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
       <HurricaneLayer map={mapInstance} />
       <HurricaneImpactPanel />
+      <HazardOverlayLayer map={mapInstance} />
+      <HazardOverlayLegend />
       <LiveStormLayer map={mapInstance} />
       <LiveStormPanel />
       {isLoading && (
