@@ -190,27 +190,6 @@ export function MapView({ data, isLoading, error }: Props) {
           ],
         },
       });
-      // Hazard overlay choropleth — sits above the exposure choropleth so a
-      // selected peril (tornado/hail/wildfire) replaces the data wash. Always
-      // present; visibility is flipped by HazardOverlayLayer when a peril is
-      // active vs cleared.
-      map.addLayer({
-        id: "county-hazard-fill",
-        type: "fill",
-        source: COUNTY_TILESET.src,
-        "source-layer": COUNTY_TILESET.layer,
-        minzoom: 0,
-        maxzoom: COUNTY_ENV[1],
-        layout: { visibility: "none" },
-        paint: {
-          "fill-color": [
-            "coalesce",
-            ["feature-state", "hazardColor"],
-            "rgba(0,0,0,0)",
-          ],
-          "fill-opacity": 0.72,
-        },
-      });
       map.addLayer({
         id: COUNTY_LINE,
         type: "line",

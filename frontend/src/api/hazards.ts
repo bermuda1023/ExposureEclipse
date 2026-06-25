@@ -4,11 +4,11 @@ import { apiGet } from "./client";
 
 export type HazardType = "tornado" | "hail" | "wildfire";
 
-export interface HazardScore {
-  geoid: string;
+export interface HazardGridPoint {
+  lat: number;
+  lon: number;
   raw: number;
   normalised: number;
-  rankPct: number;
 }
 
 export interface HazardLegend {
@@ -25,7 +25,8 @@ export interface HazardLegend {
 
 export interface HazardResponse {
   hazard: HazardType;
-  scores: HazardScore[];
+  grid: HazardGridPoint[];
+  stepDeg: number;
   legend: HazardLegend;
 }
 

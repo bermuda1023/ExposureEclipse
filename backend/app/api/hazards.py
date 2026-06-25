@@ -1,25 +1,24 @@
-"""Hazard-overlay endpoint — per-county scores for hail / tornado / wildfire.
-
-Frontend chooses one peril at a time and paints the county tileset via
-feature-state; the legend metadata travels with the score payload so the
-UI can render a colour bar with the right unit + source attribution.
-"""
+"""Hazard-overlay endpoint — smooth lat/lon grids of hail / tornado /
+wildfire risk. Sampled at ~0.4° over CONUS and clipped to US land so the
+choropleth doesn't paint the ocean. Each cell carries raw + normalised
+value; the legend metadata travels with the response so the UI can render
+a colour bar with the publishing-agency attribution."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
 from ..models.common import CamelModel
-from ..services.hazard_overlay import HazardType, build_scores
+from ..services.hazard_overlay import HazardType, build_grid
 
 router = APIRouter(prefix="/hazards", tags=["hazards"])
 
 
-class HazardScoreOut(CamelModel):
-    geoid: str
+class HazardGridPointOut(CamelModel):
+    lat: float
+    lon: float
     raw: float
     normalised: float
-    rank_pct: float
 
 
 class HazardLegendOut(CamelModel):
@@ -36,7 +35,8 @@ class HazardLegendOut(CamelModel):
 
 class HazardResponse(CamelModel):
     hazard: str
-    scores: list[HazardScoreOut]
+    grid: list[HazardGridPointOut]
+    step_deg: float
     legend: HazardLegendOut
 
 
@@ -53,15 +53,16 @@ def get_hazard(hazard: str) -> HazardResponse:
                 "message": f"Unknown hazard '{hazard}'. Valid: {_VALID}.",
             },
         )
-    scores, legend = build_scores(hazard)  # type: ignore[arg-type]
+    grid, legend, step = build_grid(hazard)  # type: ignore[arg-type]
     return HazardResponse(
         hazard=hazard,
-        scores=[
-            HazardScoreOut(
-                geoid=s.geoid, raw=s.raw, normalised=s.normalised, rank_pct=s.rank_pct,
+        grid=[
+            HazardGridPointOut(
+                lat=p.lat, lon=p.lon, raw=p.raw, normalised=p.normalised,
             )
-            for s in scores
+            for p in grid
         ],
+        step_deg=step,
         legend=HazardLegendOut(
             title=legend.title,
             unit=legend.unit,

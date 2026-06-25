@@ -36,11 +36,11 @@ HazardType = Literal["tornado", "hail", "wildfire"]
 
 
 @dataclass(slots=True, frozen=True)
-class HazardScore:
-    geoid: str
+class HazardGridPoint:
+    lat: float
+    lon: float
     raw: float        # native units (count or index)
     normalised: float # 0..1 for colour ramp
-    rank_pct: float   # 0..1 percentile rank for context
 
 
 @dataclass(slots=True, frozen=True)
@@ -152,47 +152,78 @@ def _wildfire_raw(lat: float, lon: float) -> float:
 # ─────────────────────────── public API ───────────────────────────
 
 
-def _percentile_ranks(values: list[float]) -> dict[int, float]:
-    """index -> rank in [0, 1]. Equal values share the average rank."""
-    if not values:
-        return {}
-    order = sorted(range(len(values)), key=lambda i: values[i])
-    ranks: dict[int, float] = {}
-    n = len(order)
-    for new_pos, original_idx in enumerate(order):
-        ranks[original_idx] = (new_pos + 0.5) / n
-    return ranks
+def _us_land_filter(lat: float, lon: float, county_grid: dict) -> bool:
+    """Return True if (lat, lon) is on US land — proxy via county centroid
+    proximity. Same heuristic used by the SST mask, INVERTED purpose: we
+    KEEP land here (hail/tornado/wildfire are land phenomena)."""
+    if not (24.0 <= lat <= 49.5 and -125.0 <= lon <= -66.0):
+        return False
+    radius_nm = 25.0
+    deg = radius_nm / 50.0
+    lat_lo, lat_hi = lat - deg, lat + deg
+    lon_lo, lon_hi = lon - deg, lon + deg
+    for c in county_grid.values():
+        if not (lat_lo <= c.centroid_lat <= lat_hi and lon_lo <= c.centroid_lon <= lon_hi):
+            continue
+        dlat = lat - c.centroid_lat
+        dlon = lon - c.centroid_lon
+        if (dlat * dlat + dlon * dlon) ** 0.5 * 60 <= radius_nm:
+            return True
+    return False
 
 
 @lru_cache(maxsize=8)
-def build_scores(hazard: HazardType) -> tuple[list[HazardScore], HazardLegend]:
-    """Compute per-county scores for one peril. Cached per peril."""
+def build_grid(
+    hazard: HazardType,
+    step_deg: float = 0.4,
+) -> tuple[list[HazardGridPoint], HazardLegend, float]:
+    """Sample the hazard scoring function on a regular lat/lon grid covering
+    CONUS, clipped to US land. Returned cells tile contiguously when the
+    frontend draws each as a step_deg square fill — gives a smooth heatmap
+    that ignores county / state lines.
+
+    Cached per peril (the synthetic scoring is deterministic).
+    """
     from .hurricane_impact import county_centroids
 
-    counties = list(county_centroids().values())
     raw_fn = {
         "tornado": _tornado_raw,
         "hail": _hail_raw,
         "wildfire": _wildfire_raw,
     }[hazard]
-    raws = [raw_fn(c.centroid_lat, c.centroid_lon) for c in counties]
+
+    county_grid = county_centroids()
+    south, north = 24.0, 49.5
+    west, east = -125.0, -66.0
+
+    points: list[HazardGridPoint] = []
+    raws: list[float] = []
+    lat = south
+    while lat <= north + 1e-9:
+        lon = west
+        while lon <= east + 1e-9:
+            if _us_land_filter(lat, lon, county_grid):
+                r = raw_fn(lat, lon)
+                points.append(HazardGridPoint(lat=round(lat, 3), lon=round(lon, 3), raw=r, normalised=0.0))
+                raws.append(r)
+            lon += step_deg
+        lat += step_deg
+
     raw_min = min(raws) if raws else 0.0
     raw_max = max(raws) if raws else 1.0
     span = max(raw_max - raw_min, 1e-9)
-    ranks = _percentile_ranks(raws)
-    out: list[HazardScore] = []
-    for i, c in enumerate(counties):
-        out.append(
-            HazardScore(
-                geoid=c.geoid,
-                raw=round(raws[i], 2),
-                normalised=round((raws[i] - raw_min) / span, 4),
-                rank_pct=round(ranks[i], 4),
-            )
+    # Re-pack with normalised scores (frozen dataclass → new instances).
+    out = [
+        HazardGridPoint(
+            lat=p.lat,
+            lon=p.lon,
+            raw=round(p.raw, 2),
+            normalised=round((p.raw - raw_min) / span, 4),
         )
-
+        for p in points
+    ]
     legend = _legend_for(hazard, raw_min, raw_max)
-    return out, legend
+    return out, legend, step_deg
 
 
 def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLegend:
