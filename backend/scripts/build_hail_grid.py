@@ -1,27 +1,23 @@
-"""Build the hail-frequency grid from the NOAA SPC SVRGIS hail shapefile.
+"""Build the hail-hazard grid from the NOAA SPC SVRGIS hail shapefile.
 
-Reads ``1955-2025-hail-initpoint.shp`` (point geometry = the location of
-each severe-hail report) and aggregates to a regular lat/lon grid via a
-Gaussian-kernel density estimate.
+Methodology — historical + climatology blend (same approach as
+build_tornado_grid; see the docstring there for the full rationale).
 
-Two adjustments vs. a flat count:
+1. KDE of real 1955-2025 SPC hail reports onto a 0.2° grid with a
+   wide Gaussian kernel (sigma 0.7°) so single-city clusters dilute
+   into their region.
+2. Smooth climatology prior from _climatology.hail_climatology, based
+   on Cintineo et al. 2012 + Allen & Tippett 2015 environmental hail-
+   frequency surfaces.
+3. Blend 60% climatology + 40% historical (both normalised) → 0-100
+   hazard-index output.
 
-- **Magnitude weight** — `mag` is the hailstone diameter in inches. The
-  damage curve is steeply non-linear; a 3-inch stone breaks roofs while
-  a 1-inch stone usually doesn't. We weight ``1 + 0.5 * max(0, mag-1)``
-  so 1″ = 1.0, 2″ = 1.5, 3″ = 2.0, 4″ = 2.5.
-- **Recency weight** — mild ramp 0.7× (1955) → 1.3× (2025). Smaller
-  than the tornado script because hail reporting density has itself
-  grown a lot, so the raw count is already biased toward recent years.
-- **Severity filter** — drop reports < 0.75″ (pea-sized; mostly noise
-  and outside the SPC severe-hail threshold of 1″).
+Magnitude-weighted (1″ = 1.0×, 4″ = 2.5×) so damaging stones drive
+the historical signal. Mild recency ramp 0.7× → 1.3× — smaller than
+the tornado script because hail reporting density has grown a lot
+since the 1950s and we don't want to double-count that.
 
 Output: ``mockdata/hazard_hail_grid.json`` as ``{stepDeg, cells}``.
-
-Usage:
-
-    cd backend
-    .venv/Scripts/python.exe scripts/build_hail_grid.py
 """
 
 from __future__ import annotations
@@ -31,14 +27,14 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))  # for _pop_bias
+sys.path.insert(0, str(Path(__file__).parent))  # for _climatology
 
 try:
     import shapefile  # type: ignore[import-not-found]  # pyshp
 except ImportError:
     sys.exit("pyshp is required: pip install pyshp")
 
-from _pop_bias import deflator, smooth_local_spikes  # noqa: E402
+from _climatology import blend_grids, hail_climatology  # noqa: E402
 
 
 SPC_SHP = Path(
@@ -49,25 +45,23 @@ OUT_PATH = (
 )
 
 STEP_DEG = 0.2
-SIGMA_DEG = 0.3
-KERNEL_RADIUS_DEG = 1.0
+SIGMA_DEG = 0.70        # WIDE — same justification as the tornado builder
+KERNEL_RADIUS_DEG = 2.1
 
 SOUTH, NORTH = 24.0, 49.5
 WEST, EAST = -125.0, -66.0
 
 MIN_MAG_IN = 0.75
+HISTORICAL_WEIGHT = 0.40
 
 
 def _recency_weight(year: int) -> float:
-    """Mild ramp so the surface still reflects current climatology without
-    double-counting the rise in reporting density since the 1950s."""
     t = max(0.0, min(1.0, (year - 1955) / 70))
-    return 0.7 + 0.6 * t  # 1955 = 0.7x, 2025 = 1.3x
+    return 0.7 + 0.6 * t
 
 
 def _mag_weight(mag) -> float:
-    """Hail damage rises roughly with diameter; 3″+ stones are the ones
-    that drive structural claims. Linear-ish boost ``1 + 0.5·(mag-1)``."""
+    """Hail damage rises with diameter; 3″+ stones drive structural claims."""
     try:
         m = float(mag)
     except (TypeError, ValueError):
@@ -148,31 +142,30 @@ def main() -> None:
         if year > yr_max:
             yr_max = year
 
-    print("applying population-bias deflation...")
-    for i in range(nlat):
-        g_lat = SOUTH + i * STEP_DEG
-        for j in range(nlon):
-            g_lon = WEST + j * STEP_DEG
-            d = deflator(g_lat, g_lon)
-            if d > 1.0:
-                grid[i][j] = grid[i][j] / d
-
-    print("smoothing local spikes...")
-    smooth_local_spikes(grid, spike_ratio=1.8, clamp_ratio=1.5, radius_cells=1)
-    smooth_local_spikes(grid, spike_ratio=1.6, clamp_ratio=1.4, radius_cells=2)
+    print("blending with climatology prior...")
+    blended = blend_grids(
+        historical=grid,
+        south=SOUTH,
+        west=WEST,
+        step_deg=STEP_DEG,
+        nlat=nlat,
+        nlon=nlon,
+        clim_fn=hail_climatology,
+        historical_weight=HISTORICAL_WEIGHT,
+    )
 
     cells: list[dict] = []
-    threshold = 0.5
+    threshold = 1.0
     for i in range(nlat):
         for j in range(nlon):
-            v = grid[i][j]
+            v = blended[i][j]
             if v < threshold:
                 continue
             cells.append(
                 {
                     "lat": round(SOUTH + i * STEP_DEG, 3),
                     "lon": round(WEST + j * STEP_DEG, 3),
-                    "raw": round(v, 2),
+                    "raw": round(v, 1),
                 }
             )
 
@@ -186,12 +179,14 @@ def main() -> None:
     )
     if cells:
         top = sorted(cells, key=lambda d: -d["raw"])[:8]
-        print("top cells:")
+        print("top cells (hazard index 0-100):")
         for t in top:
             print(f"  ({t['lat']:.2f},{t['lon']:.2f}) raw={t['raw']}")
         raws = sorted(c["raw"] for c in cells)
+
         def pct(p: float) -> float:
             return raws[int(len(raws) * p)]
+
         print(
             f"distribution: p50={pct(0.5):.1f} p75={pct(0.75):.1f} "
             f"p90={pct(0.9):.1f} p95={pct(0.95):.1f} p98={pct(0.98):.1f} "

@@ -303,17 +303,17 @@ def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLeg
             "#7f1d1d",
             "#3b0a0a",
         ]
-        stops = [0, 12, 40, 70, 105, 150, 200]
+        stops = [0, 12, 28, 45, 60, 75, 90]
         return HazardLegend(
-            title="Tornado density (bias-corrected)",
-            unit="weighted touchdowns / 0.2° cell",
-            source="NOAA SPC SVRGIS 1950-2025, KDE + reporting-bias correction",
+            title="Tornado hazard index",
+            unit="0–100 (blended climatology + history)",
+            source="SPC SVRGIS 1950-2025 + Brooks/Tippett climatology",
             source_url="https://www.spc.noaa.gov/gis/svrgis/",
             raw_min=raw_min,
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Real SPC touchdowns on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Recency-weighted 0.5× → 2.0× with EF3+ mag boost. Two-stage reporting-bias correction: (1) continuous log-pop deflator at ~300 US metro centroids (up to 4.5× in dense cities, ~1× rural), then (2) local-spike smoothing that clips any cell more than 1.8× its neighbour ring median. Dixie Alley + the rural Plains now read at their true intensity vs. urban centres.",
+            note="Blend of two surfaces: 60% smooth climatology prior (anchored on the Brooks et al. 2003 / Tippett et al. 2015 environmental tornado-frequency surfaces — bias-free because derived from atmospheric ingredients, not point reports) + 40% real SPC touchdowns (wide 0.7° KDE so single-city clusters dilute into their region). EF3+ magnitude boost + 0.5× → 2.0× recency weight on the historical side. No city-by-city correction — the blend itself washes out reporting bias.",
         )
     if hazard == "hail":
         # 7-stop ramp picked against the bias-corrected KDE distribution
@@ -330,17 +330,17 @@ def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLeg
             "#1e3a8a",
             "#0c1429",
         ]
-        stops = [0, 70, 200, 400, 650, 900, 1150]
+        stops = [0, 12, 28, 45, 60, 75, 90]
         return HazardLegend(
-            title="Severe hail density (bias-corrected)",
-            unit="weighted ≥0.75″ reports / 0.2° cell",
-            source="NOAA SPC SVRGIS 1955-2025, KDE + reporting-bias correction",
+            title="Severe hail hazard index",
+            unit="0–100 (blended climatology + history)",
+            source="SPC SVRGIS 1955-2025 + Cintineo/Allen-Tippett climatology",
             source_url="https://www.spc.noaa.gov/wcm/#data",
             raw_min=raw_min,
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Real SPC hail reports on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Magnitude-weighted 1.0× (1″) → 2.5× (4″) for damage relevance; mild recency ramp 0.7× → 1.3×. Two-stage reporting-bias correction (log-pop deflator + local-spike smoothing) collapses the DFW / OKC / Atlanta dots so the Black Hills + NE Kansas + SW Oklahoma hail belts read at their true intensity.",
+            note="Blend of two surfaces: 60% smooth climatology prior (anchored on the Cintineo et al. 2012 + Allen & Tippett 2015 environmental hail-frequency surfaces) + 40% real SPC reports (wide 0.7° KDE so single-city clusters dilute into their region). Magnitude-weighted 1.0× (1″) → 2.5× (4″); mild recency ramp 0.7× → 1.3×. No city-by-city correction — the blend itself washes out reporting bias.",
         )
     # wildfire — real WFIGS perimeter data (acres-weighted KDE)
     palette = [
