@@ -3,11 +3,11 @@
 Reads `1950-2025-torn-initpoint.shp` (point geometry = the initial
 touchdown of each tornado segment) and aggregates to a regular lat/lon
 grid via a Gaussian-kernel density estimate, with a recency weight that
-upweights post-1980 tornadoes ~3× — the "tornado alley shifting east"
-hypothesis the user flagged.
+upweights post-1980 tornadoes ~3× (Tornado Alley shifting east) plus a
+population-bias deflator that tames the urban reporting spike (OKC /
+DFW / Atlanta — see _pop_bias.py for the rationale).
 
-Output: ``mockdata/hazard_tornado_grid.json`` — list of
-``{lat, lon, raw}`` cells the live API serves directly.
+Output: ``mockdata/hazard_tornado_grid.json`` as ``{stepDeg, cells}``.
 
 Usage (one-off, after dropping a new shapefile in Downloads):
 
@@ -24,10 +24,14 @@ import math
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))  # for _pop_bias
+
 try:
     import shapefile  # type: ignore[import-not-found]  # pyshp
 except ImportError:
     sys.exit("pyshp is required: pip install pyshp")
+
+from _pop_bias import deflator  # noqa: E402
 
 
 # ─────────────────────────── config ───────────────────────────
@@ -133,13 +137,22 @@ def main() -> None:
         if year > yr_max:
             yr_max = year
 
+    # Population-bias deflation — pre-compute deflator per cell once.
+    print("applying population-bias deflation...")
+    deflators: list[list[float]] = [[1.0] * nlon for _ in range(nlat)]
+    for i in range(nlat):
+        g_lat = SOUTH + i * STEP_DEG
+        for j in range(nlon):
+            g_lon = WEST + j * STEP_DEG
+            deflators[i][j] = deflator(g_lat, g_lon)
+
     # Emit cells over a small threshold so the JSON stays compact.
     # Threshold scales with cell area — smaller cells, smaller threshold.
     cells: list[dict] = []
     threshold = 0.2
     for i in range(nlat):
         for j in range(nlon):
-            v = grid[i][j]
+            v = grid[i][j] / deflators[i][j]
             if v < threshold:
                 continue
             cells.append(

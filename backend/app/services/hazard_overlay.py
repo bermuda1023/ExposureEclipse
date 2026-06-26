@@ -100,6 +100,11 @@ def _hail_cells() -> tuple[list[tuple[float, float, float]], float]:
     return _load_grid_json("hazard_hail_grid.json")
 
 
+@lru_cache(maxsize=1)
+def _wildfire_cells() -> tuple[list[tuple[float, float, float]], float]:
+    return _load_grid_json("hazard_wildfire_grid.json")
+
+
 def _tornado_raw_synthetic(lat: float, lon: float) -> float:
     """Fallback synthetic pattern when the pre-baked SPC grid isn't
     available (e.g. local dev without the shapefile build)."""
@@ -201,6 +206,7 @@ def _us_land_filter(lat: float, lon: float, county_grid: dict) -> bool:
 _REAL_DATA_LOADERS = {
     "tornado": _tornado_cells,
     "hail": _hail_cells,
+    "wildfire": _wildfire_cells,
 }
 
 
@@ -282,70 +288,82 @@ def build_grid(
 
 def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLegend:
     if hazard == "tornado":
-        # 7-stop ramp picked against the real KDE distribution
-        # (p50≈20, p75≈60, p90≈87, p95≈104, p99≈141, max≈271).
-        # Bottom half stays pale so quiet areas read as quiet; the top
-        # decile escalates fast — orange → red → near-black crimson —
-        # so the worst alleys actually pop instead of plateauing red.
+        # 7-stop ramp picked against the bias-corrected KDE distribution
+        # (p50≈18, p75≈51, p90≈78, p95≈94, p99≈122, max≈208 after the
+        # population deflator). Bottom half stays pale; top decile
+        # escalates orange → red → near-black crimson so the most
+        # dangerous regions (Dixie Alley post-correction, rural Plains)
+        # actually pop instead of plateauing red.
         palette = [
-            "#f8fafc",  # near-white baseline
-            "#fef3c7",  # cream — low activity
-            "#fde047",  # yellow
-            "#fb923c",  # orange
-            "#dc2626",  # red
-            "#7f1d1d",  # deep red
-            "#3b0a0a",  # near-black crimson — peak Alley signal
+            "#f8fafc",
+            "#fef3c7",
+            "#fde047",
+            "#fb923c",
+            "#dc2626",
+            "#7f1d1d",
+            "#3b0a0a",
         ]
-        stops = [0, 20, 60, 90, 130, 180, 250]
+        stops = [0, 15, 45, 75, 110, 160, 200]
         return HazardLegend(
-            title="Tornado density (recency-weighted)",
+            title="Tornado density (bias-corrected)",
             unit="weighted touchdowns / 0.2° cell",
-            source="NOAA SPC SVRGIS 1950-2025 tornado initpoints, KDE-smoothed",
+            source="NOAA SPC SVRGIS 1950-2025, KDE + reporting-bias correction",
             source_url="https://www.spc.noaa.gov/gis/svrgis/",
             raw_min=raw_min,
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Real SPC touchdowns aggregated to 0.2° (~14 mi) via a Gaussian kernel (sigma ≈ 0.3°). Recency weight 0.5× (1950) → 2.0× (2025) with an EF3+ magnitude boost, reflecting the eastward shift of Tornado Alley.",
+            note="Real SPC touchdowns on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Recency-weighted 0.5× (1950) → 2.0× (2025) with EF3+ mag boost. Population-bias deflator (Doswell 2007 method) tames urban reporting spikes (~1.7× OKC, ~2.2× DFW, ~2.5× NYC) so Dixie Alley reads at its true intensity vs. urban Plains.",
         )
     if hazard == "hail":
-        # 7-stop ramp picked against the real KDE distribution
-        # (p50≈110, p75≈250, p90≈430, p95≈565, p99≈876, max≈2259).
-        # Pale at bottom so quiet areas read quiet; top decile escalates
-        # quickly through indigo into near-black so Hail Alley + the
-        # Black Hills + DFW peaks read as obviously the worst.
+        # 7-stop ramp picked against the bias-corrected KDE distribution
+        # (p50≈97, p75≈223, p90≈385, p95≈514, p99≈737, max≈1887). Pale
+        # at bottom so quiet areas read quiet; top decile escalates
+        # quickly through indigo into near-black so Black Hills + the
+        # Texas Panhandle peaks read as obviously the worst.
         palette = [
-            "#f8fafc",  # near-white baseline
-            "#dbeafe",  # blue-100
-            "#93c5fd",  # blue-300
-            "#60a5fa",  # blue-400
-            "#3b82f6",  # blue-500
-            "#1e3a8a",  # blue-900
-            "#0c1429",  # near-black navy — peak signal
+            "#f8fafc",
+            "#dbeafe",
+            "#93c5fd",
+            "#60a5fa",
+            "#3b82f6",
+            "#1e3a8a",
+            "#0c1429",
         ]
-        stops = [0, 100, 300, 600, 1000, 1500, 2000]
+        stops = [0, 80, 250, 500, 850, 1300, 1800]
         return HazardLegend(
-            title="Severe hail density (mag- & recency-weighted)",
+            title="Severe hail density (bias-corrected)",
             unit="weighted ≥0.75″ reports / 0.2° cell",
-            source="NOAA SPC SVRGIS 1955-2025 hail reports, KDE-smoothed",
+            source="NOAA SPC SVRGIS 1955-2025, KDE + reporting-bias correction",
             source_url="https://www.spc.noaa.gov/wcm/#data",
             raw_min=raw_min,
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Real SPC hail reports aggregated to 0.2° (~14 mi) via a Gaussian kernel (sigma ≈ 0.3°). Magnitude weight 1.0× (1″) → 2.5× (4″) emphasises damaging stones; mild recency ramp 0.7× (1955) → 1.3× (2025) reflects current climatology without overweighting growth in reporting density.",
+            note="Real SPC hail reports on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Magnitude-weighted 1.0× (1″) → 2.5× (4″) for damage relevance; mild recency ramp 0.7× → 1.3×. Population-bias deflator removes the DFW / OKC / Atlanta urban-reporting spikes so the Black Hills + Texas Panhandle hail belts read at their true intensity.",
         )
-    # wildfire
-    palette = ["#f1f5f9", "#fef08a", "#fdba74", "#f97316", "#b91c1c", "#7f1d1d"]
-    stops = [1, 1.8, 2.5, 3.2, 4.0, 4.7]
+    # wildfire — real WFIGS perimeter data (acres-weighted KDE)
+    palette = [
+        "#f8fafc",
+        "#fef3c7",
+        "#fdba74",
+        "#fb923c",
+        "#dc2626",
+        "#7c2d12",
+        "#1c0a05",
+    ]
+    # Stops against the actual distribution (p50≈7, p90≈74, p95≈122,
+    # p99≈231, max≈453). Top stop near max so the megafire scars in NorCal
+    # + NM mountains pop in near-black.
+    stops = [0, 5, 25, 75, 150, 280, 450]
     return HazardLegend(
-        title="Wildfire hazard potential",
-        unit="WHP index (1 low … 5 very high)",
-        source="USFS Wildfire Hazard Potential — pattern (production: LANDFIRE raster aggregated to county)",
-        source_url="https://www.firelab.org/project/wildfire-hazard-potential",
+        title="Wildfire burn density",
+        unit="thousand-acre KDE units / 0.2° cell",
+        source="WFIGS Interagency Perimeters 2016-2026 (NIFC), acres-weighted KDE",
+        source_url="https://data-nifc.opendata.arcgis.com/",
         raw_min=raw_min,
         raw_max=raw_max,
         palette=palette,
         stops=stops,
-        note="Synthetic pattern calibrated to USFS WHP peaks in California chaparral + Mountain West.",
+        note="Real WFIGS fire perimeters on a 0.2° grid, Gaussian-smoothed (sigma 0.35°). Each fire weighted by acres burned (capped at 200k per fire so single mega-events don't blanket a region). Coverage is 2020-present — reflects the modern fire regime, not historical baselines.",
     )

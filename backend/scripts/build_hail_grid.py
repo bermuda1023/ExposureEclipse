@@ -31,10 +31,14 @@ import math
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))  # for _pop_bias
+
 try:
     import shapefile  # type: ignore[import-not-found]  # pyshp
 except ImportError:
     sys.exit("pyshp is required: pip install pyshp")
+
+from _pop_bias import deflator  # noqa: E402
 
 
 SPC_SHP = Path(
@@ -144,11 +148,19 @@ def main() -> None:
         if year > yr_max:
             yr_max = year
 
+    print("applying population-bias deflation...")
+    deflators: list[list[float]] = [[1.0] * nlon for _ in range(nlat)]
+    for i in range(nlat):
+        g_lat = SOUTH + i * STEP_DEG
+        for j in range(nlon):
+            g_lon = WEST + j * STEP_DEG
+            deflators[i][j] = deflator(g_lat, g_lon)
+
     cells: list[dict] = []
     threshold = 0.5
     for i in range(nlat):
         for j in range(nlon):
-            v = grid[i][j]
+            v = grid[i][j] / deflators[i][j]
             if v < threshold:
                 continue
             cells.append(
