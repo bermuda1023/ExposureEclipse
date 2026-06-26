@@ -80,7 +80,7 @@ export function HazardOverlayLayer({ map }: Props) {
             source: SRC_HAZARD,
             paint: {
               "fill-color": colorExpr(query.data?.legend) as never,
-              "fill-opacity": 0.68,
+              "fill-opacity": 0.72,
               "fill-outline-color": "rgba(0,0,0,0)",
             },
             layout: { visibility: "none" },
@@ -102,6 +102,24 @@ export function HazardOverlayLayer({ map }: Props) {
           "visibility",
           active && query.data ? "visible" : "none",
         );
+      }
+
+      // Hazard heatmap and the TIV choropleth are different stories
+      // visually — overlapping them is hard to read in either direction
+      // (the colour scales fight and meaning gets muddled). Hide the
+      // state + county TIV fill while a hazard chip is active; restore
+      // them when the user clears the chip. The user's exposure scope
+      // and feature-state aren't touched, so toggling off the hazard
+      // immediately brings the original view back.
+      const hideExposure = active !== null;
+      for (const fillLayer of ["state-fill", "county-fill"]) {
+        if (map.getLayer(fillLayer)) {
+          map.setLayoutProperty(
+            fillLayer,
+            "visibility",
+            hideExposure ? "none" : "visible",
+          );
+        }
       }
     };
     if (map.isStyleLoaded()) apply();
