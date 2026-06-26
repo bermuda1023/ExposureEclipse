@@ -31,7 +31,7 @@ try:
 except ImportError:
     sys.exit("pyshp is required: pip install pyshp")
 
-from _pop_bias import deflator  # noqa: E402
+from _pop_bias import deflator, smooth_local_spikes  # noqa: E402
 
 
 # ─────────────────────────── config ───────────────────────────
@@ -137,14 +137,23 @@ def main() -> None:
         if year > yr_max:
             yr_max = year
 
-    # Population-bias deflation — pre-compute deflator per cell once.
+    # Population-bias deflation — pre-compute per-cell deflator, then
+    # apply into the grid in place so the smoothing pass sees corrected
+    # values.
     print("applying population-bias deflation...")
-    deflators: list[list[float]] = [[1.0] * nlon for _ in range(nlat)]
     for i in range(nlat):
         g_lat = SOUTH + i * STEP_DEG
         for j in range(nlon):
             g_lon = WEST + j * STEP_DEG
-            deflators[i][j] = deflator(g_lat, g_lon)
+            d = deflator(g_lat, g_lon)
+            if d > 1.0:
+                grid[i][j] = grid[i][j] / d
+
+    # Local-spike smoothing — backstop for any city-shaped artifact that
+    # survives the metro-list deflation (under-stated populations, gaps).
+    print("smoothing local spikes...")
+    smooth_local_spikes(grid, spike_ratio=1.8, clamp_ratio=1.5, radius_cells=1)
+    smooth_local_spikes(grid, spike_ratio=1.6, clamp_ratio=1.4, radius_cells=2)
 
     # Emit cells over a small threshold so the JSON stays compact.
     # Threshold scales with cell area — smaller cells, smaller threshold.
@@ -152,7 +161,7 @@ def main() -> None:
     threshold = 0.2
     for i in range(nlat):
         for j in range(nlon):
-            v = grid[i][j] / deflators[i][j]
+            v = grid[i][j]
             if v < threshold:
                 continue
             cells.append(

@@ -303,7 +303,7 @@ def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLeg
             "#7f1d1d",
             "#3b0a0a",
         ]
-        stops = [0, 15, 45, 75, 110, 160, 200]
+        stops = [0, 12, 40, 70, 105, 150, 200]
         return HazardLegend(
             title="Tornado density (bias-corrected)",
             unit="weighted touchdowns / 0.2° cell",
@@ -313,7 +313,7 @@ def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLeg
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Real SPC touchdowns on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Recency-weighted 0.5× (1950) → 2.0× (2025) with EF3+ mag boost. Population-bias deflator (Doswell 2007 method) tames urban reporting spikes (~1.7× OKC, ~2.2× DFW, ~2.5× NYC) so Dixie Alley reads at its true intensity vs. urban Plains.",
+            note="Real SPC touchdowns on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Recency-weighted 0.5× → 2.0× with EF3+ mag boost. Two-stage reporting-bias correction: (1) continuous log-pop deflator at ~300 US metro centroids (up to 4.5× in dense cities, ~1× rural), then (2) local-spike smoothing that clips any cell more than 1.8× its neighbour ring median. Dixie Alley + the rural Plains now read at their true intensity vs. urban centres.",
         )
     if hazard == "hail":
         # 7-stop ramp picked against the bias-corrected KDE distribution
@@ -330,7 +330,7 @@ def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLeg
             "#1e3a8a",
             "#0c1429",
         ]
-        stops = [0, 80, 250, 500, 850, 1300, 1800]
+        stops = [0, 70, 200, 400, 650, 900, 1150]
         return HazardLegend(
             title="Severe hail density (bias-corrected)",
             unit="weighted ≥0.75″ reports / 0.2° cell",
@@ -340,7 +340,7 @@ def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLeg
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Real SPC hail reports on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Magnitude-weighted 1.0× (1″) → 2.5× (4″) for damage relevance; mild recency ramp 0.7× → 1.3×. Population-bias deflator removes the DFW / OKC / Atlanta urban-reporting spikes so the Black Hills + Texas Panhandle hail belts read at their true intensity.",
+            note="Real SPC hail reports on a 0.2° grid, Gaussian-smoothed (sigma 0.3°). Magnitude-weighted 1.0× (1″) → 2.5× (4″) for damage relevance; mild recency ramp 0.7× → 1.3×. Two-stage reporting-bias correction (log-pop deflator + local-spike smoothing) collapses the DFW / OKC / Atlanta dots so the Black Hills + NE Kansas + SW Oklahoma hail belts read at their true intensity.",
         )
     # wildfire — real WFIGS perimeter data (acres-weighted KDE)
     palette = [
@@ -352,18 +352,18 @@ def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLeg
         "#7c2d12",
         "#1c0a05",
     ]
-    # Stops against the actual distribution (p50≈7, p90≈74, p95≈122,
-    # p99≈231, max≈453). Top stop near max so the megafire scars in NorCal
-    # + NM mountains pop in near-black.
-    stops = [0, 5, 25, 75, 150, 280, 450]
+    # Stops against the higher-resolution distribution (p50≈2.5, p90≈31,
+    # p95≈60, p99≈152, max≈571). Top stop near max so the recent megafire
+    # scars (Calf Canyon NM, August Complex NorCal, Hells Canyon) pop.
+    stops = [0, 3, 15, 50, 120, 280, 500]
     return HazardLegend(
         title="Wildfire burn density",
-        unit="thousand-acre KDE units / 0.2° cell",
+        unit="thousand-acre KDE units / 0.15° cell",
         source="WFIGS Interagency Perimeters 2016-2026 (NIFC), acres-weighted KDE",
         source_url="https://data-nifc.opendata.arcgis.com/",
         raw_min=raw_min,
         raw_max=raw_max,
         palette=palette,
         stops=stops,
-        note="Real WFIGS fire perimeters on a 0.2° grid, Gaussian-smoothed (sigma 0.35°). Each fire weighted by acres burned (capped at 200k per fire so single mega-events don't blanket a region). Coverage is 2020-present — reflects the modern fire regime, not historical baselines.",
+        note="Real WFIGS fire perimeters on a 0.15° (~10 mi) grid, Gaussian-smoothed (sigma 0.22°) — tighter than tornado/hail since megafire scars are spatially distinct. Each fire weighted by acres burned (capped at 300k per fire). Coverage is 2020-present — reflects the modern fire regime, not historical baselines.",
     )

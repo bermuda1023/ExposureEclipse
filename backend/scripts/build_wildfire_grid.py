@@ -37,11 +37,11 @@ OUT_PATH = (
     Path(__file__).resolve().parents[2] / "mockdata" / "hazard_wildfire_grid.json"
 )
 
-STEP_DEG = 0.2
-SIGMA_DEG = 0.35       # slightly wider than tornado/hail since fires don't repeat at the same lat/lon
-KERNEL_RADIUS_DEG = 1.2
-ACRE_CAP = 200_000     # cap per-fire weight so a single mega-fire doesn't dominate
-MIN_ACRES = 1.0        # drop tiny ignitions (mostly noise)
+STEP_DEG = 0.15        # ~10 mi cells — sharper than tornado/hail since we want fine fuel-pattern resolution
+SIGMA_DEG = 0.22       # tighter KDE so megafire scars stay sharp instead of smearing into a wash
+KERNEL_RADIUS_DEG = 0.7
+ACRE_CAP = 300_000     # raised — let the biggest fires (August Complex 1M acres) dominate as they should
+MIN_ACRES = 0.5        # drop true noise but keep small fires (they cluster into local hot spots)
 
 SOUTH, NORTH = 24.0, 49.5
 WEST, EAST = -125.0, -66.0
@@ -124,7 +124,7 @@ def main() -> None:
     # Cleaner number for the legend than raw acre-Gaussian-sums.
     scale = 1.0 / 1000.0
     cells: list[dict] = []
-    threshold = 1.0  # drop cells under 1k weighted-acres
+    threshold = 0.3  # drop cells under 0.3k weighted-acres (more granular fringe)
     for i in range(nlat):
         for j in range(nlon):
             v = grid[i][j] * scale

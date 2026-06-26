@@ -38,7 +38,7 @@ try:
 except ImportError:
     sys.exit("pyshp is required: pip install pyshp")
 
-from _pop_bias import deflator  # noqa: E402
+from _pop_bias import deflator, smooth_local_spikes  # noqa: E402
 
 
 SPC_SHP = Path(
@@ -149,18 +149,23 @@ def main() -> None:
             yr_max = year
 
     print("applying population-bias deflation...")
-    deflators: list[list[float]] = [[1.0] * nlon for _ in range(nlat)]
     for i in range(nlat):
         g_lat = SOUTH + i * STEP_DEG
         for j in range(nlon):
             g_lon = WEST + j * STEP_DEG
-            deflators[i][j] = deflator(g_lat, g_lon)
+            d = deflator(g_lat, g_lon)
+            if d > 1.0:
+                grid[i][j] = grid[i][j] / d
+
+    print("smoothing local spikes...")
+    smooth_local_spikes(grid, spike_ratio=1.8, clamp_ratio=1.5, radius_cells=1)
+    smooth_local_spikes(grid, spike_ratio=1.6, clamp_ratio=1.4, radius_cells=2)
 
     cells: list[dict] = []
     threshold = 0.5
     for i in range(nlat):
         for j in range(nlon):
-            v = grid[i][j] / deflators[i][j]
+            v = grid[i][j]
             if v < threshold:
                 continue
             cells.append(
