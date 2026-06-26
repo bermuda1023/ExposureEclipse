@@ -67,20 +67,37 @@ def _dist_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return math.sqrt(dlat * dlat + dlon * dlon)
 
 
-_TORNADO_JSON = (
-    Path(__file__).resolve().parents[3] / "mockdata" / "hazard_tornado_grid.json"
-)
+_MOCKDATA_DIR = Path(__file__).resolve().parents[3] / "mockdata"
+
+
+def _load_grid_json(filename: str) -> tuple[list[tuple[float, float, float]], float]:
+    """Load a pre-baked KDE grid from mockdata. Returns ``(cells, stepDeg)``
+    where cells is ``[(lat, lon, raw), ...]``. Empty list + 0.4° default if
+    the file is missing — callers can then fall back to a synthetic.
+
+    Tolerates both the modern payload ``{stepDeg, cells}`` and the legacy
+    flat-list form for forward/backward compat across builds."""
+    path = _MOCKDATA_DIR / filename
+    if not path.exists():
+        return [], 0.4
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        step = float(raw.get("stepDeg", 0.4))
+        cells = raw.get("cells", [])
+    else:
+        step = 0.4
+        cells = raw
+    return [(float(d["lat"]), float(d["lon"]), float(d["raw"])) for d in cells], step
 
 
 @lru_cache(maxsize=1)
-def _tornado_cells() -> list[tuple[float, float, float]]:
-    """Pre-baked tornado-density grid (real SPC SVRGIS, recency-weighted KDE).
-    Returns ``[(lat, lon, raw), ...]``. Empty if the JSON is missing — in
-    that case ``build_grid`` falls back to the synthetic anchor pattern."""
-    if not _TORNADO_JSON.exists():
-        return []
-    raw = json.loads(_TORNADO_JSON.read_text(encoding="utf-8"))
-    return [(float(d["lat"]), float(d["lon"]), float(d["raw"])) for d in raw]
+def _tornado_cells() -> tuple[list[tuple[float, float, float]], float]:
+    return _load_grid_json("hazard_tornado_grid.json")
+
+
+@lru_cache(maxsize=1)
+def _hail_cells() -> tuple[list[tuple[float, float, float]], float]:
+    return _load_grid_json("hazard_hail_grid.json")
 
 
 def _tornado_raw_synthetic(lat: float, lon: float) -> float:
@@ -103,7 +120,7 @@ def _tornado_raw_synthetic(lat: float, lon: float) -> float:
     return max(0.0, score)
 
 
-def _hail_raw(lat: float, lon: float) -> float:
+def _hail_raw_synthetic(lat: float, lon: float) -> float:
     """Synthetic ≥1″ hail report count per county, 1955-2023, anchored on:
        - Hail Alley centroid ~38°N, -101°W (E. CO / W. KS / NE / W. TX)
        - Secondary peak central Plains ~40°N, -97°W (NE / IA / MO)
@@ -181,22 +198,30 @@ def _us_land_filter(lat: float, lon: float, county_grid: dict) -> bool:
     return False
 
 
+_REAL_DATA_LOADERS = {
+    "tornado": _tornado_cells,
+    "hail": _hail_cells,
+}
+
+
 @lru_cache(maxsize=8)
 def build_grid(
     hazard: HazardType,
     step_deg: float = 0.4,
 ) -> tuple[list[HazardGridPoint], HazardLegend, float]:
-    """Sample the hazard scoring on a 0.4° lat/lon grid covering CONUS.
+    """Sample the hazard scoring on a lat/lon grid covering CONUS.
     Returned cells tile contiguously when the frontend draws each as a
     step_deg square fill — a smooth heatmap that ignores county / state
     lines. Cached per peril (deterministic).
 
-    Tornado branch: loads the pre-baked SPC SVRGIS KDE grid directly so
-    the heatmap reflects real 1950-2025 tornado touchdowns (recency-
-    weighted), not a synthetic pattern.
+    Tornado + hail: load the pre-baked SPC SVRGIS KDE grid directly so
+    the heatmap reflects real touchdown / report data (recency-weighted,
+    EF/mag-boosted) rather than a synthetic pattern.
+
+    Wildfire: still synthetic until real LANDFIRE WHP raster is wired in.
     """
-    if hazard == "tornado":
-        cells = _tornado_cells()
+    if hazard in _REAL_DATA_LOADERS:
+        cells, baked_step = _REAL_DATA_LOADERS[hazard]()
         if cells:
             raws = [r for _, _, r in cells]
             raw_min, raw_max = 0.0, max(raws)
@@ -208,14 +233,17 @@ def build_grid(
                 )
                 for lat, lon, r in cells
             ]
-            return out, _legend_for(hazard, raw_min, raw_max), step_deg
+            # Return the step the JSON was actually baked at — the frontend
+            # uses this to size each fill polygon, so a mismatch leaves
+            # gaps or overlaps in the heatmap.
+            return out, _legend_for(hazard, raw_min, raw_max), baked_step
         # Fall through to synthetic if the JSON isn't present.
 
     from .hurricane_impact import county_centroids
 
     raw_fn = {
         "tornado": _tornado_raw_synthetic,
-        "hail": _hail_raw,
+        "hail": _hail_raw_synthetic,
         "wildfire": _wildfire_raw,
     }[hazard]
 
@@ -254,35 +282,58 @@ def build_grid(
 
 def _legend_for(hazard: HazardType, raw_min: float, raw_max: float) -> HazardLegend:
     if hazard == "tornado":
-        palette = ["#f1f5f9", "#fde68a", "#fdba74", "#f97316", "#dc2626", "#7f1d1d"]
-        # Stops chosen against the real KDE distribution: most CONUS land
-        # sits in 0-50, Alley peaks reach ~450. Six stops over [0, 400]
-        # gives intuitive colour breaks for the underwriter eye.
-        stops = [0, 30, 90, 180, 280, 400]
+        # 7-stop ramp picked against the real KDE distribution
+        # (p50≈20, p75≈60, p90≈87, p95≈104, p99≈141, max≈271).
+        # Bottom half stays pale so quiet areas read as quiet; the top
+        # decile escalates fast — orange → red → near-black crimson —
+        # so the worst alleys actually pop instead of plateauing red.
+        palette = [
+            "#f8fafc",  # near-white baseline
+            "#fef3c7",  # cream — low activity
+            "#fde047",  # yellow
+            "#fb923c",  # orange
+            "#dc2626",  # red
+            "#7f1d1d",  # deep red
+            "#3b0a0a",  # near-black crimson — peak Alley signal
+        ]
+        stops = [0, 20, 60, 90, 130, 180, 250]
         return HazardLegend(
             title="Tornado density (recency-weighted)",
-            unit="weighted touchdowns / 0.4° cell",
+            unit="weighted touchdowns / 0.2° cell",
             source="NOAA SPC SVRGIS 1950-2025 tornado initpoints, KDE-smoothed",
             source_url="https://www.spc.noaa.gov/gis/svrgis/",
             raw_min=raw_min,
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Real SPC touchdowns aggregated to 0.4° via a Gaussian kernel (sigma ≈ 0.45°). Recency weight 0.5× (1950) → 2.0× (2025), with EF3+ mag boost, to reflect the eastward shift of Tornado Alley.",
+            note="Real SPC touchdowns aggregated to 0.2° (~14 mi) via a Gaussian kernel (sigma ≈ 0.3°). Recency weight 0.5× (1950) → 2.0× (2025) with an EF3+ magnitude boost, reflecting the eastward shift of Tornado Alley.",
         )
     if hazard == "hail":
-        palette = ["#f1f5f9", "#e0f2fe", "#bae6fd", "#93c5fd", "#6366f1", "#3730a3"]
-        stops = [0, 50, 150, 350, 600, 900]
+        # 7-stop ramp picked against the real KDE distribution
+        # (p50≈110, p75≈250, p90≈430, p95≈565, p99≈876, max≈2259).
+        # Pale at bottom so quiet areas read quiet; top decile escalates
+        # quickly through indigo into near-black so Hail Alley + the
+        # Black Hills + DFW peaks read as obviously the worst.
+        palette = [
+            "#f8fafc",  # near-white baseline
+            "#dbeafe",  # blue-100
+            "#93c5fd",  # blue-300
+            "#60a5fa",  # blue-400
+            "#3b82f6",  # blue-500
+            "#1e3a8a",  # blue-900
+            "#0c1429",  # near-black navy — peak signal
+        ]
+        stops = [0, 100, 300, 600, 1000, 1500, 2000]
         return HazardLegend(
-            title="Severe hail frequency",
-            unit="≥1″ hail reports 1955–2023",
-            source="NOAA SPC severe-event DB — pattern (production: raw SPC counts)",
+            title="Severe hail density (mag- & recency-weighted)",
+            unit="weighted ≥0.75″ reports / 0.2° cell",
+            source="NOAA SPC SVRGIS 1955-2025 hail reports, KDE-smoothed",
             source_url="https://www.spc.noaa.gov/wcm/#data",
             raw_min=raw_min,
             raw_max=raw_max,
             palette=palette,
             stops=stops,
-            note="Synthetic pattern calibrated to Hail Alley (E. CO / W. KS / NE) + central Plains secondary peak.",
+            note="Real SPC hail reports aggregated to 0.2° (~14 mi) via a Gaussian kernel (sigma ≈ 0.3°). Magnitude weight 1.0× (1″) → 2.5× (4″) emphasises damaging stones; mild recency ramp 0.7× (1955) → 1.3× (2025) reflects current climatology without overweighting growth in reporting density.",
         )
     # wildfire
     palette = ["#f1f5f9", "#fef08a", "#fdba74", "#f97316", "#b91c1c", "#7f1d1d"]
