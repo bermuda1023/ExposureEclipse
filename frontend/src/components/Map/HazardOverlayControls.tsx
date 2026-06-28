@@ -9,7 +9,10 @@ import type { HazardType } from "../../api/hazards";
 const HAZARDS: { id: HazardType; label: string; emoji: string; tint: string }[] = [
   { id: "tornado",  label: "Tornado",  emoji: "🌪", tint: "#dc2626" },
   { id: "hail",     label: "Hail",     emoji: "🧊", tint: "#3730a3" },
-  { id: "wildfire", label: "Wildfire", emoji: "🔥", tint: "#b91c1c" },
+  // Wildfire chip hidden — the WFIGS-derived surface isn't ready for
+  // primetime yet (limited 2020+ coverage skews the picture). Re-add
+  // the wildfire entry to bring it back; the backend endpoint and
+  // grid data are still live.
 ];
 
 export function HazardOverlayControls() {
