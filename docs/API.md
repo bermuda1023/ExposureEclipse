@@ -1,8 +1,8 @@
 # API — endpoints + request/response shapes
 
 All endpoints under `/api`. JSON request/response (camelCase) except
-`/exports/excel` which streams `.xlsx`. Enum values from
-`docs/CONTRACTS.md`. Errors use a standard envelope.
+`/exports/excel` and `/hurricanes/{id}/impact/export` which stream `.xlsx`.
+Enum values from `docs/CONTRACTS.md`. Errors use a standard envelope.
 
 ## Standard error envelope
 
@@ -13,7 +13,7 @@ All endpoints under `/api`. JSON request/response (camelCase) except
     "message": "Human-readable, friendly summary.",
     "details": { "field": "treatyYear", "reason": "must be int" },
     "traceId": "uuid",
-    "timestamp": "2026-06-18T12:00:00Z"
+    "timestamp": "2026-06-29T12:00:00Z"
   }
 }
 ```
@@ -27,6 +27,8 @@ IED, failed ERT job, county fallback) are NOT HTTP errors — they ride in
 | Verb | Path | Purpose |
 |---|---|---|
 | GET | `/api/health` | liveness probe |
+| GET | `/api/docs` | FastAPI Swagger UI (dev only — useful for poking endpoints) |
+| GET | `/api/openapi.json` | OpenAPI 3 schema |
 
 ## Cedent tree
 
@@ -57,13 +59,11 @@ IED, failed ERT job, county fallback) are NOT HTTP errors — they ride in
               "perils": ["WS","EQ","CS"], "office": "BDA",
               "edm": { "ertStatus": "ERT_READY", "currency": "USD", ... },
               "datasetId": "ds-farmers-bda-2027", ... },
-            …
+            ...
           ]
-        },
-        …
+        }
       ]
-    },
-    …
+    }
   ]
 }
 ```
@@ -85,10 +85,9 @@ All three accept the **same selection shape** — AT MOST one of:
 - `cedentId` — all chains under the cedent (uses MAX_ACROSS_PERILS_AT_VIEW_GRAIN)
 - `datasetId` / `datasetGroupId` — legacy escape hatches
 - **none** → **portfolio mode**: union of every currently in-force BOUND
-  programme (status=BOUND AND today within [inception, expiry]). Multiple
-  targets still return 422.
+  programme. Multiple targets still return 422.
 
-Plus, common across the three:
+Common fields across the three:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -97,7 +96,6 @@ Plus, common across the three:
 | `filters` | ExposureFilters | peril (ALL\|specific), occupancy[], distanceToCoast[], geocoding[], construction[], numberOfStories[], yearBuilt[] |
 | `perils` | Peril[] | top-of-page multi-select (empty / contains ALL = no filter) |
 | `comparisonProgrammeId` | str \| null | YoY override |
-| `comparisonDatasetId` | str \| null | legacy YoY override |
 | `yoyMode` | bool | when true, `metricValue` becomes YoY change of `metric` |
 | `currencyAssumption` | dict | `{fromCurr: rate-to-display-curr}` |
 
@@ -130,12 +128,6 @@ Plus, common across the three:
 }
 ```
 
-- `metricValue` mirrors the requested metric (or YoY change of it when `yoyMode=true`).
-- `priorMetricValue` set whenever a comparison is wired — drives the mini-table tooltip.
-- `clientMarketShare: null` + per-feature `WARN_IED_DENOMINATOR_MISSING` when IED gap.
-- County fallback (state has no county data) emits `WARN_COUNTY_DATA_UNAVAILABLE` once.
-- Empty result → `WARN_FILTERS_RETURN_NO_ROWS`.
-
 ### `POST /api/exposures/detail` response
 
 Extra `geographyId` field on request. Response carries `summary`,
@@ -145,9 +137,8 @@ distanceToCoast / geocoding / stories / construction), `activeFilters`,
 
 ### `POST /api/exposures/pivot`
 
-Request adds `rows[]`, `columns[]`, `measures[]` (Measure[]). The combined
-`rows + columns` set IS the view grain (CONTRACTS.md §13) — group
-max-across-perils is computed at that grain. Response:
+Request adds `rows[]`, `columns[]`, `measures[]` (`Measure[]`). The combined
+`rows + columns` set IS the view grain (CONTRACTS.md §13). Response:
 
 ```json
 {
@@ -155,7 +146,8 @@ max-across-perils is computed at that grain. Response:
   "columns": ["PERIL"],
   "measures": ["TIV","LOCATION_COUNT"],
   "currency": "USD",
-  "cells": [{"rowKey":["US-FL","RESIDENTIAL"],"colKey":["WS"],"values":{"TIV":..., "LOCATION_COUNT":...}}],
+  "cells": [{"rowKey":["US-FL","RESIDENTIAL"],"colKey":["WS"],
+             "values":{"TIV":..., "LOCATION_COUNT":...}}],
   "rowTotals": [], "columnTotals": [], "grandTotal": {},
   "warnings": []
 }
@@ -168,9 +160,8 @@ max-across-perils is computed at that grain. Response:
 | POST | `/api/dataset-groups` | create |
 | GET | `/api/dataset-groups` | list |
 
-Mostly superseded by the cedent/office/chain navigation; kept for ad-hoc
-multi-EDM combinations. Validation: mixed currencies → 409 `CURRENCY_MISMATCH`,
-`SUM_DISTINCT_SEGMENTS` without `distinctSegmentsConfirmed: true` → 422.
+Mostly superseded by the cedent/office/chain navigation. In-memory store —
+won't survive serverless cold starts.
 
 ## ERT jobs
 
@@ -178,10 +169,12 @@ multi-EDM combinations. Validation: mixed currencies → 409 `CURRENCY_MISMATCH`
 |---|---|---|
 | POST | `/api/ert-jobs/run` | start ERT job (202 + jobId) |
 | GET | `/api/ert-jobs/status/{jobId}` | poll status |
-| POST | `/api/ert-jobs/{jobId}/cancel` | cancel (optional) |
+| POST | `/api/ert-jobs/{jobId}/cancel` | cancel |
 
 In-process asyncio registry in v1. Mock simulates `queued → running →
 completed` (or `failed` for any EDM whose name contains `AlwaysFails`).
+On serverless, the submit + poll may land on different lambdas — acceptable
+for the demo.
 
 ## Excel export
 
@@ -196,10 +189,10 @@ YoY Comparison, Peril, Occupancy, Distance to Coast, Geocoding, Stories,
 Construction, Pivot Output, Raw Aggregated Data. Over `EXPORT_MAX_ROWS` →
 `413 EXPORT_TOO_LARGE`.
 
-## Hurricanes (NOAA IBTrACS overlay + impact engine)
+## Hurricanes (historical IBTrACS overlay + impact engine)
 
-Live-fetches and parses NOAA IBTrACS v04r01 North-Atlantic CSV once per
-cold start (lru_cached). A single parse populates THREE indexes:
+Live-fetches NOAA IBTrACS v04r01 North-Atlantic CSV once per cold start
+(lru_cached). A single parse populates THREE indexes:
 
 - storm tracks (3-hour interpolated USA fixes — denser than HURDAT2's
   6-hour native; smoother paths and finer post-landfall coverage)
@@ -207,37 +200,36 @@ cold start (lru_cached). A single parse populates THREE indexes:
 - per-quadrant R64 per fix (`USA_R64_NE/SE/SW/NW`) → asymmetric wind field
 
 The HURDAT2 module is kept around for helper functions
-(`category_for_wind`, `landfall_summary`, `peak_wind`) that are
-duck-typed against the Storm dataclass.
+(`category_for_wind`, `landfall_summary`, `peak_wind`) duck-typed against
+the Storm dataclass.
 
 ### `GET /api/hurricanes`
 
-Query: `yearMin` `yearMax` `minCategory` `landfallOnly`. Same response
-shape as before; track points now come from IBTrACS.
+Query: `yearMin`, `yearMax`, `minCategory`, `landfallOnly`, `landfallStates`
+(comma-separated USPS, e.g. `FL,LA,TX` — filters to storms whose landfall
+record's state is in the list).
 
 Filter semantics: `effectiveCategory >= minCategory`. When `landfallOnly=true`
-non-landfalling storms are dropped entirely. When `false` they're kept and
-filtered by their peak.
+non-landfalling storms are dropped entirely.
 
 ### `POST /api/hurricanes/{stormId}/impact`
 
-Request body mirrors `MapRequest` (any of the selection-shape targets +
-filters + perils). Computes the storm's wind field and intersects it
-with the user's currently-selected programmes' fact rows.
+Request body mirrors `MapRequest` (any selection-shape target + filters + perils).
+Computes the storm's wind field and intersects it with the user's
+currently-selected programmes' fact rows.
 
 Key behaviours:
 
-- **Footprint filter** — only fixes with `wind ≥ 64 kt` AND
-  `status == "HU"` count. Excludes extratropical (EX) phase where
-  IBTrACS reports a much larger Rmax that isn't a hurricane wind field.
+- **Footprint filter** — only fixes with `wind ≥ 64 kt` AND `status == "HU"`
+  count. Excludes extratropical (EX) phase where IBTrACS reports a much
+  larger Rmax that isn't a hurricane wind field.
 - **Asymmetric R64** — `r64_at_bearing(quads, bearing)` linearly
-  interpolates between the four IBTrACS quadrant centers (45/135/225/315).
+  interpolates between the four IBTrACS quadrant centers (NE=45°, SE=135°,
+  SW=225°, NW=315°).
 - **County capture** — for each candidate county, the threshold is R64
-  at the bearing FROM the eye TO the county centroid. A county on the
-  storm-weak side won't be captured even if it's inside the storm's
-  average R64. Falls back to 2.5×Rmax when no IBTrACS R64 (pre-~2004).
-- **Per-programme breakdown** — `byProgramme[]` per county lists each
-  contributing programme's TIV + location count.
+  at the bearing FROM the eye TO the county centroid. Falls back to
+  2.5×Rmax when no IBTrACS R64 (pre-~2004).
+- **Per-programme breakdown** — `byProgramme[]` per county.
 
 Response:
 
@@ -247,50 +239,125 @@ Response:
   "stormName": "MICHAEL",
   "year": 2018,
   "currency": "USD",
-  "multiplier": 2.5,
   "bbox": [west, south, east, north],
-  "summary": {
-    "countiesImpacted": 8,
-    "countiesWithData": 6,
-    "totalTiv": 4500000000,
-    "totalLocationCount": 12340
-  },
+  "summary": { "countiesImpacted": 8, "countiesWithData": 6,
+               "totalTiv": 4500000000, "totalLocationCount": 12340 },
   "footprint": [
     { "lat": 30.1, "lon": -85.7, "windKt": 140,
-      "rmaxNm": 10, "radiusNm": 25, "rmaxSource": "ibtracs",
+      "rmaxNm": 10, "rmaxSource": "ibtracs",
       "r64Nm": 30, "r64Source": "ibtracs",
       "r64QuadsNm": [35, 35, 25, 25] }
   ],
   "cone": [
-    { "corners": [[lon,lat], …, [lon,lat]],   // closed ring, Rmax half-width
-      "windKt": 130, "startWindKt": 120, "endWindKt": 140 }
+    { "corners": [[lon,lat], ...], "windKt": 130,
+      "startWindKt": 120, "endWindKt": 140 }
   ],
-  "outerCone": [ /* same shape, asymmetric R64 half-widths */ ],
-  "outerFootprint": [
-    { "corners": [[lon,lat], …],              // 48-vertex asymmetric "egg"
-      "windKt": 140, "r64Nm": 30, "r64Source": "ibtracs" }
-  ],
+  "outerCone": [ /* asymmetric R64 half-widths */ ],
+  "outerFootprint": [ /* 48-vertex asymmetric "egg" per fix */ ],
   "counties": [
-    { "geographyId": "US-FL-12005", "geoid": "12005", "name": "Bay", "state": "FL",
-      "centroidLat": 30.43, "centroidLon": -85.69,
+    { "geographyId": "US-FL-12005", "geoid": "12005", "name": "Bay",
+      "state": "FL", "centroidLat": 30.43, "centroidLon": -85.69,
       "maxWindKt": 140, "maxCategory": 5,
       "closestDistanceNm": 12.1, "rmaxAtClosestNm": 15, "rmaxSource": "ibtracs",
       "tiv": 1400000000, "locationCount": 3500, "hasData": true,
       "byProgramme": [
         { "datasetId": "ds-coastalre-26-ws", "tiv": 950000000, "locationCount": 2350 },
-        { "datasetId": "ds-farmers-bda-2026", "tiv": 350000000, "locationCount": 900 },
-        { "datasetId": "ds-acmere-26-multi", "tiv": 100000000, "locationCount": 250 }
+        { "datasetId": "ds-farmers-bda-2026", "tiv": 350000000, "locationCount": 900 }
       ]
     }
   ]
 }
 ```
 
+The frontend's per-SSHWS-category damage assumption store +
+per-county-exposed-fraction override store run on top of this response —
+they're not sent back to the backend; the loss band is computed in the
+browser. See `frontend/src/state/{damageAssumptions,countyOverrides}.ts`.
+
 ### `POST /api/hurricanes/{stormId}/impact/export`
 
-Same request shape as `/impact`. Streams an `.xlsx` workbook (Summary
-sheet + Impacted Counties sheet with per-county breakdown including
-the Rmax source per row).
+Same request shape as `/impact`. Streams an `.xlsx` workbook (Summary +
+Impacted Counties sheets, per-county breakdown with the Rmax source per row).
+
+## Live + replay storms
+
+| Verb | Path | Purpose |
+|---|---|---|
+| GET | `/api/live/storms` | picker rows: active NHC + curated replay |
+| GET | `/api/live/storms/{atcfId}` | full bundle for one storm |
+
+`GET /api/live/storms` reads NHC `CurrentStorms.json` for active storms and
+returns a curated replay list (Atlantic basin majors with R64 data, e.g.
+Michael 2018, Ian 2022) for demo when nothing is active.
+
+`GET /api/live/storms/{atcfId}` returns the bundle:
+
+```json
+{
+  "storm": { /* LiveStormRow: stormId, name, intensityKt, lat, lon, ... */ },
+  "observedTrack": [ /* ObservedFix per IBTrACS / NHC fix */ ],
+  "forecasts": [
+    { "advisoryNumber": 17, "issuedAt": "...", "synthetic": true,
+      "points": [ /* ForecastFix per +12h step */ ] }
+  ],
+  "bbox": [west, south, east, north],
+  "alerts": [ /* WeatherAlertOut from NWS api.weather.gov */ ],
+  "buoys": [ /* BuoyOut from NDBC latest_obs.txt */ ],
+  "landStations": [ /* LandObsOut from NWS observations */ ],
+  "sst": [ /* SSTOut from JPL MUR via ERDDAP CSV */ ],
+  "sstMinC": 24.1, "sstMaxC": 30.7,
+  "sstMeta": { "source": "mur", "stepDeg": 0.25 },
+  "observedWindField": {
+    "innerCone": [ /* same shape as historical impact */ ],
+    "outerCone": [],
+    "outerRings": []
+  },
+  "forecastWindField": { /* same shape applied to the forecast track */ }
+}
+```
+
+Query toggles: `asOfIndex`, `includeObs`, `includeAlerts`, `includeSst`,
+`includeLand` — let the frontend skip expensive layers when not needed.
+
+`synthetic: true` on forecasts means the advisory history was synthesised
+from IBTrACS for a retired storm (replay mode). Real-time NHC text-advisory
+scraping is out of scope for v1.
+
+## Hazard overlays (tornado / hail / wildfire)
+
+| Verb | Path | Purpose |
+|---|---|---|
+| GET | `/api/hazards/{tornado\|hail\|wildfire}` | pre-baked lat/lon hazard grid + legend |
+
+Returns:
+
+```json
+{
+  "hazard": "tornado",
+  "stepDeg": 0.2,
+  "grid": [
+    { "lat": 35.4, "lon": -98.0, "raw": 85.6, "normalised": 1.0 },
+    ...
+  ],
+  "legend": {
+    "title": "Tornado hazard index",
+    "unit": "0–100 (blended climatology + history)",
+    "source": "SPC SVRGIS 1950-2025 + Brooks/Tippett climatology",
+    "sourceUrl": "https://www.spc.noaa.gov/gis/svrgis/",
+    "rawMin": 0.0, "rawMax": 85.6,
+    "palette": ["#f8fafc", "#fef3c7", "#fde047", ...],
+    "stops": [0, 12, 28, 45, 60, 75, 90],
+    "note": "Blend of 60% smooth climatology prior + 40% real SPC touchdowns ..."
+  }
+}
+```
+
+`stepDeg` is the grid step the JSON was baked at — the frontend uses it to
+size each square-fill polygon. Tornado + hail are 0.2°; wildfire is 0.15°.
+
+Grids are pre-baked offline by `backend/scripts/build_*_grid.py` (require
+`pyshp` for the SPC shapefile reads — dev dep only). See
+`docs/CALCULATIONS.md §Hazard climatology blend` for the methodology.
 
 ## Counties (reference data)
 
@@ -325,13 +392,11 @@ Request:
 }
 ```
 
-Either supply `scenarios` (each with `grossLoss` OR `tiv` + `damageRatio`),
-or set `sweepTiv` to run a default damage-ratio sweep (0.5% → 100%), or
-both. Layers evaluate INDEPENDENTLY against gross loss (no cumulative
-carry-over). Per-layer math: `loss_to_layer = max(0, min(gross-ded, limit))`,
+Supply `scenarios` (each with `grossLoss` OR `tiv` + `damageRatio`), or set
+`sweepTiv` for a default damage-ratio sweep (0.5% → 100%), or both. Layers
+evaluate INDEPENDENTLY against gross loss. Per-layer math:
+`loss_to_layer = max(0, min(gross-ded, limit))`,
 `ceded_loss = loss_to_layer × share`.
-
-Response shape per scenario:
 
 ```json
 {
@@ -341,8 +406,7 @@ Response shape per scenario:
   "groundUpLoss": 60000000,
   "layers": [
     { "name": "1st XOL", "deductible": 5000000, "limit": 5000000, "share": 0.20,
-      "lossToLayer": 5000000, "cededLoss": 1000000, "exhausted": true },
-    …
+      "lossToLayer": 5000000, "cededLoss": 1000000, "exhausted": true }
   ],
   "totalCeded": 5000000,
   "cedentNetLoss": 55000000
@@ -350,7 +414,26 @@ Response shape per scenario:
 ```
 
 Reinstatements / annual aggregates / event-vs-occurrence wording are out
-of scope for v1 (single-event deterministic only).
+of scope for v1 (single-event deterministic only). No frontend UI yet — the
+engine is API-only until a "what-if" panel is built.
+
+## Admin — programme treaty metadata
+
+| Verb | Path | Purpose |
+|---|---|---|
+| GET | `/api/admin/programmes` | joined treaty rows + EDM linkage + auto-suggest |
+| PUT | `/api/admin/programmes/{fsDisplayId}/edm-link` | set/clear EDM link for one treaty |
+| POST | `/api/admin/programmes/edm-links` | bulk save EDM links |
+| POST | `/api/admin/programmes/import` | parse + replace treaty rows from a CSV |
+
+Backs the `/admin/programmes` page. Treaty rows persist to
+`mockdata/treaty_metadata.json`; EDM links to `mockdata/edm_linkage.json`.
+Auto-suggest matches treaty rows to cedent EDMs by reinsured-name
+substring; the UI surfaces the suggestion as an "Apply suggestion" action
+per row.
+
+`/import` accepts CSVs from the upstream RMS treaty registry. Header names
+tolerate both `FS display` (with space) and `fs_display` (snake) variants.
 
 ## Endpoint summary
 
@@ -374,5 +457,12 @@ of scope for v1 (single-event deterministic only).
 | GET | `/api/hurricanes` |
 | POST | `/api/hurricanes/{stormId}/impact` |
 | POST | `/api/hurricanes/{stormId}/impact/export` |
+| GET | `/api/live/storms` |
+| GET | `/api/live/storms/{atcfId}` |
+| GET | `/api/hazards/{tornado\|hail\|wildfire}` |
 | GET | `/api/counties/{geographyId}/reference` |
 | POST | `/api/calc/layers` |
+| GET | `/api/admin/programmes` |
+| PUT | `/api/admin/programmes/{fsDisplayId}/edm-link` |
+| POST | `/api/admin/programmes/edm-links` |
+| POST | `/api/admin/programmes/import` |

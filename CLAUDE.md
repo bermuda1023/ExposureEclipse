@@ -6,34 +6,55 @@
 ## What you're building
 
 **Exposure Eclipse** — a web-based Property Cat exposure management workbench
-for reinsurance underwriters. It turns ERT/EDM exposure outputs into an
+for reinsurance underwriters. Turns ERT/EDM exposure outputs into an
 interactive Mapbox choropleth + pivot + Excel-export pipeline, overlays
-historical hurricane tracks + wind-field cones, and runs deterministic
-layered-loss scenarios for the in-force portfolio.
+historical hurricane tracks + asymmetric wind-field cones, runs deterministic
+layered-loss scenarios, supplies a tornado / hail hazard climatology, plus
+NHC-style live-storm forecasts with marine + alert + SST context.
 
-**V1 = mock-data prototype.** No SQL Server. Mock provider satisfies the
-same `ExposureDataProvider` ABC the SQL provider will satisfy later.
+**V1 = mock-data prototype.** No SQL Server. `MockExposureDataProvider`
+satisfies the same `ExposureDataProvider` ABC the SQL provider will satisfy
+later.
 
-## Capability snapshot (June 2026)
+## Capability snapshot (2026-06-29)
 
 - **Exposure map** — choropleth at state / county grain via Mapbox vector
   tilesets, peril multi-select, YoY, programme/chain/cedent/office/portfolio
   scopes, scope-filter chips (office / region / underwriter).
 - **Pivot workbench** — county labels qualify by state; same scope as map.
-- **Detail panel** — summary + breakdowns + county reference (population /
-  avg replacement cost / households) for the clicked geography.
-- **Hurricane impact engine** — click any storm on the map → IBTrACS-driven
-  wind-field cone (eyewall Rmax + asymmetric R64 outer wash, per-quadrant
-  bearing-interpolated). County capture uses R64 at the bearing to each
-  county. Right-rail detail view expands per-county per-programme TIV
-  breakdown. Excel export per impact.
+- **Detail panel** — summary + breakdowns + county reference (population,
+  households, avg replacement cost) for the clicked geography.
+- **Hurricane impact engine** — click any storm → IBTrACS-driven wind-field
+  cone (eyewall Rmax + asymmetric R64 per-quadrant bearing-interpolated).
+  County capture uses R64 at the bearing to each county; right-rail detail
+  shows per-county per-programme TIV. Per-impact Excel export. Storms can be
+  filtered by **landfall state** before browsing.
+- **Hurricane loss assumptions (user-driven)** — per-SSHWS-category mean +
+  SD damage-ratio inputs (`damageAssumptions` zustand store) produce a
+  probabilistic loss band; per-county **exposed-fraction overrides**
+  (`countyOverrides` store) let an underwriter override partial-county
+  exposure. Both persist to localStorage.
+- **Live + replay storms** — `/api/live/storms`. NHC `CurrentStorms.json`
+  for active storms; IBTrACS-derived replay for retired ones. Bundle adds
+  observed track, advisory history (synthetic forecast cone), NWS active
+  alerts within the cone, NDBC buoys + NWS land-station obs, and a JPL MUR
+  SST grid for the bbox.
+- **Hazard overlays** — `/api/hazards/{tornado|hail|wildfire}` returns a
+  pre-baked 0.2° lat/lon hazard-index grid. Tornado + hail blend the real
+  SPC SVRGIS shapefile (KDE-smoothed, recency- and mag-weighted) with a
+  smooth Brooks/Tippett/Cintineo climatology prior (60% climatology / 40%
+  history) — no per-city bias correction. Wildfire is acres-weighted KDE of
+  WFIGS perimeters; wildfire chip is currently hidden in the UI but the
+  endpoint + grid are live.
+- **Admin programmes** (`/admin/programmes`) — treaty-metadata table that
+  maps each FS-display treaty ID → its EDM server + database, with CSV
+  import and auto-suggest. Not linked from the header nav.
 - **Layer calc engine** — `POST /api/calc/layers` runs deterministic XOL
   scenarios (TIV × damage ratio through deductible/limit/share stacks),
-  payout curves via the default damage-ratio sweep. Frontend UI not built
-  yet — engine ready for a future "what-if" panel.
+  payout curves via the default damage-ratio sweep. Engine is wired; no
+  frontend UI yet.
 - **Excel export** — works for any scope (single deal, chain, cedent,
-  portfolio, scope-filtered) and dumps the most-granular fact rows for
-  inspection.
+  portfolio, scope-filtered) and dumps the most-granular fact rows.
 
 ## The 10 rules (do not violate)
 
@@ -96,7 +117,7 @@ Cedent  (Farmers Group)        region: "Nationwide"
   (status=BOUND AND today within [inception, expiry])
 
 Frontend resolves this exactly once in `useEffectiveScope()`
-(`frontend/src/state/useEffectiveScope.ts`); the map, pivot, export and
+(`frontend/src/state/useEffectiveScope.ts`); map, pivot, export and
 hurricane impact all consume that hook so they can't drift.
 
 Plus `perils: Peril[]` (multi-select; empty = ALL), `metric: MetricKey`,
@@ -107,37 +128,45 @@ Plus `perils: Peril[]` (multi-select; empty = ALL), `metric: MetricKey`,
 
 Open app → pick a cedent / office / chain / programme in the left rail →
 peril multi-select up top → map paints state level → scroll-zoom past
-~zoom 4 → county vector tileset takes over → hover for full tooltip
-(geo, active metric, YoY delta if on, other metrics, currency, warnings)
-→ click → detail panel populates → optionally enable hurricane overlay
-→ Export to Excel.
+~zoom 4 → county tileset takes over → hover for full tooltip (geo, active
+metric, YoY Δ if on, other metrics, currency, warnings) → click → detail
+panel populates → optionally toggle Hurricanes / Risk: Tornado / Hail
+overlays (overlays hide the exposure choropleth while active) → Export to
+Excel.
 
 ## Tech stack (pinned)
 
-- **Frontend:** React 18 + TS 5 + Vite 5 + Mapbox GL JS v3, TanStack Query v5,
-  Zustand, react-resizable-panels v2, Vitest + Testing Library.
+- **Frontend:** React 18 + TS 5 + Vite 5 + Mapbox GL JS v3, TanStack Query
+  v5, Zustand (persist middleware on `damageAssumptions` + `countyOverrides`),
+  react-resizable-panels v2, Vitest + Testing Library.
 - **Backend:** Python 3.12 + FastAPI + Pydantic v2 + openpyxl. No pandas in
   prod (slimmed for Vercel). pytest + httpx for tests.
 - **Map geometry:** Mapbox vector tilesets (state + county), not GeoJSON.
   Tilesets defined in `frontend/src/components/Map/MapView.tsx`.
-- **Hurricanes:** Live fetch of NOAA IBTrACS v04r01 NA-basin CSV via the
-  backend; lru_cached. Single parse pass populates storm tracks (3-hour
-  interpolated USA fixes), recon Rmax, and per-quadrant R64 indexes.
+- **Hurricanes:** Live-fetch NOAA IBTrACS v04r01 NA-basin CSV; lru_cached.
+  Single parse populates storm tracks (3-hour interpolated USA fixes),
+  recon Rmax, per-quadrant R64 indexes.
+- **Live storms:** NHC `CurrentStorms.json` + NWS `api.weather.gov` alerts
+  + NDBC `latest_obs.txt` buoys + JPL MUR SST via ERDDAP CSV.
 - **County reference:** us-atlas TopoJSON for centroids (lru_cached);
   ~35 curated census-style counties + deterministic synthesis for the rest.
-- **Deploy:** Vercel (single project: static SPA + Python serverless function).
+- **Hazard grids:** built offline by `backend/scripts/build_{tornado,hail,
+  wildfire}_grid.py` (requires `pyshp` for shapefile reads — dev dep only);
+  baked into `mockdata/hazard_*_grid.json` and served by `/api/hazards/{type}`.
+- **Deploy:** Vercel (single project: static SPA + Python serverless).
   See `docs/DEPLOY.md`.
 
 ## Project layout
 
 ```
 api/                  Vercel Python entrypoint (api/index.py re-exports app.main:app)
-backend/app/          FastAPI app, providers, services, models
-backend/scripts/      Data-generation / merge scripts
-backend/tests/        pytest
+backend/app/          FastAPI app — api/ (routers), services/, models/, providers/
+backend/scripts/      Data-generation + hazard-grid build scripts
+backend/tests/        pytest (95)
 frontend/src/         React app — never imports a data client
-mockdata/             cedents.json + exposure_facts/*.json + ied_industry.csv
-docs/                 lean specification pack (~6 files)
+mockdata/             cedents.json + exposure_facts/ + treaty_metadata.json
+                      + hazard_*_grid.json + ied_industry.csv
+docs/                 spec pack
 vercel.json           single-deploy config
 ```
 
@@ -149,9 +178,10 @@ See `docs/ARCHITECTURE.md` for the directory tree in detail.
 |---|---|
 | Always-loaded | `CLAUDE.md` + `docs/CONTRACTS.md` |
 | Data model / mock / fact rows | `docs/DATA_MODEL.md`, `docs/MOCK_DATA.md`, `docs/ERT_OUTPUT_FORMAT.md` |
-| Calculations / grouping | `docs/CALCULATIONS.md` |
+| Calculations / grouping / impact / layers | `docs/CALCULATIONS.md` |
 | API endpoints | `docs/API.md` |
 | Architecture / deploy | `docs/ARCHITECTURE.md`, `docs/DEPLOY.md` |
+| Hazard maps + bias correction | `docs/CALCULATIONS.md` §Hazard climatology blend |
 
 When delegating to sub-agents: scope them to the row above + `CONTRACTS.md`,
 nothing more. Agents return diffs/summaries, not file dumps.

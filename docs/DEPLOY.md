@@ -67,11 +67,26 @@ from disk fixtures and is stateless across requests.
 ## Cold-start cost
 
 First request after idle hits the lambda cold:
-- Parse `cedents.json` + every fact file (~50ms)
-- HURDAT2 endpoint only: fetch + parse ~2–3 s (once per cold start, then
-  `lru_cache` makes subsequent calls instant)
+- Parse `cedents.json` + every fact file (~50 ms)
+- IBTrACS NA-basin CSV: fetch + parse ~2–3 s (once per cold start, then
+  `lru_cache` makes subsequent calls instant). Affects only the first
+  `/api/hurricanes`, `/api/hurricanes/{id}/impact`, and `/api/live/storms`
+  call.
+- NHC `CurrentStorms.json`: ~200 ms (similarly lru-cached).
+- NWS alerts + NDBC buoys + JPL MUR SST: ~500 ms each on first call per
+  bbox; lru-cached per bounding box.
+- Hazard grids: read directly from `mockdata/hazard_*_grid.json` — no
+  external fetch. First parse is ~150 ms; cached for the lambda lifetime.
 
-Subsequent warm calls are sub-100ms.
+Subsequent warm calls are sub-100 ms.
+
+## Hazard grid bundling
+
+The hazard JSON files (`mockdata/hazard_{tornado,hail,wildfire}_grid.json`)
+together are ~3-4 MB. `vercel.json` already bundles `mockdata/**` into the
+Python function so they ship with the deploy — no separate upload needed.
+Re-bake locally (`backend/scripts/build_*_grid.py`) and commit when the
+upstream shapefile updates or a tuning constant changes.
 
 ## Alternative: Render / Fly / Cloud Run
 

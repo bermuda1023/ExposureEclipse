@@ -191,3 +191,80 @@ cumulative carry-over). The reinsurer's total payout is the sum of
 `(0.5%, 1%, 2%, 5%, 10%, 15%, 20%, 30%, 50%, 75%, 100%)` to produce a
 payout curve. Reinstatements / aggregate limits / event-vs-occurrence
 wording are out of scope for v1.
+
+## Hurricane loss bands (frontend, user-driven)
+
+The backend's `/impact` response returns TIV per county but **no damage
+ratios** — the user owns the loss model. Two zustand stores combine in
+the browser to produce the displayed loss band:
+
+- `damageAssumptions` (`frontend/src/state/damageAssumptions.ts`) — per
+  SSHWS category {`mean`, `sd`} percentages. `applyAssumption(tiv,
+  windKt, byCategory)` looks up the category from `windKt`, then returns
+  a `LossBand` of `{ mean, low, high }` with `low = mean - sd` and
+  `high = mean + sd`, clamped to `[0, 100]`. Persists to localStorage.
+- `countyOverrides` (`frontend/src/state/countyOverrides.ts`) — per
+  `(stormId, geoid)` exposed-fraction in `[0, 1]`. Applied as a scalar
+  multiplier on the county's TIV BEFORE the damage assumption runs.
+  Auto-prunes any override that's been set to 100% (the default).
+
+The displayed county loss is therefore:
+
+    effective_tiv = tiv * exposed_fraction
+    loss_band(category) = effective_tiv * { mean - sd, mean, mean + sd } / 100
+
+Neither store is sent back to the backend; persistence is per browser
+in v1.
+
+## Hazard climatology blend (tornado + hail)
+
+Naive KDE of SPC point reports produces an obvious population-density
+artifact — OKC, DFW, Atlanta, the I-35 corridor light up because reports
+require humans to file them (Doswell 2007, Anderson et al. 2007).
+Per-city deflation is the wrong fix — it trades urban DOTS for urban
+HOLES at any city the deflator misses.
+
+The shipped approach is a **climatology blend** that combines biased
+point-history with a bias-free meteorology-based prior:
+
+1. **Wide-kernel KDE of real SPC reports** (sigma 0.7°). Wider than the
+   visual grid step (0.2°) so any single-city cluster dilutes across
+   its ~50 mi region rather than forming a dot. Reports are weighted
+   by:
+   - Recency — tornado: 0.5× (1950) → 2.0× (2025); hail: 0.7× (1955) → 1.3× (2025).
+   - Magnitude — tornado: EF3+ get `1 + 0.5·max(0, mag-2)` boost;
+     hail: stones > 1″ get `1 + 0.5·(diam_in - 1)`, capped at 2.5×.
+
+2. **Smooth climatology prior** (`backend/scripts/_climatology.py`).
+   Encodes the published environmental-frequency surfaces as a bag of
+   Gaussian anchors:
+   - Tornado anchors from Brooks et al. 2003 + Tippett et al. 2015 mean-
+     annual EF1+ density maps (Tornado Alley, Dixie Alley, FL sea-breeze,
+     Plains).
+   - Hail anchors from Cintineo et al. 2012 + Allen & Tippett 2015
+     hail-day climatology (Hail Alley, Black Hills upslope, TX
+     Panhandle).
+   These have zero reporting bias because they're derived from
+   atmospheric ingredients (CAPE × storm-relative helicity × shear), not
+   point reports.
+
+3. **Normalised blend** — each surface is normalised to its own max,
+   then combined as:
+
+        blended = 0.60 * climatology + 0.40 * historical
+
+   Output is a 0-100 hazard index per cell. The climatology dominates
+   so the surface has no urban artifacts of either sign; the historical
+   40% lets local real-data deviations move the surface where they're
+   physically meaningful (Black Hills hail, central-Florida tornado).
+
+Wildfire uses the same KDE machinery on the WFIGS perimeter CSV but
+**without** a climatology prior — WFIGS perimeters come from satellite
++ agency tracking (not point reports), so the bias is the opposite of
+SPC reports (slightly biased AWAY from population since forests aren't
+where people live densely). Each fire is weighted by acres burned,
+capped at 300k per fire so mega-events don't blanket a region.
+
+The build scripts (`backend/scripts/build_{tornado,hail,wildfire}_grid.py`)
+emit `mockdata/hazard_*_grid.json` with `{stepDeg, cells}` shape. Re-bake
+when the upstream shapefile updates or you change a tuning constant.

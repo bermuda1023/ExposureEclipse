@@ -17,6 +17,7 @@ Domain terms an engineer must understand to build this correctly.
 | **Chain** (ProgrammeChain) | The renewal lineage for one deal slot. Unit of YoY comparison — latest year auto-pairs with prior. |
 | **Programme** | A specific bound (or quoted) treaty for one year. Multi-peril by default; carries an EDMRef. |
 | **EDMRef** | The SQL data-source pointer (server, db name, currency, ertStatus). Lives inside a Programme. |
+| **FS display ID** | The upstream RMS treaty registry's stable layer identifier (`12345-1`, `12345-2`, …). The treaty admin page maps each FS display ID to its EDM linkage. |
 | **Dataset** | Legacy term — equivalent to "the data backing one Programme's EDM" (`programme.datasetId`). The `dataset_id` is still the fact-file naming key (`mockdata/exposure_facts/<id>.json`). |
 | **Dataset group** | Legacy ad-hoc combination of multiple EDMs. Mostly superseded by the cedent/office/chain model. |
 | **Treaty year** | The year of the reinsurance treaty/account. |
@@ -32,6 +33,15 @@ Domain terms an engineer must understand to build this correctly.
 | **Choropleth** | A map where areas are shaded by a metric value. Our v1 map type — implemented via Mapbox vector tilesets + feature-state. |
 | **Portfolio** | In v1, all programmes whose EDM has fact data loaded. |
 | **YoY mode** | View modifier: when on, the chosen metric's `metricValue` becomes its YoY change vs the prior period. |
-| **HURDAT2** | NOAA's hurricane track database (Atlantic, 1851→). The hurricane overlay live-fetches it. |
+| **HURDAT2** | NOAA's hurricane track database (Atlantic, 1851→). Kept as a helper module (`category_for_wind`, `landfall_summary`, `peak_wind`); the primary historical track source is now IBTrACS. |
+| **IBTrACS** | NOAA's International Best Track Archive for Climate Stewardship. Source for historical hurricane tracks (3-hour interpolated USA fixes), recon Rmax (`USA_RMW`), and per-quadrant R64 (`USA_R64_NE/SE/SW/NW`). |
 | **Saffir-Simpson (SSHWS)** | Hurricane wind-speed scale: TD <34kt, TS 34–63, Cat 1 64–82, Cat 2 83–95, Cat 3 96–112, Cat 4 113–136, Cat 5 ≥137. |
+| **Rmax / R64** | Radius of maximum winds / radius of 64-kt winds. Rmax defines the eyewall; R64 (per quadrant) defines the asymmetric hurricane-force wind envelope. |
+| **NHC CurrentStorms** | National Hurricane Center's `CurrentStorms.json` feed — active-storm summaries (used by `/api/live/storms`). |
+| **NDBC** | National Data Buoy Center — `latest_obs.txt` feed for ocean buoy observations. |
+| **NWS api.weather.gov** | National Weather Service public API for active alerts + land-station observations. |
+| **JPL MUR SST** | Multi-scale Ultra-high Resolution Sea Surface Temperature, served via NOAA ERDDAP CSV. Sub-25 °C is unfavourable for hurricane intensification; the live storm panel shades cells accordingly. |
+| **SPC SVRGIS** | NOAA Storm Prediction Center's GIS dataset of tornado / hail / wind events 1950-present. Source for the hazard-overlay grids. |
+| **WFIGS** | Wildland Fire Interagency Geospatial Services — perimeter dataset 2020-present (NIFC). Source for the wildfire hazard grid. |
+| **Climatology blend** | The hazard-map approach used for tornado + hail: 60% smooth Brooks/Tippett/Cintineo prior + 40% historical KDE of SPC reports. Avoids the per-city reporting-bias artifact. |
 | **Provider** | Backend data-access implementation behind `ExposureDataProvider`. Mock today; SQL Server / Databricks later. |

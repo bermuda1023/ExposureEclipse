@@ -263,3 +263,43 @@ for the math.
 | `limit` | money | layer width; > 0; layer covers `[ded, ded+limit]` |
 | `share` | ratio in `[0,1]` | reinsurer signed line on the layer |
 | `name` | string \| null | display label (e.g. "1st XOL") |
+
+## 18. Hazard overlay types (`HazardType`)
+
+The pre-baked hazard grids served by `/api/hazards/{hazard}`.
+
+| Code | Display | Source | UI visibility |
+|---|---|---|---|
+| `tornado` | Tornado | SPC SVRGIS 1950-2025 + Brooks/Tippett climatology blend | active chip |
+| `hail` | Hail | SPC SVRGIS 1955-2025 + Cintineo/Allen-Tippett climatology blend | active chip |
+| `wildfire` | Wildfire | WFIGS Interagency Perimeters 2020-present | endpoint live, chip hidden |
+
+Tornado + hail use the climatology-blend pipeline (60% smooth prior + 40%
+historical KDE) so the surface has no reporting-bias artifacts. Wildfire
+uses acres-weighted KDE alone (perimeter data isn't human-reported, so it
+has no population bias to correct). See `docs/CALCULATIONS.md §Hazard
+climatology blend`.
+
+The wildfire chip is currently hidden from `HazardOverlayControls` because
+the WFIGS dataset only covers 2020-present, which skews the picture. The
+backend grid + endpoint stay live — re-add the wildfire entry to the
+`HAZARDS` array in `HazardOverlayControls.tsx` to bring the chip back.
+
+## 19. Hurricane loss assumption stores
+
+User-controlled inputs that turn an `/api/hurricanes/{id}/impact` response
+into a probabilistic loss band. Both are zustand stores in the frontend,
+persisted to localStorage; neither is sent back to the backend.
+
+`DamageAssumption` (per SSHWS category):
+| Field | Type | Range |
+|---|---|---|
+| `mean` | percent | `[0, 100]` |
+| `sd` | percent | `[0, 100]` |
+
+`CountyOverride` (per `(stormId, geoid)`):
+| Field | Type | Range | Default |
+|---|---|---|---|
+| `exposedFraction` | ratio | `[0, 1]` | `1.0` (auto-pruned at 1.0) |
+
+See `docs/CALCULATIONS.md §Hurricane loss bands` for how the two combine.
