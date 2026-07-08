@@ -83,15 +83,23 @@ export function FundAnalysis() {
   const [selected, setSelected] = useState<Set<string>>(
     new Set(["gator", "bireme", "upslope", "primary_commodity", "cedar_creek", "cas_sosin", "alluvial", "spy", "agg"]),
   );
-  const [capital, setCapital] = useState<number>(5_000_000);
+  const [newCapital, setNewCapital] = useState<number>(1_000_000);
+  const [currentInvestments, setCurrentInvestments] = useState<Record<string, number>>({});
+  const [noSell, setNoSell] = useState<boolean>(false);
+  const [historyWindow, setHistoryWindow] = useState<string | null>(null);   // null = all
+  const [customWindowMonth, setCustomWindowMonth] = useState<string>("2019-01");
   const [riskFreeRate, setRiskFreeRate] = useState<number>(0.04);
   const [respectMin, setRespectMin] = useState<boolean>(true);
   const [overrides, setOverrides] = useState<Record<string, AssumptionOverrideIn>>(DEFAULT_OVERRIDES);
   const [maxWeights, setMaxWeights] = useState<Record<string, number>>(() =>
     Object.fromEntries(DEFAULT_MAX_WEIGHTS.map((m) => [m.assetId, m.maxWeight])),
   );
-  // Per-asset min-investment overrides — undefined = use catalog default.
   const [minInvOverrides, setMinInvOverrides] = useState<Record<string, number>>({});
+
+  const currentTotal = Object.values(currentInvestments).reduce((a, b) => a + b, 0);
+  const totalCapital = currentTotal + newCapital;
+  const historyWindowStart =
+    historyWindow === "custom" ? customWindowMonth : historyWindow;
 
   const assetsQuery = useQuery({
     queryKey: ["fund-analysis", "assets"],
@@ -104,7 +112,12 @@ export function FundAnalysis() {
   const runOptimize = () => {
     optimizeMutation.mutate({
       assetIds: [...selected],
-      totalCapital: capital,
+      newCapital,
+      currentInvestments: Object.entries(currentInvestments)
+        .filter(([id, amt]) => selected.has(id) && amt > 0)
+        .map(([assetId, amount]) => ({ assetId, amount })),
+      noSell,
+      historyWindowStart,
       riskFreeRate,
       respectMinInvestment: respectMin,
       overrides: Object.values(overrides).filter((o) => selected.has(o.assetId)),
@@ -158,6 +171,15 @@ export function FundAnalysis() {
     });
   };
 
+  const setCurrentInv = (id: string, val: number) => {
+    setCurrentInvestments((prev) => {
+      const next = { ...prev };
+      if (val <= 0) delete next[id];
+      else next[id] = val;
+      return next;
+    });
+  };
+
   const effectiveMinInv = (a: FundAsset) => minInvOverrides[a.id] ?? a.minInvestment;
 
   const assets = assetsQuery.data?.assets ?? [];
@@ -185,6 +207,7 @@ export function FundAnalysis() {
                 <th style={S.thNum}>CAGR</th>
                 <th style={S.thNum}>σ (ann)</th>
                 <th style={S.thNum}>Months</th>
+                <th style={S.thNum}>Currently held ($)</th>
                 <th style={S.thNum}>Min Investment (editable)</th>
               </tr>
             </thead>
@@ -212,6 +235,20 @@ export function FundAnalysis() {
                     <td style={S.tdNum}>{PCT(a.annualisedReturn)}</td>
                     <td style={S.tdNum}>{PCT(a.annualisedVol)}</td>
                     <td style={S.tdNum}>{a.nMonths}</td>
+                    <td style={S.tdNum}>
+                      <input
+                        type="number"
+                        value={currentInvestments[a.id] ?? 0}
+                        min={0}
+                        step={50_000}
+                        onChange={(e) => setCurrentInv(a.id, Math.max(0, Number(e.target.value) || 0))}
+                        style={{ ...S.input, width: 130, textAlign: "right",
+                                background: (currentInvestments[a.id] ?? 0) > 0 ? "#dbeafe" : undefined }}
+                        title={(currentInvestments[a.id] ?? 0) > 0
+                          ? `Currently invested — will be a floor if "no-sell" is on`
+                          : "Enter your current position, if any"}
+                      />
+                    </td>
                     <td style={S.tdNum}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
                         <input
@@ -247,17 +284,69 @@ export function FundAnalysis() {
 
         <section style={S.cardTall}>
           <h2 style={S.h2}>Portfolio inputs</h2>
+
+          <div style={S.summaryBox}>
+            <div style={S.summaryRow}>
+              <span>Currently invested</span>
+              <span style={S.summaryVal}>{CURRENCY(currentTotal)}</span>
+            </div>
+            <div style={S.summaryRow}>
+              <span>New capital to deploy</span>
+              <span style={S.summaryVal}>{CURRENCY(newCapital)}</span>
+            </div>
+            <div style={{ ...S.summaryRow, borderTop: "1px solid #cbd5e1", paddingTop: 4, marginTop: 4, fontWeight: 600 }}>
+              <span>Total portfolio</span>
+              <span style={S.summaryVal}>{CURRENCY(totalCapital)}</span>
+            </div>
+          </div>
+
           <label style={S.label}>
-            Total investable capital
+            New capital to deploy ($)
             <input
               type="number"
-              value={capital}
-              min={100_000}
+              value={newCapital}
+              min={0}
               step={100_000}
-              onChange={(e) => setCapital(Math.max(100_000, Number(e.target.value) || 100_000))}
+              onChange={(e) => setNewCapital(Math.max(0, Number(e.target.value) || 0))}
               style={S.input}
             />
-            <span style={S.hint}>{CURRENCY(capital)}</span>
+            <span style={S.hint}>Set per-fund current holdings in the Assets table above.</span>
+          </label>
+
+          <label style={S.labelRow}>
+            <input type="checkbox" checked={noSell} onChange={(e) => setNoSell(e.target.checked)} />
+            Don't reduce existing positions (add-only)
+          </label>
+          <p style={S.hint}>
+            If on, current holdings are floors — the optimizer can add capital to any fund but
+            can't propose selling any current position.
+          </p>
+
+          <label style={S.label}>
+            History window
+            <select
+              value={historyWindow ?? ""}
+              onChange={(e) => setHistoryWindow(e.target.value === "" ? null : e.target.value)}
+              style={S.input}
+            >
+              <option value="">All available history</option>
+              <option value="2021-01">Since Jan 2021 (last ~5y)</option>
+              <option value="2019-01">Since Jan 2019 (last ~7y)</option>
+              <option value="2016-01">Since Jan 2016 (last ~10y)</option>
+              <option value="custom">Custom start month…</option>
+            </select>
+            {historyWindow === "custom" && (
+              <input
+                type="month"
+                value={customWindowMonth}
+                onChange={(e) => setCustomWindowMonth(e.target.value)}
+                style={{ ...S.input, marginTop: 4 }}
+              />
+            )}
+            <span style={S.hint}>
+              Filters monthly returns to this window. Useful to see how a fund's stats look in the
+              current regime (e.g. Gator post-2020, when its Sharpe rose from 0.69 to 0.87).
+            </span>
           </label>
 
           <label style={S.label}>
@@ -278,10 +367,6 @@ export function FundAnalysis() {
             <input type="checkbox" checked={respectMin} onChange={(e) => setRespectMin(e.target.checked)} />
             Respect fund minimum investments
           </label>
-          <p style={S.hint}>
-            When on, portfolios that allocate less than a fund's ticket-size to that fund are
-            flagged as infeasible.
-          </p>
 
           <button
             type="button"
@@ -377,7 +462,7 @@ export function FundAnalysis() {
         </section>
       </div>
 
-      {result && <ResultView result={result} assetById={assetById} riskFreeRate={riskFreeRate} respectMin={respectMin} overrides={overrides} capital={capital} minInvOverrides={minInvOverrides} />}
+      {result && <ResultView result={result} assetById={assetById} riskFreeRate={riskFreeRate} respectMin={respectMin} overrides={overrides} minInvOverrides={minInvOverrides} historyWindowStart={historyWindowStart} />}
       {optimizeMutation.isError && (
         <div style={S.err}>{(optimizeMutation.error as Error).message}</div>
       )}
@@ -441,19 +526,31 @@ function ResultView({
   riskFreeRate,
   respectMin,
   overrides,
-  capital,
   minInvOverrides,
+  historyWindowStart,
 }: {
   result: OptimizeResponse;
   assetById: Record<string, FundAsset>;
   riskFreeRate: number;
   respectMin: boolean;
   overrides: Record<string, AssumptionOverrideIn>;
-  capital: number;
   minInvOverrides: Record<string, number>;
+  historyWindowStart: string | null;
 }) {
+  const capital = result.totalCapital;
+  const hasCurrent = result.currentTotal > 0;
   return (
     <>
+      <section style={S.banner}>
+        <div>
+          <strong>Total portfolio:</strong> {CURRENCY(capital)}
+          {hasCurrent && <> · <strong>Current:</strong> {CURRENCY(result.currentTotal)} · <strong>New capital:</strong> {CURRENCY(result.newCapital)}</>}
+        </div>
+        <div>
+          <strong>History window:</strong> {historyWindowStart ?? "All"} · {result.effectiveWindowMonths} months in view
+        </div>
+      </section>
+
       <section style={S.card}>
         <h2 style={S.h2}>Efficient frontier</h2>
         <p style={S.hint}>Each dot = one random portfolio; curve = Pareto-optimal set. Red = Max Sharpe, purple = Max Sortino, green = Min Variance, teal = Min Drawdown, grey = individual assets.</p>
@@ -474,10 +571,10 @@ function ResultView({
       </div>
 
       <div style={S.grid4}>
-        <PortfolioCard title="Max Sharpe" subtitle="Best risk-adjusted (vs. RF)" portfolio={result.maxSharpe} totalCapital={result.totalCapital} assetById={assetById} accent="#dc2626" />
-        <PortfolioCard title="Max Sortino" subtitle="Best downside-adjusted" portfolio={result.maxSortino} totalCapital={result.totalCapital} assetById={assetById} accent="#7c3aed" />
-        <PortfolioCard title="Min Variance" subtitle="Lowest vol" portfolio={result.minVariance} totalCapital={result.totalCapital} assetById={assetById} accent="#059669" />
-        <PortfolioCard title="Min Drawdown" subtitle="Smallest historical loss" portfolio={result.minDrawdown} totalCapital={result.totalCapital} assetById={assetById} accent="#0891b2" />
+        <PortfolioCard title="Max Sharpe" subtitle="Best risk-adjusted (vs. RF)" portfolio={result.maxSharpe} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#dc2626" />
+        <PortfolioCard title="Max Sortino" subtitle="Best downside-adjusted" portfolio={result.maxSortino} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#7c3aed" />
+        <PortfolioCard title="Min Variance" subtitle="Lowest vol" portfolio={result.minVariance} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#059669" />
+        <PortfolioCard title="Min Drawdown" subtitle="Smallest historical loss" portfolio={result.minDrawdown} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#0891b2" />
       </div>
 
       <section style={S.card}>
@@ -494,6 +591,7 @@ function ResultView({
           overrides={overrides}
           capital={capital}
           minInvOverrides={minInvOverrides}
+          historyWindowStart={historyWindowStart}
         />
       </section>
 
@@ -550,6 +648,7 @@ function PortfolioCard({
   subtitle,
   portfolio,
   totalCapital,
+  currentInv,
   assetById,
   accent,
 }: {
@@ -557,13 +656,27 @@ function PortfolioCard({
   subtitle: string;
   portfolio: PortfolioPoint;
   totalCapital: number;
+  currentInv: Record<string, number>;
   assetById: Record<string, FundAsset>;
   accent: string;
 }) {
-  const sortedWeights = Object.entries(portfolio.weights)
-    .filter(([, w]) => w > 0.005)
-    .sort(([, a], [, b]) => b - a);
+  // Show every asset that either has an allocation OR has a current position
+  // — so users can see "Sell $X" as a clear delta on funds they hold today.
+  const idsWithCurrent = Object.entries(currentInv).filter(([, v]) => v > 0).map(([id]) => id);
+  const idsInPortfolio = Object.entries(portfolio.weights).filter(([, w]) => w > 0.005).map(([id]) => id);
+  const allIds = Array.from(new Set([...idsInPortfolio, ...idsWithCurrent]));
+  const rows = allIds
+    .map((id) => {
+      const w = portfolio.weights[id] ?? 0;
+      const proposed = w * totalCapital;
+      const current = currentInv[id] ?? 0;
+      const delta = proposed - current;
+      return { id, w, proposed, current, delta };
+    })
+    .sort((a, b) => b.proposed - a.proposed);
   const violators = new Set(portfolio.violatesMinInvestment);
+  const hasCurrent = Object.values(currentInv).some((v) => v > 0);
+
   return (
     <section style={{ ...S.card, borderTop: `3px solid ${accent}`, marginBottom: 0 }}>
       <h2 style={{ ...S.h2, color: accent }}>{title}</h2>
@@ -576,19 +689,36 @@ function PortfolioCard({
         <Stat label="Max DD" value={portfolio.maxDrawdown < 0 ? PCT(portfolio.maxDrawdown) : "—"} />
       </div>
       <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>Fund</th>
+            <th style={S.thNum}>%</th>
+            <th style={S.thNum}>Target</th>
+            {hasCurrent && <th style={S.thNum}>Current</th>}
+            {hasCurrent && <th style={S.thNum}>Δ (add/sell)</th>}
+          </tr>
+        </thead>
         <tbody>
-          {sortedWeights.map(([id, w]) => (
+          {rows.map(({ id, w, proposed, current, delta }) => (
             <tr key={id}>
-              <td style={{ ...S.td, color: ASSET_COLOR[id] }}>{SHORT_NAME[id] ?? id}</td>
+              <td style={{ ...S.td, color: ASSET_COLOR[id], fontWeight: 600 }}>{SHORT_NAME[id] ?? id}</td>
               <td style={S.tdNum}>{PCT(w, 1)}</td>
-              <td style={S.tdNum}>{CURRENCY(w * totalCapital)}</td>
-              <td style={S.tdNum}>
-                {violators.has(id) ? (
-                  <span style={S.warnPill} title={`Below min ${CURRENCY(assetById[id]?.minInvestment ?? 0)}`}>
-                    ⚠
-                  </span>
-                ) : null}
-              </td>
+              <td style={S.tdNum}>{CURRENCY(proposed)}</td>
+              {hasCurrent && <td style={S.tdNumMuted}>{current > 0 ? CURRENCY(current) : "—"}</td>}
+              {hasCurrent && (
+                <td style={{
+                  ...S.tdNum,
+                  color: delta > 0.5 ? "#059669" : delta < -0.5 ? "#dc2626" : "#94a3b8",
+                  fontWeight: Math.abs(delta) > 1000 ? 600 : 400,
+                }}>
+                  {Math.abs(delta) < 0.5 ? "—" : (delta > 0 ? "+" : "") + CURRENCY(delta)}
+                </td>
+              )}
+              {violators.has(id) && (
+                <td style={S.tdNum}>
+                  <span style={S.warnPill} title={`Below min ${CURRENCY(assetById[id]?.minInvestment ?? 0)}`}>⚠</span>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -884,6 +1014,7 @@ function InteractiveBuilder({
   overrides,
   capital,
   minInvOverrides,
+  historyWindowStart,
 }: {
   result: OptimizeResponse;
   assetById: Record<string, FundAsset>;
@@ -892,6 +1023,7 @@ function InteractiveBuilder({
   overrides: Record<string, AssumptionOverrideIn>;
   capital: number;
   minInvOverrides: Record<string, number>;
+  historyWindowStart: string | null;
 }) {
   const ids = result.stats.map((s) => s.assetId);
 
@@ -916,6 +1048,7 @@ function InteractiveBuilder({
         riskFreeRate,
         totalCapital: capital,
         respectMinInvestment: respectMin,
+        historyWindowStart,
         overrides: Object.values(overrides),
         minInvestmentOverrides: Object.entries(minInvOverrides).map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       })
@@ -923,7 +1056,7 @@ function InteractiveBuilder({
         .finally(() => setPending(false));
     }, 200);
     return () => clearTimeout(t);
-  }, [weights, riskFreeRate, capital, respectMin, overrides, minInvOverrides]);
+  }, [weights, riskFreeRate, capital, respectMin, overrides, minInvOverrides, historyWindowStart]);
 
   const seedFrom = (preset: PortfolioPoint) => {
     const w: Record<string, number> = {};
@@ -942,6 +1075,19 @@ function InteractiveBuilder({
           <button style={S.pillBtn} onClick={() => seedFrom(result.maxSortino)}>Seed: Max Sortino</button>
           <button style={S.pillBtn} onClick={() => seedFrom(result.minVariance)}>Seed: Min Var</button>
           <button style={S.pillBtn} onClick={() => seedFrom(result.minDrawdown)}>Seed: Min DD</button>
+          {result.currentTotal > 0 && (
+            <button
+              style={{ ...S.pillBtn, background: "#dbeafe", borderColor: "#93c5fd" }}
+              onClick={() => {
+                const w: Record<string, number> = {};
+                for (const id of ids) w[id] = (result.currentInvestments[id] ?? 0) / result.totalCapital;
+                setWeights(w);
+              }}
+              title="Seed sliders from your current allocation (as % of total portfolio)"
+            >
+              Seed: Current
+            </button>
+          )}
           <button style={S.pillBtn} onClick={() => setWeights(Object.fromEntries(ids.map((id) => [id, 1 / ids.length])))}>Equal weight</button>
           <button style={S.pillBtn} onClick={() => setWeights(Object.fromEntries(ids.map((id) => [id, 0])))}>Zero</button>
         </div>
@@ -1175,4 +1321,26 @@ const S: Record<string, React.CSSProperties> = {
   statLabel: { fontSize: "0.6rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 },
   statValue: { fontSize: "0.95rem", fontWeight: 700, color: "#0f172a", fontVariantNumeric: "tabular-nums" },
   warnPill: { display: "inline-block", background: "#fef3c7", color: "#92400e", padding: "1px 6px", borderRadius: 999, fontSize: "0.65rem", fontWeight: 700 },
+  banner: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    background: "#eef2ff",
+    border: "1px solid #c7d2fe",
+    borderRadius: 6,
+    padding: "8px 14px",
+    fontSize: "0.78rem",
+    color: "#312e81",
+    marginBottom: 12,
+  },
+  summaryBox: {
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 6,
+    padding: "8px 10px",
+    marginBottom: 12,
+    fontSize: "0.75rem",
+  },
+  summaryRow: { display: "flex", justifyContent: "space-between", padding: "2px 0", color: "#334155" },
+  summaryVal: { fontVariantNumeric: "tabular-nums", fontWeight: 500 },
 };

@@ -39,6 +39,15 @@ class ReturnSeries:
     asset_id: str
     returns: dict[str, float]     # month → decimal return
 
+    def since(self, start_month: str) -> "ReturnSeries":
+        """Return a new series filtered to months >= start_month (inclusive).
+        Used by the history-window control on the frontend — lets users see
+        e.g. only post-2021 stats for a fund whose full history spans 2006."""
+        return ReturnSeries(
+            asset_id=self.asset_id,
+            returns={m: r for m, r in self.returns.items() if m >= start_month},
+        )
+
 
 @dataclass
 class AssetStat:

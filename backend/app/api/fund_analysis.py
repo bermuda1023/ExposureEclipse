@@ -88,9 +88,17 @@ class MinInvestmentOverrideIn(CamelModel):
     min_investment: float      # dollars; 0 = no minimum
 
 
+class CurrentInvestmentIn(CamelModel):
+    asset_id: str
+    amount: float              # dollars currently held in this fund
+
+
 class OptimizeRequest(CamelModel):
     asset_ids: list[str] = Field(..., description="Subset of catalog IDs")
-    total_capital: float = Field(1_000_000, gt=0)
+    new_capital: float = Field(1_000_000, ge=0, description="New $ to deploy on top of current holdings")
+    current_investments: list[CurrentInvestmentIn] = Field(default_factory=list)
+    no_sell: bool = Field(False, description="If True, current holdings are minimum weights (can only add)")
+    history_window_start: str | None = Field(None, description="YYYY-MM inclusive; None = full history")
     risk_free_rate: float = 0.04
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
@@ -142,8 +150,13 @@ class OptimizeResponse(CamelModel):
     min_variance: PortfolioOut
     min_drawdown: PortfolioOut
     total_capital: float
+    new_capital: float
+    current_total: float
+    current_investments: dict[str, float]
     risk_free_rate: float
     asset_series: list[AssetSeriesOut]
+    history_window_start: str | None
+    effective_window_months: int
 
 
 class PortfolioPoint_wire(CamelModel):
@@ -163,6 +176,7 @@ class CustomPortfolioRequest(CamelModel):
     risk_free_rate: float = 0.04
     total_capital: float = 1_000_000
     respect_min_investment: bool = True
+    history_window_start: str | None = None
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
     min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
 
@@ -248,9 +262,16 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             detail={"code": "VALIDATION_ERROR", "message": "Pick at least 2 assets."},
         )
 
-    # Build series + empirical stats
-    series_by_id = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
+    # Build series (with optional history window) + empirical stats.
+    full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
+    if req.history_window_start:
+        series_by_id = {a: full_series[a].since(req.history_window_start) for a in req.asset_ids}
+    else:
+        series_by_id = full_series
     empirical = {a: compute_asset_stats(series_by_id[a]) for a in req.asset_ids}
+    effective_window_months = max(
+        (len(series_by_id[a].returns) for a in req.asset_ids), default=0
+    )
 
     # Overrides
     ov_by_id: dict[str, AssumptionOverride] = {}
@@ -266,18 +287,35 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
     rho, nn = correlation_matrix(series_by_id, ov_by_id)
 
+    # Current holdings + total capital
+    current_by_id: dict[str, float] = {c.asset_id: c.amount for c in req.current_investments if c.amount > 0}
+    current_total = sum(current_by_id.values())
+    total_capital = current_total + req.new_capital
+    if total_capital <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "VALIDATION_ERROR", "message": "Total capital (current + new) must be > 0."},
+        )
+
     # Effective min investments: catalog default, overridden by user.
     min_inv_override = {m.asset_id: m.min_investment for m in req.min_investment_overrides}
     effective_min_inv: dict[str, float] = {}
     for a in req.asset_ids:
         effective_min_inv[a] = min_inv_override.get(a, idx[a]["minInvestment"])
 
+    # Participation floor per asset. Combines:
+    #   - the ticket-size min (if respect_min_investment)
+    #   - the "no-sell" floor (if no_sell): floor = current_holding / total_capital
+    # We take the MAX of the two so both constraints hold simultaneously.
     min_weights: dict[str, float] = {}
-    if req.respect_min_investment:
-        for a in req.asset_ids:
-            mi = effective_min_inv[a]
-            if mi > 0:
-                min_weights[a] = min(1.0, mi / req.total_capital)
+    for a in req.asset_ids:
+        floors: list[float] = []
+        if req.respect_min_investment and effective_min_inv[a] > 0:
+            floors.append(min(1.0, effective_min_inv[a] / total_capital))
+        if req.no_sell and current_by_id.get(a, 0) > 0:
+            floors.append(min(1.0, current_by_id[a] / total_capital))
+        if floors:
+            min_weights[a] = max(floors)
 
     max_weights: dict[str, float] = {mw.asset_id: mw.max_weight for mw in req.max_weights if mw.asset_id in req.asset_ids}
 
@@ -294,7 +332,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     def _flag_violations(weights: dict[str, float]) -> list[str]:
         out = []
         for a, w in weights.items():
-            allocation = w * req.total_capital
+            allocation = w * total_capital
             mi = effective_min_inv.get(a, idx[a]["minInvestment"])
             if w > 1e-6 and mi > 0 and allocation + 0.5 < mi:
                 out.append(a)
@@ -379,9 +417,14 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         max_sortino=_to_out(max_sortino if max_sortino is not None else max_sharpe),
         min_variance=_to_out(min_var),
         min_drawdown=_to_out(min_dd),
-        total_capital=req.total_capital,
+        total_capital=total_capital,
+        new_capital=req.new_capital,
+        current_total=current_total,
+        current_investments={a: current_by_id.get(a, 0.0) for a in req.asset_ids},
         risk_free_rate=req.risk_free_rate,
         asset_series=asset_series,
+        history_window_start=req.history_window_start,
+        effective_window_months=effective_window_months,
     )
 
 
@@ -409,7 +452,11 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     weights = {k: v / total for k, v in weights.items()}
 
     asset_ids = list(weights)
-    series_by_id = {a: series_from_asset_json(idx[a]) for a in asset_ids}
+    full_series = {a: series_from_asset_json(idx[a]) for a in asset_ids}
+    if req.history_window_start:
+        series_by_id = {a: full_series[a].since(req.history_window_start) for a in asset_ids}
+    else:
+        series_by_id = full_series
     empirical = {a: compute_asset_stats(series_by_id[a]) for a in asset_ids}
     ov_by_id: dict[str, AssumptionOverride] = {}
     for o in req.overrides:

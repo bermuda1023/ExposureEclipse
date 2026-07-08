@@ -45,9 +45,17 @@ export interface MinInvestmentOverrideIn {
   minInvestment: number;
 }
 
+export interface CurrentInvestmentIn {
+  assetId: string;
+  amount: number;
+}
+
 export interface OptimizeRequest {
   assetIds: string[];
-  totalCapital: number;
+  newCapital: number;
+  currentInvestments: CurrentInvestmentIn[];
+  noSell: boolean;
+  historyWindowStart: string | null;
   riskFreeRate: number;
   respectMinInvestment: boolean;
   overrides: AssumptionOverrideIn[];
@@ -80,6 +88,7 @@ export interface CustomPortfolioRequest {
   riskFreeRate: number;
   totalCapital: number;
   respectMinInvestment: boolean;
+  historyWindowStart: string | null;
   overrides: AssumptionOverrideIn[];
   minInvestmentOverrides: MinInvestmentOverrideIn[];
 }
@@ -113,8 +122,13 @@ export interface OptimizeResponse {
   minVariance: PortfolioPoint;
   minDrawdown: PortfolioPoint;
   totalCapital: number;
+  newCapital: number;
+  currentTotal: number;
+  currentInvestments: Record<string, number>;
   riskFreeRate: number;
   assetSeries: AssetSeries[];
+  historyWindowStart: string | null;
+  effectiveWindowMonths: number;
 }
 
 export const fetchFundAssets = () =>
