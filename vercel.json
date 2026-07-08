@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd frontend && npm install && npm run build",
+  "buildCommand": "cd frontend && rm -rf node_modules/.vite dist && npm ci && npm run build",
   "outputDirectory": "frontend/dist",
   "framework": null,
   "installCommand": "echo 'install handled per workspace'",
