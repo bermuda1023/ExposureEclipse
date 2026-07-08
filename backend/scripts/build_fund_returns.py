@@ -304,6 +304,17 @@ RMC_ANNUAL = {
 }
 RMC_END_MONTH = {2026: 6}
 
+# MSCI World Total Return — global developed-market equity index
+# (the natural benchmark for Orbis / Contrarius global-equity funds)
+MSCI_WORLD_ANNUAL = {
+    2006: 0.201, 2007: 0.090, 2008: -0.407, 2009: 0.299, 2010: 0.118,
+    2011: -0.055, 2012: 0.158, 2013: 0.267, 2014: 0.049, 2015: -0.009,
+    2016: 0.075, 2017: 0.224, 2018: -0.087, 2019: 0.277, 2020: 0.159,
+    2021: 0.218, 2022: -0.181, 2023: 0.238, 2024: 0.187, 2025: 0.191,
+    2026: 0.070,
+}
+MSCI_WORLD_END_MONTH = {2026: 6}
+
 # S&P Midcap 400 TR (MDY) — Upslope's stated benchmark
 MDY_ANNUAL = {
     2006: 0.103, 2007: 0.080, 2008: -0.367, 2009: 0.374, 2010: 0.266,
@@ -369,6 +380,7 @@ def main() -> None:
     r2k = _build_reference(R2K_ANNUAL, monthly_sigma=0.055, end_partial=R2K_END_MONTH, seed=5)
     rmc = _build_reference(RMC_ANNUAL, monthly_sigma=0.065, end_partial=RMC_END_MONTH, seed=6)
     mdy = _build_reference(MDY_ANNUAL, monthly_sigma=0.050, end_partial=MDY_END_MONTH, seed=7)
+    msci_world = _build_reference(MSCI_WORLD_ANNUAL, monthly_sigma=0.047, end_partial=MSCI_WORLD_END_MONTH, seed=8)
 
     payload = {
         "asOf": "2026-06-30",
@@ -615,6 +627,20 @@ def main() -> None:
                 "inception": "2006-01",
                 "returns": rmc,
                 "source": "Synthesised monthly; recent YTD anchor from Alluvial's May 2026 factsheet",
+            },
+            {
+                "id": "msci_world",
+                "name": "MSCI World Total Return",
+                "kind": "reference",
+                "strategy": "Global developed-market equity index (natural benchmark for Orbis / Contrarius / any global long-only)",
+                "manager": "MSCI Inc.",
+                "minInvestment": 0,
+                "aumMillions": None,
+                "fees": "N/A (index; investable via URTH ETF ~0.24%)",
+                "lockup": "N/A",
+                "inception": "2006-01",
+                "returns": msci_world,
+                "source": "Synthesised monthly from published MSCI World annual TR anchors",
             },
             {
                 "id": "mdy",

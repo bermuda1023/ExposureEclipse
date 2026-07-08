@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   fetchFundAssets,
+  fetchRollingStats,
   optimizePortfolio,
   rescoreIr,
   runRobustnessScan,
@@ -32,6 +33,7 @@ import {
   type OptimizeResponse,
   type PortfolioPoint,
   type RobustnessResponse,
+  type RollingStatsResponse,
 } from "../api/fundAnalysis";
 
 // Sensible priors for short-history / illiquid assets.
@@ -73,10 +75,10 @@ const DEFAULT_PER_ASSET_BENCHMARKS: Record<string, string> = {
   // Contrarius is long-only global equity; MSCI World would be the true
   // benchmark but we don't ship it. SPY is the closest global-equity
   // proxy available in the catalog.
-  contrarius: "spy",
-  // Orbis funds: long-only global — closest peer benchmarks in the
-  // catalog are SPY (equity) and HFRX Global (balanced multi-asset).
-  orbis_equity: "spy",
+  // Global long-only funds → MSCI World is the natural benchmark
+  contrarius: "msci_world",
+  orbis_equity: "msci_world",
+  // Multi-asset balanced fund → use the multi-strategy hedge fund index
   orbis_balanced: "hfrx_global",
 };
 
@@ -801,6 +803,12 @@ function ResultView({
         )}
       />
 
+      <ManagerDriftCard
+        assets={assets}
+        historyWindowStart={historyWindowStart}
+        perAssetBenchmarks={perAssetBenchmarks}
+      />
+
       <div style={S.grid2}>
         <section style={S.card}>
           <h2 style={S.h2}>Growth of $1 (log scale)</h2>
@@ -924,6 +932,304 @@ function ResultView({
         </table>
       </section>
     </>
+  );
+}
+
+// ─────────────────────── Manager Drift card ───────────────────────
+
+function ManagerDriftCard({
+  assets,
+  historyWindowStart,
+  perAssetBenchmarks,
+}: {
+  assets: FundAsset[];
+  historyWindowStart: string | null;
+  perAssetBenchmarks: Record<string, string>;
+}) {
+  const funds = useMemo(() => assets.filter((a) => a.kind === "hedge_fund"), [assets]);
+  const [selectedFund, setSelectedFund] = useState<string>(funds[0]?.id ?? "");
+  const [benchmarkId, setBenchmarkId] = useState<string>("spy");
+  const [windowMonths, setWindowMonths] = useState<number>(36);
+
+  useEffect(() => {
+    // Default benchmark to the fund's per-asset default when the fund changes.
+    if (selectedFund && perAssetBenchmarks[selectedFund]) {
+      setBenchmarkId(perAssetBenchmarks[selectedFund]);
+    }
+  }, [selectedFund, perAssetBenchmarks]);
+
+  useEffect(() => {
+    if (!selectedFund && funds[0]) setSelectedFund(funds[0].id);
+  }, [funds, selectedFund]);
+
+  const query = useQuery({
+    queryKey: ["rolling-stats", selectedFund, benchmarkId, windowMonths, historyWindowStart],
+    queryFn: () => fetchRollingStats({
+      assetId: selectedFund,
+      benchmarkAssetId: benchmarkId,
+      windowMonths,
+      historyWindowStart,
+      riskFreeRate: 0.04,
+    }),
+    enabled: !!selectedFund,
+    staleTime: 60_000,
+  });
+
+  return (
+    <section style={S.card}>
+      <h2 style={S.h2}>Manager drift + data adequacy</h2>
+      <p style={S.hint}>
+        Answers <b>"Do I have enough data?"</b> and <b>"Has the manager's behaviour changed?"</b>
+        Splits the fund's history into first-half vs second-half, compares CAGR / vol / Sharpe,
+        and flags meaningful shifts. Also shows rolling {windowMonths}-month statistics so you
+        can spot trends visually. Data-adequacy classification tells you how much confidence to
+        put in the numbers.
+      </p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
+        <label style={{ ...S.label, marginBottom: 0, minWidth: 220 }}>
+          Fund
+          <select value={selectedFund} onChange={(e) => setSelectedFund(e.target.value)} style={S.input}>
+            {funds.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        </label>
+        <label style={{ ...S.label, marginBottom: 0, minWidth: 220 }}>
+          Benchmark
+          <select value={benchmarkId} onChange={(e) => setBenchmarkId(e.target.value)} style={S.input}>
+            {assets.map((a) => (
+              <option key={a.id} value={a.id} disabled={a.id === selectedFund}>{a.name}</option>
+            ))}
+          </select>
+        </label>
+        <label style={{ ...S.label, marginBottom: 0, minWidth: 140 }}>
+          Rolling window
+          <select value={windowMonths} onChange={(e) => setWindowMonths(Number(e.target.value))} style={S.input}>
+            <option value={24}>24 months</option>
+            <option value={36}>36 months</option>
+            <option value={60}>60 months</option>
+            <option value={120}>120 months</option>
+          </select>
+        </label>
+      </div>
+
+      {query.isLoading && <p style={S.hint}>Computing…</p>}
+      {query.data && <DriftResult data={query.data} />}
+    </section>
+  );
+}
+
+function DriftResult({ data }: { data: RollingStatsResponse }) {
+  const ADEQUACY_COLOR: Record<string, string> = {
+    unreliable: "#dc2626",
+    sparse: "#d97706",
+    decent: "#059669",
+    strong: "#0f766e",
+  };
+  const SEVERITY_COLOR: Record<string, string> = {
+    minor: "#94a3b8",
+    notable: "#d97706",
+    significant: "#dc2626",
+  };
+
+  return (
+    <>
+      <div style={{ ...S.calloutInfo, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#312e81" }}>
+        <b style={{ color: ADEQUACY_COLOR[data.dataAdequacy] }}>{data.dataAdequacy.toUpperCase()}</b>
+        {" — "}{data.dataAdequacyMessage}
+      </div>
+
+      <div style={{ ...S.grid2, marginBottom: 12 }}>
+        <div style={S.card}>
+          <h3 style={{ ...S.h2, fontSize: "0.85rem", marginBottom: 8 }}>Split-sample comparison</h3>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Period</th>
+                <th style={S.thNum}>CAGR</th>
+                <th style={S.thNum}>Vol</th>
+                <th style={S.thNum}>Sharpe</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={S.td}>First half</td>
+                <td style={S.tdNum}>{PCT(data.firstHalfCagr)}</td>
+                <td style={S.tdNum}>{PCT(data.firstHalfVol)}</td>
+                <td style={S.tdNum}>{data.firstHalfSharpe.toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td style={S.td}>Second half</td>
+                <td style={S.tdNum}>{PCT(data.secondHalfCagr)}</td>
+                <td style={S.tdNum}>{PCT(data.secondHalfVol)}</td>
+                <td style={S.tdNum}>{data.secondHalfSharpe.toFixed(2)}</td>
+              </tr>
+              <tr style={{ background: "#f8fafc", fontWeight: 600 }}>
+                <td style={S.td}>Full period</td>
+                <td style={S.tdNum}>{PCT(data.fullPeriodCagr)}</td>
+                <td style={S.tdNum}>{PCT(data.fullPeriodVol)}</td>
+                <td style={S.tdNum}>{data.fullPeriodSharpe.toFixed(2)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style={S.card}>
+          <h3 style={{ ...S.h2, fontSize: "0.85rem", marginBottom: 8 }}>Drift flags</h3>
+          {data.driftFlags.map((f) => (
+            <div key={f.metric} style={{
+              marginBottom: 8,
+              padding: "6px 10px",
+              borderLeft: `3px solid ${SEVERITY_COLOR[f.severity]}`,
+              background: "#f8fafc",
+              borderRadius: 4,
+              fontSize: "0.75rem",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <span><b>{f.metric}</b> — <span style={{ color: SEVERITY_COLOR[f.severity], fontWeight: 600 }}>{f.severity.toUpperCase()}</span></span>
+                <span style={{ color: f.change > 0 ? "#059669" : "#dc2626", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                  {f.change > 0 ? "+" : ""}{f.metric === "Sharpe" ? f.change.toFixed(2) : PCT(f.change)}
+                </span>
+              </div>
+              <div style={{ color: "#475569", fontSize: "0.7rem", marginTop: 3 }}>{f.interpretation}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <h3 style={{ ...S.h2, fontSize: "0.85rem", marginBottom: 4 }}>
+          Rolling {data.windowMonths}-month statistics vs {data.benchmarkName}
+        </h3>
+        <p style={S.hint}>Watch for trends — a steadily rising vol line means the fund quietly got more aggressive; a falling correlation means it started acting less like the benchmark.</p>
+        <RollingStatsChart data={data} />
+      </div>
+    </>
+  );
+}
+
+function RollingStatsChart({ data }: { data: RollingStatsResponse }) {
+  const W = 780;
+  const H = 320;
+  const P = { top: 12, right: 100, bottom: 26, left: 55 };
+  const iw = W - P.left - P.right;
+  const ih = H - P.top - P.bottom;
+
+  const [hover, setHover] = useState<number | null>(null);
+
+  if (data.windows.length < 2) {
+    return <p style={S.hint}>Not enough windows to plot ({data.windows.length}). Try a shorter rolling window or a fund with more history.</p>;
+  }
+
+  const parseMonth = (m: string) => {
+    const [y, mm] = m.split("-").map(Number);
+    return y! + (mm! - 1) / 12;
+  };
+  const months = data.windows.map((w) => parseMonth(w.endMonth));
+  const xMin = months[0]!;
+  const xMax = months[months.length - 1]!;
+
+  // Multi-axis: CAGR + Vol on left (%), Sharpe + IR + Corr on right (unitless)
+  const leftMin = Math.min(0, ...data.windows.map((w) => Math.min(w.cagr, w.vol)));
+  const leftMax = Math.max(...data.windows.map((w) => Math.max(w.cagr, w.vol)));
+  const rightMin = Math.min(-1, ...data.windows.map((w) => Math.min(w.sharpe, w.informationRatio, w.correlation)));
+  const rightMax = Math.max(2, ...data.windows.map((w) => Math.max(w.sharpe, w.informationRatio, w.correlation)));
+
+  const x = (m: string) => P.left + ((parseMonth(m) - xMin) / (xMax - xMin || 1)) * iw;
+  const yL = (v: number) => P.top + ih - ((v - leftMin) / (leftMax - leftMin || 1)) * ih;
+  const yR = (v: number) => P.top + ih - ((v - rightMin) / (rightMax - rightMin || 1)) * ih;
+
+  const yearStep = Math.max(1, Math.floor((xMax - xMin) / 6));
+  const xTicks: string[] = [];
+  for (let yr = Math.ceil(xMin); yr <= Math.floor(xMax); yr += yearStep) xTicks.push(`${yr}-01`);
+
+  const path = (fn: (w: typeof data.windows[0]) => number) =>
+    data.windows.map((w, i) => `${i === 0 ? "M" : "L"}${x(w.endMonth)},${fn(w)}`).join(" ");
+  const cagrD = path((w) => yL(w.cagr));
+  const volD = path((w) => yL(w.vol));
+  const sharpeD = path((w) => yR(w.sharpe));
+  const irD = path((w) => yR(w.informationRatio));
+  const corrD = path((w) => yR(w.correlation));
+
+  const series = [
+    { name: "CAGR", color: "#1e40af", d: cagrD, unit: "%", axis: "left" },
+    { name: "Vol", color: "#dc2626", d: volD, unit: "%", axis: "left" },
+    { name: "Sharpe", color: "#059669", d: sharpeD, unit: "", axis: "right" },
+    { name: "IR", color: "#ea580c", d: irD, unit: "", axis: "right" },
+    { name: `Corr vs bench`, color: "#7c3aed", d: corrD, unit: "", axis: "right" },
+  ];
+
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W;
+    let bestI = 0, bestD = Infinity;
+    for (let i = 0; i < data.windows.length; i++) {
+      const d = Math.abs(x(data.windows[i]!.endMonth) - mx);
+      if (d < bestD) { bestD = d; bestI = i; }
+    }
+    setHover(bestI);
+  };
+
+  return (
+    <div>
+      <svg width={W} height={H} style={{ background: "#fafbfc", cursor: "crosshair" }}
+        onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        {/* Left y-axis grid + labels */}
+        {[-0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5].filter((v) => v >= leftMin && v <= leftMax).map((v) => (
+          <g key={`gl${v}`}>
+            <line x1={P.left} y1={yL(v)} x2={P.left + iw} y2={yL(v)} stroke="#e2e8f0" strokeWidth={1} />
+            <text x={P.left - 6} y={yL(v) + 3} textAnchor="end" fontSize={10} fill="#64748b">{PCT(v, 0)}</text>
+          </g>
+        ))}
+        {/* Right y-axis labels */}
+        {[-1, 0, 0.5, 1, 1.5, 2].filter((v) => v >= rightMin && v <= rightMax).map((v) => (
+          <text key={`gr${v}`} x={P.left + iw + 6} y={yR(v) + 3} textAnchor="start" fontSize={10} fill="#64748b">{v.toFixed(1)}</text>
+        ))}
+        {/* X ticks */}
+        {xTicks.map((m) => (
+          <g key={`gx${m}`}>
+            <line x1={x(m)} y1={P.top} x2={x(m)} y2={P.top + ih} stroke="#eef2f7" strokeWidth={1} />
+            <text x={x(m)} y={P.top + ih + 14} textAnchor="middle" fontSize={10} fill="#64748b">{m.slice(0, 4)}</text>
+          </g>
+        ))}
+
+        {/* Zero line for right axis (Sharpe, IR, corr = 0 is a meaningful reference) */}
+        <line x1={P.left} y1={yR(0)} x2={P.left + iw} y2={yR(0)} stroke="#cbd5e1" strokeDasharray="3,3" />
+
+        {series.map((s) => (
+          <path key={s.name} d={s.d} stroke={s.color} strokeWidth={1.8} fill="none" opacity={0.85} />
+        ))}
+
+        {hover !== null && (
+          <line x1={x(data.windows[hover]!.endMonth)} y1={P.top} x2={x(data.windows[hover]!.endMonth)} y2={P.top + ih} stroke="#334155" strokeDasharray="3,3" opacity={0.5} />
+        )}
+
+        <text x={14} y={P.top + ih / 2} transform={`rotate(-90 14 ${P.top + ih / 2})`} textAnchor="middle" fontSize={11} fill="#334155">
+          Left: CAGR / Vol
+        </text>
+        <text x={P.left + iw + 80} y={P.top + ih / 2} transform={`rotate(90 ${P.left + iw + 80} ${P.top + ih / 2})`} textAnchor="middle" fontSize={11} fill="#334155">
+          Right: Sharpe / IR / Corr
+        </text>
+
+        {/* Legend */}
+        {series.map((s, i) => (
+          <g key={`leg${s.name}`}>
+            <line x1={P.left + iw + 8} y1={P.top + 8 + i * 14} x2={P.left + iw + 20} y2={P.top + 8 + i * 14} stroke={s.color} strokeWidth={2} />
+            <text x={P.left + iw + 24} y={P.top + 11 + i * 14} fontSize={10} fill="#334155">{s.name}</text>
+          </g>
+        ))}
+      </svg>
+      {hover !== null && (
+        <div style={S.chartTooltip}>
+          <b>{data.windows[hover]!.endMonth}</b>
+          <span> · CAGR {PCT(data.windows[hover]!.cagr)}</span>
+          <span> · Vol {PCT(data.windows[hover]!.vol)}</span>
+          <span> · Sharpe {data.windows[hover]!.sharpe.toFixed(2)}</span>
+          <span> · IR {data.windows[hover]!.informationRatio.toFixed(2)}</span>
+          <span> · Corr {data.windows[hover]!.correlation.toFixed(2)}</span>
+        </div>
+      )}
+    </div>
   );
 }
 

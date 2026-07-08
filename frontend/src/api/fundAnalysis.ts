@@ -209,3 +209,53 @@ export interface RobustnessResponse {
 
 export const runRobustnessScan = (req: RobustnessRequest) =>
   apiPost<RobustnessResponse>("/fund-analysis/robustness", req);
+
+export interface RollingStatsRequest {
+  assetId: string;
+  benchmarkAssetId: string;
+  windowMonths: number;
+  historyWindowStart: string | null;
+  riskFreeRate: number;
+}
+
+export interface RollingWindow {
+  endMonth: string;
+  cagr: number;
+  vol: number;
+  sharpe: number;
+  correlation: number;
+  informationRatio: number;
+}
+
+export interface DriftFlag {
+  metric: string;
+  firstHalf: number;
+  secondHalf: number;
+  change: number;
+  severity: "minor" | "notable" | "significant";
+  interpretation: string;
+}
+
+export interface RollingStatsResponse {
+  assetId: string;
+  benchmarkAssetId: string;
+  benchmarkName: string;
+  windowMonths: number;
+  nMonthsTotal: number;
+  windows: RollingWindow[];
+  driftFlags: DriftFlag[];
+  dataAdequacy: "unreliable" | "sparse" | "decent" | "strong";
+  dataAdequacyMessage: string;
+  fullPeriodCagr: number;
+  fullPeriodVol: number;
+  fullPeriodSharpe: number;
+  firstHalfCagr: number;
+  firstHalfVol: number;
+  firstHalfSharpe: number;
+  secondHalfCagr: number;
+  secondHalfVol: number;
+  secondHalfSharpe: number;
+}
+
+export const fetchRollingStats = (req: RollingStatsRequest) =>
+  apiPost<RollingStatsResponse>("/fund-analysis/rolling-stats", req);

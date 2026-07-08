@@ -598,6 +598,272 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     )
 
 
+class RollingStatsRequest(CamelModel):
+    """Compute rolling statistics for a single fund to detect manager
+    drift — see how CAGR / vol / Sharpe / correlation-with-benchmark /
+    IR change over rolling N-month windows. Flags when the split-sample
+    stats look meaningfully different (potential regime change)."""
+    asset_id: str
+    benchmark_asset_id: str = "spy"
+    window_months: int = Field(36, ge=12, le=120)
+    history_window_start: str | None = None
+    risk_free_rate: float = 0.04
+
+
+class RollingWindow(CamelModel):
+    end_month: str
+    cagr: float                # annualised CAGR over the rolling window
+    vol: float                 # annualised vol
+    sharpe: float
+    correlation: float         # vs benchmark over the window
+    information_ratio: float
+
+
+class DriftFlag(CamelModel):
+    metric: str                # "CAGR" | "Vol" | "Sharpe" | "Correlation" | "IR"
+    first_half: float
+    second_half: float
+    change: float              # second - first
+    severity: str              # "minor" | "notable" | "significant"
+    interpretation: str
+
+
+class RollingStatsResponse(CamelModel):
+    asset_id: str
+    benchmark_asset_id: str
+    benchmark_name: str
+    window_months: int
+    n_months_total: int
+    windows: list[RollingWindow]
+    drift_flags: list[DriftFlag]
+    data_adequacy: str
+    data_adequacy_message: str
+    full_period_cagr: float
+    full_period_vol: float
+    full_period_sharpe: float
+    first_half_cagr: float
+    first_half_vol: float
+    first_half_sharpe: float
+    second_half_cagr: float
+    second_half_vol: float
+    second_half_sharpe: float
+
+
+@router.post("/rolling-stats", response_model=RollingStatsResponse)
+def rolling_stats(req: RollingStatsRequest) -> RollingStatsResponse:
+    """Rolling-window statistics for a single fund.
+
+    For each window (`window_months` long) sliding through the fund's
+    history, compute annualised CAGR + vol + Sharpe + correlation with
+    the benchmark + Information Ratio. Then split the full history into
+    first / second halves and compare — if the halves look meaningfully
+    different, flag the metric as drift (severity classified: minor /
+    notable / significant based on effect size).
+
+    Data adequacy classification:
+      < 24 months        UNRELIABLE
+      24-59 months       SPARSE (statistical noise dominates)
+      60-119 months      DECENT (5-10 years — reasonable for CAGR/vol)
+      120+ months        STRONG (a full market cycle observed)
+    """
+    catalog = _load_catalog()
+    idx = _asset_by_id(catalog)
+    if req.asset_id not in idx:
+        raise HTTPException(status_code=404, detail={"code": "DATASET_NOT_FOUND", "message": req.asset_id})
+    if req.benchmark_asset_id not in idx:
+        raise HTTPException(status_code=404, detail={"code": "DATASET_NOT_FOUND", "message": req.benchmark_asset_id})
+
+    fund_series = series_from_asset_json(idx[req.asset_id])
+    bench_series = series_from_asset_json(idx[req.benchmark_asset_id])
+    if req.history_window_start:
+        fund_series = fund_series.since(req.history_window_start)
+        bench_series = bench_series.since(req.history_window_start)
+
+    fund_months = sorted(fund_series.returns)
+    n_months = len(fund_months)
+
+    # Data adequacy
+    if n_months < 24:
+        adequacy = "unreliable"
+        msg = f"Only {n_months} months of history — any statistic here has huge confidence intervals. Treat as directional at best."
+    elif n_months < 60:
+        adequacy = "sparse"
+        msg = f"{n_months} months of history ({n_months / 12:.1f} years). Point estimates are reasonable but Sortino / max-DD / correlation are noisy."
+    elif n_months < 120:
+        adequacy = "decent"
+        msg = f"{n_months} months ({n_months / 12:.1f} years) — enough for CAGR / vol / Sharpe with modest confidence intervals. Correlation stable."
+    else:
+        adequacy = "strong"
+        msg = f"{n_months} months ({n_months / 12:.1f} years) — spans a full market cycle. Statistics are reliable."
+
+    # Rolling windows
+    rolling: list[RollingWindow] = []
+    window = req.window_months
+    for end_i in range(window, n_months + 1):
+        end_month = fund_months[end_i - 1]
+        window_months_slice = fund_months[end_i - window : end_i]
+        window_rets = [fund_series.returns[m] for m in window_months_slice]
+        # Benchmark returns aligned to the window
+        bench_rets_aligned = []
+        for m in window_months_slice:
+            if m in bench_series.returns:
+                bench_rets_aligned.append(bench_series.returns[m])
+            else:
+                bench_rets_aligned.append(None)  # gap
+        cagr = _cagr_wrapper(window_rets)
+        vol = _annual_vol(window_rets)
+        sharpe = (cagr - req.risk_free_rate) / vol if vol > 0 else 0.0
+        # Correlation + IR — only use months where both are defined
+        paired = [(f, b) for f, b in zip(window_rets, bench_rets_aligned) if b is not None]
+        corr = _correlation(paired)
+        ir_val, _te = information_ratio_and_te(
+            [(m, r) for m, r in zip(window_months_slice, window_rets)],
+            bench_series,
+        )
+        rolling.append(
+            RollingWindow(
+                end_month=end_month,
+                cagr=round(cagr, 6),
+                vol=round(vol, 6),
+                sharpe=round(sharpe, 6),
+                correlation=round(corr, 6),
+                information_ratio=round(ir_val, 6),
+            )
+        )
+
+    # Split-sample drift detection
+    def _period_stats(rets: list[float]) -> tuple[float, float, float]:
+        if len(rets) < 6:
+            return 0.0, 0.0, 0.0
+        c = _cagr_wrapper(rets)
+        v = _annual_vol(rets)
+        s = (c - req.risk_free_rate) / v if v > 0 else 0.0
+        return c, v, s
+
+    half = n_months // 2
+    first_rets = [fund_series.returns[m] for m in fund_months[:half]]
+    second_rets = [fund_series.returns[m] for m in fund_months[half:]]
+    fc, fv, fs = _period_stats(first_rets)
+    sc, sv, ss = _period_stats(second_rets)
+    full_rets = [fund_series.returns[m] for m in fund_months]
+    full_c, full_v, full_s = _period_stats(full_rets)
+
+    def _severity(change: float, threshold_minor: float, threshold_notable: float) -> str:
+        a = abs(change)
+        if a < threshold_minor:
+            return "minor"
+        if a < threshold_notable:
+            return "notable"
+        return "significant"
+
+    flags: list[DriftFlag] = []
+    # CAGR drift: > 5 percentage points is notable, > 10 is significant
+    dc = sc - fc
+    flags.append(
+        DriftFlag(
+            metric="CAGR",
+            first_half=round(fc, 6),
+            second_half=round(sc, 6),
+            change=round(dc, 6),
+            severity=_severity(dc, 0.03, 0.08),
+            interpretation=(
+                f"Returns {'improved' if dc > 0 else 'declined'} by {abs(dc)*100:.1f}pt between the two halves."
+                + (" Could reflect regime shift, strategy evolution, or luck." if abs(dc) >= 0.03 else "")
+            ),
+        )
+    )
+    # Vol drift
+    dv = sv - fv
+    flags.append(
+        DriftFlag(
+            metric="Vol",
+            first_half=round(fv, 6),
+            second_half=round(sv, 6),
+            change=round(dv, 6),
+            severity=_severity(dv, 0.02, 0.06),
+            interpretation=(
+                f"Volatility {'rose' if dv > 0 else 'fell'} by {abs(dv)*100:.1f}pt."
+                + (" Manager may have changed leverage / concentration." if abs(dv) >= 0.02 else "")
+            ),
+        )
+    )
+    # Sharpe drift
+    ds = ss - fs
+    flags.append(
+        DriftFlag(
+            metric="Sharpe",
+            first_half=round(fs, 6),
+            second_half=round(ss, 6),
+            change=round(ds, 6),
+            severity=_severity(ds, 0.20, 0.50),
+            interpretation=(
+                f"Risk-adjusted return {'improved' if ds > 0 else 'declined'} by {abs(ds):.2f}."
+                + (" Notable divergence — investigate before extrapolating past track record." if abs(ds) >= 0.20 else "")
+            ),
+        )
+    )
+
+    return RollingStatsResponse(
+        asset_id=req.asset_id,
+        benchmark_asset_id=req.benchmark_asset_id,
+        benchmark_name=idx[req.benchmark_asset_id]["name"],
+        window_months=req.window_months,
+        n_months_total=n_months,
+        windows=rolling,
+        drift_flags=flags,
+        data_adequacy=adequacy,
+        data_adequacy_message=msg,
+        full_period_cagr=round(full_c, 6),
+        full_period_vol=round(full_v, 6),
+        full_period_sharpe=round(full_s, 6),
+        first_half_cagr=round(fc, 6),
+        first_half_vol=round(fv, 6),
+        first_half_sharpe=round(fs, 6),
+        second_half_cagr=round(sc, 6),
+        second_half_vol=round(sv, 6),
+        second_half_sharpe=round(ss, 6),
+    )
+
+
+def _cagr_wrapper(rets: list[float]) -> float:
+    if not rets:
+        return 0.0
+    cum = 1.0
+    for r in rets:
+        cum *= 1 + r
+    if cum <= 0:
+        return -1.0
+    return cum ** (12 / len(rets)) - 1
+
+
+def _annual_vol(rets: list[float]) -> float:
+    n = len(rets)
+    if n < 2:
+        return 0.0
+    m = sum(rets) / n
+    var = sum((r - m) ** 2 for r in rets) / (n - 1)
+    import math as _math
+    return _math.sqrt(var) * _math.sqrt(12)
+
+
+def _correlation(pairs: list[tuple[float, float]]) -> float:
+    if len(pairs) < 3:
+        return 0.0
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    n = len(xs)
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    cov = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    vx = sum((x - mx) ** 2 for x in xs)
+    vy = sum((y - my) ** 2 for y in ys)
+    import math as _math
+    denom = _math.sqrt(vx * vy)
+    if denom == 0:
+        return 0.0
+    return cov / denom
+
+
 class RobustnessRequest(CamelModel):
     """Sweep the optimizer across a grid of {history window × RF rate ×
     objective} scenarios and report per-fund robustness statistics —
