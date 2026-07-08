@@ -255,6 +255,22 @@ export interface RollingStatsResponse {
   secondHalfCagr: number;
   secondHalfVol: number;
   secondHalfSharpe: number;
+  benchFullCagr: number;
+  benchFirstHalfCagr: number;
+  benchSecondHalfCagr: number;
+  alphaFull: number;
+  alphaFirstHalf: number;
+  alphaSecondHalf: number;
+  trendSlopeCagr: number;
+  trendSlopeVol: number;
+  trendSlopeSharpe: number;
+  splitMonth: string;
+  splitNearCrisis: boolean;
+  splitCrisisNote: string;
+  firstHalfStart: string;
+  firstHalfEnd: string;
+  secondHalfStart: string;
+  secondHalfEnd: string;
 }
 
 export const fetchRollingStats = (req: RollingStatsRequest) =>

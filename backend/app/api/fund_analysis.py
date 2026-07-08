@@ -638,6 +638,7 @@ class RollingStatsResponse(CamelModel):
     drift_flags: list[DriftFlag]
     data_adequacy: str
     data_adequacy_message: str
+    # ── Raw fund stats ──
     full_period_cagr: float
     full_period_vol: float
     full_period_sharpe: float
@@ -647,6 +648,30 @@ class RollingStatsResponse(CamelModel):
     second_half_cagr: float
     second_half_vol: float
     second_half_sharpe: float
+    # ── Benchmark stats over the same periods — so user can see whether
+    # the "drift" is really a market regime change vs true manager drift ──
+    bench_full_cagr: float
+    bench_first_half_cagr: float
+    bench_second_half_cagr: float
+    # ── Alpha (fund excess return over benchmark) split — the honest
+    # signal of manager drift, market regime removed ──
+    alpha_full: float
+    alpha_first_half: float
+    alpha_second_half: float
+    # ── Trend slopes from linear regression through the rolling stats,
+    # expressed as change-per-year. A robust drift metric that doesn't
+    # depend on the arbitrary split point ──
+    trend_slope_cagr: float
+    trend_slope_vol: float
+    trend_slope_sharpe: float
+    # ── Metadata about the split ──
+    split_month: str
+    split_near_crisis: bool
+    split_crisis_note: str
+    first_half_start: str
+    first_half_end: str
+    second_half_start: str
+    second_half_end: str
 
 
 @router.post("/rolling-stats", response_model=RollingStatsResponse)
@@ -741,12 +766,78 @@ def rolling_stats(req: RollingStatsRequest) -> RollingStatsResponse:
         return c, v, s
 
     half = n_months // 2
-    first_rets = [fund_series.returns[m] for m in fund_months[:half]]
-    second_rets = [fund_series.returns[m] for m in fund_months[half:]]
+    first_months = fund_months[:half]
+    second_months = fund_months[half:]
+    first_rets = [fund_series.returns[m] for m in first_months]
+    second_rets = [fund_series.returns[m] for m in second_months]
     fc, fv, fs = _period_stats(first_rets)
     sc, sv, ss = _period_stats(second_rets)
     full_rets = [fund_series.returns[m] for m in fund_months]
     full_c, full_v, full_s = _period_stats(full_rets)
+
+    # Benchmark CAGR over each half (aligned by month). Isolates market
+    # regime effect from manager drift.
+    def _bench_cagr_over(months_list: list[str]) -> float:
+        aligned = [bench_series.returns[m] for m in months_list if m in bench_series.returns]
+        return _cagr_wrapper(aligned) if aligned else 0.0
+
+    bench_full = _bench_cagr_over(fund_months)
+    bench_first = _bench_cagr_over(first_months)
+    bench_second = _bench_cagr_over(second_months)
+
+    # Alpha per period — this is the honest drift signal
+    alpha_full = full_c - bench_full
+    alpha_first = fc - bench_first
+    alpha_second = sc - bench_second
+
+    # Rolling-stats trend slopes — a REGRESSION over the rolling series
+    # gives a smoother drift signal than the arbitrary two-point split
+    # (a single crisis at the midpoint distorts split-sample, but barely
+    # moves a linear regression).
+    def _slope_per_year(ys: list[float]) -> float:
+        n = len(ys)
+        if n < 3:
+            return 0.0
+        # x = month index; slope in units of y per month
+        mean_x = (n - 1) / 2.0
+        mean_y = sum(ys) / n
+        num = sum((i - mean_x) * (ys[i] - mean_y) for i in range(n))
+        den = sum((i - mean_x) ** 2 for i in range(n))
+        if den == 0:
+            return 0.0
+        slope_per_month = num / den
+        return slope_per_month * 12  # per-year
+
+    trend_cagr = _slope_per_year([w.cagr for w in rolling])
+    trend_vol = _slope_per_year([w.vol for w in rolling])
+    trend_sharpe = _slope_per_year([w.sharpe for w in rolling])
+
+    # Crisis proximity check on split month
+    KNOWN_CRISES = [
+        ("2008-10", "GFC (Lehman collapse)"),
+        ("2020-03", "COVID crash"),
+        ("2022-06", "2022 bear market (rate shock)"),
+    ]
+    split_month_str = fund_months[half - 1] if half > 0 else fund_months[0]
+    split_near_crisis = False
+    split_crisis_note = ""
+    if half > 0:
+        parts_split = split_month_str.split("-")
+        split_y, split_m = int(parts_split[0]), int(parts_split[1])
+        split_idx = split_y * 12 + split_m
+        for crisis_month, name in KNOWN_CRISES:
+            cparts = crisis_month.split("-")
+            cy, cm = int(cparts[0]), int(cparts[1])
+            cidx = cy * 12 + cm
+            if abs(split_idx - cidx) <= 12:
+                split_near_crisis = True
+                split_crisis_note = (
+                    f"Split point {split_month_str} sits within 12 months of the {name} "
+                    f"({crisis_month}). Split-sample stats may misattribute market-regime "
+                    f"differences to manager drift — use the alpha-over-benchmark comparison "
+                    f"and rolling-trend slope instead."
+                )
+                break
 
     def _severity(change: float, threshold_minor: float, threshold_notable: float) -> str:
         a = abs(change)
@@ -757,18 +848,43 @@ def rolling_stats(req: RollingStatsRequest) -> RollingStatsResponse:
         return "significant"
 
     flags: list[DriftFlag] = []
-    # CAGR drift: > 5 percentage points is notable, > 10 is significant
+    # Alpha drift — the honest signal (market regime removed)
+    da = alpha_second - alpha_first
+    bench_delta = bench_second - bench_first
+    market_regime_note = ""
+    if abs(bench_delta) >= 0.03:
+        market_regime_note = (
+            f" Note: the benchmark itself {'improved' if bench_delta > 0 else 'declined'} "
+            f"by {abs(bench_delta)*100:.1f}pt across the same split — market regime "
+            f"contributed. Use alpha-over-benchmark below for the drift signal that isolates "
+            f"the manager."
+        )
+    flags.append(
+        DriftFlag(
+            metric="Alpha (vs benchmark)",
+            first_half=round(alpha_first, 6),
+            second_half=round(alpha_second, 6),
+            change=round(da, 6),
+            severity=_severity(da, 0.02, 0.05),
+            interpretation=(
+                f"Alpha over benchmark {'improved' if da > 0 else 'declined'} by "
+                f"{abs(da)*100:.1f}pt between the halves — this ISOLATES manager drift from "
+                f"market regime."
+            ),
+        )
+    )
+    # Raw CAGR drift (kept for context but market-regime-contaminated)
     dc = sc - fc
     flags.append(
         DriftFlag(
-            metric="CAGR",
+            metric="CAGR (raw)",
             first_half=round(fc, 6),
             second_half=round(sc, 6),
             change=round(dc, 6),
             severity=_severity(dc, 0.03, 0.08),
             interpretation=(
-                f"Returns {'improved' if dc > 0 else 'declined'} by {abs(dc)*100:.1f}pt between the two halves."
-                + (" Could reflect regime shift, strategy evolution, or luck." if abs(dc) >= 0.03 else "")
+                f"Raw returns {'improved' if dc > 0 else 'declined'} by {abs(dc)*100:.1f}pt."
+                + market_regime_note
             ),
         )
     )
@@ -798,7 +914,7 @@ def rolling_stats(req: RollingStatsRequest) -> RollingStatsResponse:
             severity=_severity(ds, 0.20, 0.50),
             interpretation=(
                 f"Risk-adjusted return {'improved' if ds > 0 else 'declined'} by {abs(ds):.2f}."
-                + (" Notable divergence — investigate before extrapolating past track record." if abs(ds) >= 0.20 else "")
+                + (" Notable divergence." if abs(ds) >= 0.20 else "")
             ),
         )
     )
@@ -822,6 +938,22 @@ def rolling_stats(req: RollingStatsRequest) -> RollingStatsResponse:
         second_half_cagr=round(sc, 6),
         second_half_vol=round(sv, 6),
         second_half_sharpe=round(ss, 6),
+        bench_full_cagr=round(bench_full, 6),
+        bench_first_half_cagr=round(bench_first, 6),
+        bench_second_half_cagr=round(bench_second, 6),
+        alpha_full=round(alpha_full, 6),
+        alpha_first_half=round(alpha_first, 6),
+        alpha_second_half=round(alpha_second, 6),
+        trend_slope_cagr=round(trend_cagr, 6),
+        trend_slope_vol=round(trend_vol, 6),
+        trend_slope_sharpe=round(trend_sharpe, 6),
+        split_month=split_month_str,
+        split_near_crisis=split_near_crisis,
+        split_crisis_note=split_crisis_note,
+        first_half_start=first_months[0] if first_months else "",
+        first_half_end=first_months[-1] if first_months else "",
+        second_half_start=second_months[0] if second_months else "",
+        second_half_end=second_months[-1] if second_months else "",
     )
 
 

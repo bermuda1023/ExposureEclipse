@@ -1031,6 +1031,11 @@ function DriftResult({ data }: { data: RollingStatsResponse }) {
     notable: "#d97706",
     significant: "#dc2626",
   };
+  // Signed formatter with sign + colour hint
+  const signed = (v: number, digits = 1) =>
+    (v > 0 ? "+" : "") + PCT(v, digits);
+  const signedNum = (v: number, digits = 2) =>
+    (v > 0 ? "+" : "") + v.toFixed(digits);
 
   return (
     <>
@@ -1039,43 +1044,86 @@ function DriftResult({ data }: { data: RollingStatsResponse }) {
         {" — "}{data.dataAdequacyMessage}
       </div>
 
+      {data.splitNearCrisis && (
+        <div style={S.calloutInfo}>
+          ⚠ <b>Split-sample warning:</b> {data.splitCrisisNote}
+        </div>
+      )}
+
       <div style={{ ...S.grid2, marginBottom: 12 }}>
         <div style={S.card}>
-          <h3 style={{ ...S.h2, fontSize: "0.85rem", marginBottom: 8 }}>Split-sample comparison</h3>
+          <h3 style={{ ...S.h2, fontSize: "0.85rem", marginBottom: 8 }}>
+            Split-sample comparison
+          </h3>
+          <p style={{ ...S.hint, marginBottom: 6 }}>
+            <b>First half:</b> {data.firstHalfStart} → {data.firstHalfEnd} ·{" "}
+            <b>Second half:</b> {data.secondHalfStart} → {data.secondHalfEnd}
+          </p>
           <table style={S.table}>
             <thead>
               <tr>
                 <th style={S.th}>Period</th>
-                <th style={S.thNum}>CAGR</th>
+                <th style={S.thNum}>Fund CAGR</th>
+                <th style={S.thNum}>Bench CAGR</th>
+                <th style={S.thNum}>Alpha</th>
                 <th style={S.thNum}>Vol</th>
                 <th style={S.thNum}>Sharpe</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td style={S.td}>First half</td>
+                <td style={S.td}>
+                  1st half
+                  <div style={{ ...S.chipMuted, fontSize: "0.6rem" }}>
+                    {data.firstHalfStart}<br />→ {data.firstHalfEnd}
+                  </div>
+                </td>
                 <td style={S.tdNum}>{PCT(data.firstHalfCagr)}</td>
+                <td style={S.tdNumMuted}>{PCT(data.benchFirstHalfCagr)}</td>
+                <td style={{ ...S.tdNum, color: data.alphaFirstHalf > 0 ? "#059669" : "#dc2626", fontWeight: 600 }}>
+                  {signed(data.alphaFirstHalf)}
+                </td>
                 <td style={S.tdNum}>{PCT(data.firstHalfVol)}</td>
                 <td style={S.tdNum}>{data.firstHalfSharpe.toFixed(2)}</td>
               </tr>
               <tr>
-                <td style={S.td}>Second half</td>
+                <td style={S.td}>
+                  2nd half
+                  <div style={{ ...S.chipMuted, fontSize: "0.6rem" }}>
+                    {data.secondHalfStart}<br />→ {data.secondHalfEnd}
+                  </div>
+                </td>
                 <td style={S.tdNum}>{PCT(data.secondHalfCagr)}</td>
+                <td style={S.tdNumMuted}>{PCT(data.benchSecondHalfCagr)}</td>
+                <td style={{ ...S.tdNum, color: data.alphaSecondHalf > 0 ? "#059669" : "#dc2626", fontWeight: 600 }}>
+                  {signed(data.alphaSecondHalf)}
+                </td>
                 <td style={S.tdNum}>{PCT(data.secondHalfVol)}</td>
                 <td style={S.tdNum}>{data.secondHalfSharpe.toFixed(2)}</td>
               </tr>
               <tr style={{ background: "#f8fafc", fontWeight: 600 }}>
                 <td style={S.td}>Full period</td>
                 <td style={S.tdNum}>{PCT(data.fullPeriodCagr)}</td>
+                <td style={S.tdNumMuted}>{PCT(data.benchFullCagr)}</td>
+                <td style={{ ...S.tdNum, color: data.alphaFull > 0 ? "#059669" : "#dc2626", fontWeight: 600 }}>
+                  {signed(data.alphaFull)}
+                </td>
                 <td style={S.tdNum}>{PCT(data.fullPeriodVol)}</td>
                 <td style={S.tdNum}>{data.fullPeriodSharpe.toFixed(2)}</td>
               </tr>
             </tbody>
           </table>
+          <p style={{ ...S.hint, marginTop: 8 }}>
+            <b>Alpha</b> = Fund CAGR − Benchmark CAGR over the same months. This isolates
+            manager drift from market regime — a fund's raw CAGR could halve just because the
+            market halved, but its alpha would still be stable if the manager isn't drifting.
+          </p>
         </div>
 
         <div style={S.card}>
-          <h3 style={{ ...S.h2, fontSize: "0.85rem", marginBottom: 8 }}>Drift flags</h3>
+          <h3 style={{ ...S.h2, fontSize: "0.85rem", marginBottom: 8 }}>
+            Drift flags + rolling-trend slopes
+          </h3>
           {data.driftFlags.map((f) => (
             <div key={f.metric} style={{
               marginBottom: 8,
@@ -1094,6 +1142,20 @@ function DriftResult({ data }: { data: RollingStatsResponse }) {
               <div style={{ color: "#475569", fontSize: "0.7rem", marginTop: 3 }}>{f.interpretation}</div>
             </div>
           ))}
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e2e8f0" }}>
+            <div style={{ fontSize: "0.72rem", fontWeight: 600, marginBottom: 4, color: "#0f172a" }}>
+              Trend slopes (change per year, robust to crash placement):
+            </div>
+            <div style={{ fontSize: "0.7rem", color: "#475569", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+              <div>CAGR: <b style={{ color: data.trendSlopeCagr < -0.005 ? "#dc2626" : data.trendSlopeCagr > 0.005 ? "#059669" : "#334155" }}>{signed(data.trendSlopeCagr, 2)}/yr</b></div>
+              <div>Vol: <b style={{ color: data.trendSlopeVol > 0.005 ? "#dc2626" : data.trendSlopeVol < -0.005 ? "#059669" : "#334155" }}>{signed(data.trendSlopeVol, 2)}/yr</b></div>
+              <div>Sharpe: <b style={{ color: data.trendSlopeSharpe < -0.05 ? "#dc2626" : data.trendSlopeSharpe > 0.05 ? "#059669" : "#334155" }}>{signedNum(data.trendSlopeSharpe, 2)}/yr</b></div>
+            </div>
+            <p style={{ ...S.hint, fontSize: "0.62rem", marginTop: 4 }}>
+              Linear regression through the rolling-window series — a single crisis at the split
+              point barely moves this, but a genuine drift trend does.
+            </p>
+          </div>
         </div>
       </div>
 
