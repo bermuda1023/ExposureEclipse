@@ -32,6 +32,7 @@ from .api import (
     ert_jobs,
     exports,
     exposures,
+    fund_analysis,
     hazards,
     hurricanes,
     live,
@@ -86,6 +87,7 @@ app.include_router(exports.router, prefix="/api")
 app.include_router(hurricanes.router, prefix="/api")
 app.include_router(hazards.router, prefix="/api")
 app.include_router(live.router, prefix="/api")
+app.include_router(fund_analysis.router, prefix="/api")
 
 
 # ───────────────────────── Exception handlers ─────────────────────────
