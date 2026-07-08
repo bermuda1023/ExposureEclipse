@@ -74,6 +74,10 @@ const DEFAULT_PER_ASSET_BENCHMARKS: Record<string, string> = {
   // benchmark but we don't ship it. SPY is the closest global-equity
   // proxy available in the catalog.
   contrarius: "spy",
+  // Orbis funds: long-only global — closest peer benchmarks in the
+  // catalog are SPY (equity) and HFRX Global (balanced multi-asset).
+  orbis_equity: "spy",
+  orbis_balanced: "hfrx_global",
 };
 
 const CURRENCY = (v: number) =>
@@ -93,6 +97,8 @@ const ASSET_COLOR: Record<string, string> = {
   cas_sosin: "#db2777",
   alluvial: "#2563eb",
   contrarius: "#0f766e",
+  orbis_equity: "#9333ea",
+  orbis_balanced: "#c026d3",
   spy: "#64748b",
   agg: "#a3a3a3",
 };
@@ -106,6 +112,8 @@ const SHORT_NAME: Record<string, string> = {
   cas_sosin: "CAS Sosin",
   alluvial: "Alluvial",
   contrarius: "Contrarius",
+  orbis_equity: "Orbis Equity",
+  orbis_balanced: "Orbis Balanced",
   spy: "S&P 500",
   agg: "US Bonds",
 };
@@ -117,7 +125,8 @@ export function FundAnalysis() {
   const [selected, setSelected] = useState<Set<string>>(
     new Set([
       "gator", "bireme", "upslope", "primary_commodity", "cedar_creek",
-      "cas_sosin", "alluvial", "contrarius", "spy", "agg",
+      "cas_sosin", "alluvial", "contrarius", "orbis_equity", "orbis_balanced",
+      "spy", "agg",
     ]),
   );
   const [newCapital, setNewCapital] = useState<number>(1_000_000);
