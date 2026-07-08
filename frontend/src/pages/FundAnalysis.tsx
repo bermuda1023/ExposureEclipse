@@ -41,11 +41,10 @@ const DEFAULT_OVERRIDES: Record<string, AssumptionOverrideIn> = {
   },
 };
 
-// Default concentration cap on CAS Sosin — extreme 2022 drawdown (-77%)
-// warrants a hard ceiling by default. User can raise or remove.
-const DEFAULT_MAX_WEIGHTS: MaxWeightIn[] = [
-  { assetId: "cas_sosin", maxWeight: 0.20 },
-];
+// No default concentration caps — user can set them per-asset in the
+// Concentration Caps card if they want to limit exposure to high-vol
+// funds like CAS Sosin.
+const DEFAULT_MAX_WEIGHTS: MaxWeightIn[] = [];
 
 const CURRENCY = (v: number) =>
   v.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });

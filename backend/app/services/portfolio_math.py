@@ -332,6 +332,7 @@ def compute_frontier(
     series_by_id: dict[str, ReturnSeries] | None = None,
     risk_free_rate: float = 0.04,
     min_weights: dict[str, float] | None = None,
+    hard_min_weights: dict[str, float] | None = None,
     max_weights: dict[str, float] | None = None,
     samples: int = 40_000,
     seed: int = 42,
@@ -339,14 +340,19 @@ def compute_frontier(
     """Trace the efficient frontier by Dirichlet sampling. Returns
     (frontier_hull, max_sharpe, min_variance, max_sortino, min_drawdown).
 
-    `min_weights[asset_id]` (optional) applies a per-asset lower bound
-    for any asset the sampler picks (participation floor from the
-    minimum-investment constraint). Assets can still be picked out at
-    weight 0 — floors only kick in for assets the sample includes.
+    `min_weights[asset_id]` (optional) applies a per-asset **soft** lower
+    bound — the floor only kicks in if the participation-subset draw
+    happens to include that asset. Right for min-investment constraints
+    where a fund can be skipped entirely ("if you invest, invest ≥ X").
+
+    `hard_min_weights[asset_id]` (optional) applies a **hard** lower
+    bound — assets in this dict are ALWAYS included in every sample and
+    their floor is always applied. Right for no-sell / existing-position
+    floors, where the asset must remain in the portfolio at ≥ its
+    current weight.
 
     `max_weights[asset_id]` (optional) hard-caps each asset at that
-    weight; violating samples are skipped. Useful for concentration
-    controls on volatile funds like Sosin.
+    weight; violating samples are skipped.
 
     When `series_by_id` is supplied we also compute per-sample Sortino
     and max drawdown (from the joint monthly series) and return the
@@ -369,7 +375,15 @@ def compute_frontier(
 
     rng = random.Random(seed)
     min_weights = min_weights or {}
+    hard_min_weights = hard_min_weights or {}
     max_weights = max_weights or {}
+    # Hard floors must sum to ≤ 1, otherwise the problem is infeasible.
+    hard_floor_sum = sum(hard_min_weights.values())
+    if hard_floor_sum > 1.0:
+        # Rescale so the sum is exactly 1 — the caller has over-specified;
+        # this gives them the closest feasible portfolio at their floors.
+        scale = 1.0 / hard_floor_sum
+        hard_min_weights = {a: w * scale for a, w in hard_min_weights.items()}
     points: list[PortfolioPoint] = []
 
     # Mix Dirichlet with concentration levels to cover both the diffuse
@@ -379,10 +393,11 @@ def compute_frontier(
 
     for k in range(samples):
         alpha = alpha_choices[k % len(alpha_choices)]
-        # Choose which assets participate (each independently with prob 0.6)
-        # — this lets the sampler find 2-asset and 3-asset portfolios that
-        # sit on the frontier.
-        chosen = [i for i in ids if rng.random() < 0.65]
+        # Choose which assets participate (each independently with prob 0.65).
+        # Assets with hard floors ALWAYS participate — they must remain
+        # in the portfolio at ≥ their hard floor. This is what the no-sell
+        # / existing-position constraint requires.
+        chosen = [i for i in ids if i in hard_min_weights or rng.random() < 0.65]
         if not chosen:
             chosen = ids
         raw = _sample_dirichlet(len(chosen), alpha, rng)
@@ -390,26 +405,31 @@ def compute_frontier(
         for c, w in zip(chosen, raw):
             weights[c] = w
 
-        # Apply per-asset minimum-weight floors on participating assets,
-        # then renormalise. Discard if the floors would over-fill (>1).
-        floor_total = sum(min_weights.get(a, 0.0) for a in ids if weights[a] > 0)
+        # Per-asset floor = max(soft floor if participating, hard floor
+        # always). Hard floors are guaranteed applied because every hard-
+        # floor asset is now always in `chosen`.
+        floors: dict[str, float] = {}
+        for a in ids:
+            f = 0.0
+            if weights[a] > 0:
+                f = max(f, min_weights.get(a, 0.0))
+            f = max(f, hard_min_weights.get(a, 0.0))
+            floors[a] = f
+
+        floor_total = sum(floors.values())
         if floor_total > 1.0:
             continue
         headroom = 1.0 - floor_total
-        # Rescale non-floor part
-        non_floor_sum = sum(max(0.0, weights[a] - min_weights.get(a, 0.0)) for a in ids)
+        non_floor_sum = sum(max(0.0, weights[a] - floors[a]) for a in ids)
         if non_floor_sum <= 0:
-            weights = {a: min_weights.get(a, 0.0) if weights[a] > 0 else 0.0 for a in ids}
-            s = sum(weights.values()) or 1.0
-            weights = {a: w / s for a, w in weights.items()}
+            # Everyone's at their floor already; just renormalise floors
+            s = sum(floors.values()) or 1.0
+            weights = {a: floors[a] / s for a in ids}
         else:
             for a in ids:
-                if weights[a] > 0:
-                    base = min_weights.get(a, 0.0)
-                    excess = max(0.0, weights[a] - base) / non_floor_sum * headroom
-                    weights[a] = base + excess
-                else:
-                    weights[a] = 0.0
+                base = floors[a]
+                excess = max(0.0, weights[a] - base) / non_floor_sum * headroom
+                weights[a] = base + excess
 
         # Hard max-weight cap: reject if any active asset breaches
         if max_weights:

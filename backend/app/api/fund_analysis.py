@@ -303,19 +303,24 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     for a in req.asset_ids:
         effective_min_inv[a] = min_inv_override.get(a, idx[a]["minInvestment"])
 
-    # Participation floor per asset. Combines:
-    #   - the ticket-size min (if respect_min_investment)
-    #   - the "no-sell" floor (if no_sell): floor = current_holding / total_capital
-    # We take the MAX of the two so both constraints hold simultaneously.
+    # Soft floors: apply only if the sampler picks the asset. Right for
+    # min-investment ("if you invest in this fund, invest ≥ X"). A fund
+    # can still be skipped entirely.
     min_weights: dict[str, float] = {}
-    for a in req.asset_ids:
-        floors: list[float] = []
-        if req.respect_min_investment and effective_min_inv[a] > 0:
-            floors.append(min(1.0, effective_min_inv[a] / total_capital))
-        if req.no_sell and current_by_id.get(a, 0) > 0:
-            floors.append(min(1.0, current_by_id[a] / total_capital))
-        if floors:
-            min_weights[a] = max(floors)
+    if req.respect_min_investment:
+        for a in req.asset_ids:
+            if effective_min_inv[a] > 0:
+                min_weights[a] = min(1.0, effective_min_inv[a] / total_capital)
+
+    # Hard floors: apply to every sample. Right for no-sell / existing-
+    # position constraint — the fund MUST remain in the portfolio at ≥
+    # its current weight.
+    hard_min_weights: dict[str, float] = {}
+    if req.no_sell:
+        for a in req.asset_ids:
+            cur = current_by_id.get(a, 0.0)
+            if cur > 0:
+                hard_min_weights[a] = min(1.0, cur / total_capital)
 
     max_weights: dict[str, float] = {mw.asset_id: mw.max_weight for mw in req.max_weights if mw.asset_id in req.asset_ids}
 
@@ -325,6 +330,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         series_by_id=series_by_id,
         risk_free_rate=req.risk_free_rate,
         min_weights=min_weights,
+        hard_min_weights=hard_min_weights,
         max_weights=max_weights,
         samples=req.samples,
     )

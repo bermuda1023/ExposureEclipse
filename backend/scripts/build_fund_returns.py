@@ -244,7 +244,9 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Long/short equity — financials",
                 "manager": "Derek Pilecki (Gator Capital)",
-                "minInvestment": 1_000_000,
+                # PDF only notes "Accredited Investors / Qualified Purchasers" — no
+                # $ min stated. Default to 250k like Alluvial for practical purposes.
+                "minInvestment": 250_000,
                 "aumMillions": None,
                 "fees": "2% mgmt / 20% perf (typical)",
                 "lockup": "Monthly redemption, subject to gate",
@@ -259,7 +261,10 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Global all-cap value long/short",
                 "manager": "Evan Tindell",
-                "minInvestment": 2_200_000,
+                # PDF says Qualified Clients only (SEC threshold: $2.2M net worth)
+                # — that's an INVESTOR-eligibility test, not a ticket-size minimum.
+                # No ticket $ stated on the PDF; default to 250k.
+                "minInvestment": 250_000,
                 "aumMillions": 133,
                 "fees": "1% mgmt / 10% perf",
                 "lockup": "Qualified Client only",
@@ -273,7 +278,8 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Long/short equity, defensive-tilted",
                 "manager": "George Livadas",
-                "minInvestment": 500_000,
+                # PDF doesn't state a $ minimum. Default 250k.
+                "minInvestment": 250_000,
                 "aumMillions": None,
                 "fees": "1.25% mgmt / 15% perf (typical LP)",
                 "lockup": "1yr, monthly redemption thereafter",
@@ -287,7 +293,8 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Physical rare earths & critical metals",
                 "manager": "Michael Crandall",
-                "minInvestment": 500_000,
+                # PDF doesn't state a $ minimum. Default 250k.
+                "minInvestment": 250_000,
                 "aumMillions": 600,
                 "fees": "1.75% mgmt / 20% perf",
                 "lockup": "Contact GP",
