@@ -1358,7 +1358,7 @@ function InteractiveBuilder({
                 ⚠ {live.portfolio.violatesMinInvestment.length} allocation(s) below ticket-size minimum
               </div>
             )}
-            <CustomEquityChart response={live} />
+            <CustomEquityChart response={live} spySeries={result.assetSeries.find((s) => s.assetId === "spy")} />
           </>
         )}
         {pending && !live && <div style={S.hint}>Scoring…</div>}
@@ -1367,47 +1367,197 @@ function InteractiveBuilder({
   );
 }
 
-function CustomEquityChart({ response }: { response: CustomPortfolioResponse }) {
-  const W = 540;
-  const H = 250;
-  const P = { top: 10, right: 20, bottom: 30, left: 55 };
+function CustomEquityChart({
+  response,
+  spySeries,
+}: {
+  response: CustomPortfolioResponse;
+  spySeries: AssetSeries | undefined;
+}) {
+  const W = 640;
+  const eqH = 220;
+  const ddH = 100;
+  const P = { top: 12, right: 24, bottom: 26, left: 64 };
   const iw = W - P.left - P.right;
-  const ih = H - P.top - P.bottom;
+  const totalH = P.top + eqH + 22 + ddH + P.bottom;
+
+  const [hover, setHover] = useState<number | null>(null); // month index
 
   if (response.equity.length < 2) return null;
 
+  const months = response.equityMonths;
   const parseMonth = (m: string) => {
     const [y, mm] = m.split("-").map(Number);
     return y! + (mm! - 1) / 12;
   };
-  const xs = response.equityMonths.map(parseMonth);
+  const xs = months.map(parseMonth);
   const xMin = xs[0]!;
   const xMax = xs[xs.length - 1]!;
-  const maxEq = Math.max(...response.equity, 1);
+
+  // Build SPY series aligned to the portfolio's month range
+  const spy: { month: string; eq: number }[] = [];
+  if (spySeries) {
+    const startIdx = spySeries.months.findIndex((m) => m >= months[0]!);
+    if (startIdx >= 0) {
+      const startEq = spySeries.equity[startIdx]!;
+      for (let i = startIdx; i < spySeries.months.length; i++) {
+        if (spySeries.months[i]! > months[months.length - 1]!) break;
+        spy.push({ month: spySeries.months[i]!, eq: spySeries.equity[i]! / startEq });
+      }
+    }
+  }
+
+  const maxEq = Math.max(...response.equity, ...spy.map((s) => s.eq), 1);
+  const minEq = Math.min(...response.equity, ...spy.map((s) => s.eq), 1);
+  const logMin = Math.log(Math.max(0.5, minEq));
+  const logMax = Math.log(maxEq * 1.05);
 
   const x = (m: string) => P.left + ((parseMonth(m) - xMin) / (xMax - xMin || 1)) * iw;
-  const y = (v: number) => P.top + ih - (Math.log(v) / Math.log(maxEq)) * ih;
-
-  const equityD = response.equityMonths
-    .map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${y(response.equity[i]!)}`)
-    .join(" ");
+  const eqY = (v: number) => P.top + eqH - ((Math.log(v) - logMin) / (logMax - logMin || 1)) * eqH;
 
   const worstDD = Math.min(...response.drawdown, -0.05);
-  const yDD = (v: number) => P.top + ih - ((v - worstDD) / (-worstDD)) * ih;
-  const ddD = response.equityMonths
-    .map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${yDD(response.drawdown[i]!)}`)
-    .join(" ");
+  const ddTop = P.top + eqH + 22;
+  const ddYY = (v: number) => ddTop + ((v - 0) / (worstDD - 0 || -1)) * ddH;
+
+  // Grid ticks
+  const yearStep = Math.max(1, Math.floor((xMax - xMin) / 6));
+  const xTicks: string[] = [];
+  for (let yr = Math.ceil(xMin); yr <= Math.floor(xMax); yr += yearStep) xTicks.push(`${yr}-01`);
+  const eqTicks = [0.5, 1, 2, 5, 10, 20, 50, 100].filter((v) => v >= Math.exp(logMin) * 0.9 && v <= maxEq * 1.2);
+  const ddTicks: number[] = [];
+  for (let v = 0; v > worstDD - 0.05; v -= worstDD < -0.3 ? 0.1 : 0.05) ddTicks.push(v);
+
+  const portfolioD = months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${eqY(response.equity[i]!)}`).join(" ");
+  const spyD = spy.length > 0
+    ? spy.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.month)},${eqY(p.eq)}`).join(" ")
+    : "";
+  const ddD = months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${ddYY(response.drawdown[i]!)}`).join(" ");
+  const ddArea = months.map((m, i) => `L${x(m)},${ddYY(response.drawdown[i]!)}`).join(" ");
+  const ddAreaFull = `M${x(months[0]!)},${ddYY(0)} ${ddArea} L${x(months[months.length - 1]!)},${ddYY(0)} Z`;
+
+  // Hover interaction
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W;
+    // Find nearest month by x
+    let bestI = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < months.length; i++) {
+      const d = Math.abs(x(months[i]!) - mx);
+      if (d < bestD) {
+        bestD = d;
+        bestI = i;
+      }
+    }
+    setHover(bestI);
+  };
 
   return (
-    <svg width={W} height={H} style={{ display: "block", background: "#fafbfc", marginTop: 12 }}>
-      <text x={14} y={P.top + ih / 2} transform={`rotate(-90 14 ${P.top + ih / 2})`} textAnchor="middle" fontSize={11} fill="#334155">
-        Equity growth (log)
-      </text>
-      <path d={equityD} stroke="#1e40af" strokeWidth={2} fill="none" />
-      <path d={ddD} stroke="#dc2626" strokeWidth={1} fill="none" opacity={0.55} strokeDasharray="2,2" />
-      <text x={P.left + iw - 5} y={P.top + 14} textAnchor="end" fontSize={10} fill="#1e40af">Growth of $1 ↑</text>
-      <text x={P.left + iw - 5} y={P.top + ih - 6} textAnchor="end" fontSize={10} fill="#dc2626">Drawdown ↓</text>
-    </svg>
+    <div style={{ marginTop: 12 }}>
+      <div style={S.chartLegend}>
+        <span style={{ ...S.chartLegendItem, color: "#1e40af" }}>
+          <span style={{ ...S.chartLegendSwatch, background: "#1e40af" }} />
+          Your portfolio
+        </span>
+        {spy.length > 0 && (
+          <span style={{ ...S.chartLegendItem, color: "#94a3b8" }}>
+            <span style={{ ...S.chartLegendSwatch, background: "#94a3b8", height: 2 }} />
+            S&P 500 (from portfolio start)
+          </span>
+        )}
+        <span style={{ ...S.chartLegendItem, color: "#dc2626" }}>
+          <span style={{ ...S.chartLegendSwatch, background: "#dc2626", opacity: 0.4 }} />
+          Drawdown
+        </span>
+      </div>
+      <svg
+        width={W}
+        height={totalH}
+        style={{ display: "block", background: "#fafbfc", borderRadius: 4, cursor: "crosshair" }}
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+      >
+        {/* ── Equity panel ── */}
+        <text x={14} y={P.top + eqH / 2} transform={`rotate(-90 14 ${P.top + eqH / 2})`} textAnchor="middle" fontSize={11} fill="#334155">
+          Growth of $1 (log scale)
+        </text>
+        {/* Y grid */}
+        {eqTicks.map((v) => (
+          <g key={`eqy${v}`}>
+            <line x1={P.left} y1={eqY(v)} x2={P.left + iw} y2={eqY(v)} stroke="#e2e8f0" strokeWidth={1} />
+            <text x={P.left - 6} y={eqY(v) + 3} textAnchor="end" fontSize={10} fill="#64748b">
+              ${v}
+            </text>
+          </g>
+        ))}
+        {/* $1 baseline emphasis */}
+        <line x1={P.left} y1={eqY(1)} x2={P.left + iw} y2={eqY(1)} stroke="#cbd5e1" strokeDasharray="3,3" />
+        {/* X grid */}
+        {xTicks.map((m) => (
+          <line key={`ex${m}`} x1={x(m)} y1={P.top} x2={x(m)} y2={P.top + eqH} stroke="#eef2f7" strokeWidth={1} />
+        ))}
+        {/* SPY line — grey, behind portfolio */}
+        {spyD && <path d={spyD} stroke="#94a3b8" strokeWidth={1.5} fill="none" opacity={0.85} />}
+        {/* Portfolio line */}
+        <path d={portfolioD} stroke="#1e40af" strokeWidth={2.2} fill="none" />
+        {/* Hover marker on portfolio */}
+        {hover !== null && (
+          <>
+            <line x1={x(months[hover]!)} y1={P.top} x2={x(months[hover]!)} y2={P.top + eqH + 22 + ddH} stroke="#334155" strokeWidth={1} strokeDasharray="4,4" opacity={0.5} />
+            <circle cx={x(months[hover]!)} cy={eqY(response.equity[hover]!)} r={4} fill="#1e40af" stroke="#fff" strokeWidth={2} />
+            {spy.length > 0 && (() => {
+              const sMonth = months[hover]!;
+              const sIdx = spy.findIndex((p) => p.month === sMonth);
+              if (sIdx < 0) return null;
+              return <circle cx={x(sMonth)} cy={eqY(spy[sIdx]!.eq)} r={3.5} fill="#94a3b8" stroke="#fff" strokeWidth={1.5} />;
+            })()}
+          </>
+        )}
+
+        {/* Panel divider */}
+        <line x1={P.left} y1={P.top + eqH + 10} x2={P.left + iw} y2={P.top + eqH + 10} stroke="#cbd5e1" strokeWidth={1} />
+
+        {/* ── Drawdown panel ── */}
+        <text x={14} y={ddTop + ddH / 2} transform={`rotate(-90 14 ${ddTop + ddH / 2})`} textAnchor="middle" fontSize={11} fill="#334155">
+          Drawdown
+        </text>
+        {ddTicks.map((v) => (
+          <g key={`ddy${v}`}>
+            <line x1={P.left} y1={ddYY(v)} x2={P.left + iw} y2={ddYY(v)} stroke="#fee2e2" strokeWidth={1} />
+            <text x={P.left - 6} y={ddYY(v) + 3} textAnchor="end" fontSize={10} fill="#64748b">
+              {PCT(v, 0)}
+            </text>
+          </g>
+        ))}
+        {xTicks.map((m) => (
+          <g key={`ddx${m}`}>
+            <line x1={x(m)} y1={ddTop} x2={x(m)} y2={ddTop + ddH} stroke="#fef2f2" strokeWidth={1} />
+            <text x={x(m)} y={ddTop + ddH + 14} textAnchor="middle" fontSize={10} fill="#64748b">
+              {m.slice(0, 4)}
+            </text>
+          </g>
+        ))}
+        <path d={ddAreaFull} fill="#dc2626" opacity={0.15} />
+        <path d={ddD} stroke="#dc2626" strokeWidth={1.6} fill="none" />
+        {hover !== null && (
+          <circle cx={x(months[hover]!)} cy={ddYY(response.drawdown[hover]!)} r={3.5} fill="#dc2626" stroke="#fff" strokeWidth={1.5} />
+        )}
+      </svg>
+
+      {/* Tooltip below the chart */}
+      {hover !== null && (
+        <div style={S.chartTooltip}>
+          <b>{months[hover]}</b>
+          <span> · portfolio {CURRENCY(response.equity[hover]!)}</span>
+          {(() => {
+            const sMonth = months[hover]!;
+            const sIdx = spy.findIndex((p) => p.month === sMonth);
+            return sIdx >= 0 ? <span> · SPY {CURRENCY(spy[sIdx]!.eq)}</span> : null;
+          })()}
+          <span style={{ color: "#dc2626" }}> · DD {PCT(response.drawdown[hover]!)}</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1557,4 +1707,36 @@ const S: Record<string, React.CSSProperties> = {
   },
   summaryRow: { display: "flex", justifyContent: "space-between", padding: "2px 0", color: "#334155" },
   summaryVal: { fontVariantNumeric: "tabular-nums", fontWeight: 500 },
+  chartLegend: {
+    display: "flex",
+    gap: 16,
+    marginBottom: 6,
+    fontSize: "0.7rem",
+    color: "#334155",
+    padding: "0 4px",
+  },
+  chartLegendItem: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    fontWeight: 500,
+  },
+  chartLegendSwatch: {
+    display: "inline-block",
+    width: 14,
+    height: 3,
+    borderRadius: 2,
+  },
+  chartTooltip: {
+    marginTop: 4,
+    padding: "5px 10px",
+    background: "#f1f5f9",
+    borderRadius: 4,
+    fontSize: "0.72rem",
+    color: "#334155",
+    fontVariantNumeric: "tabular-nums",
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap",
+  },
 };
