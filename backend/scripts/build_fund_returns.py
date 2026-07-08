@@ -40,6 +40,10 @@ def _mk_series(rows: list[tuple[int, list[float | None]]]) -> list[dict]:
 # converted to decimals. `None` = month not reported / prior to inception.
 
 GATOR = _mk_series([
+    # Fund LLC launched mid-2008; the 6 Jul-Dec 2008 monthlies compound
+    # to -15.26% YTD as shown on the factsheet. Excluding them under-
+    # states the historical drag from the GFC entry.
+    (2008, [None, None, None, None, None, None, -0.0189, -0.0724, -0.2190, 0.1663, -0.0793, 0.1102]),
     (2009, [0.2260, 0.0700, 0.1923, 0.1100, 0.1719, 0.2093, 0.0790, 0.1528, -0.0050, -0.1263, -0.0087, 0.0865]),
     (2010, [-0.0297, 0.0601, 0.0455, 0.0577, -0.0300, -0.1798, 0.0393, -0.0665, 0.0703, 0.0773, 0.0561, 0.0513]),
     (2011, [0.1403, 0.0926, -0.0400, 0.0120, 0.0643, 0.0132, 0.0036, -0.0500, -0.0534, 0.0276, -0.0041, -0.0434]),
@@ -244,7 +248,8 @@ def main() -> None:
                 "aumMillions": None,
                 "fees": "2% mgmt / 20% perf (typical)",
                 "lockup": "Monthly redemption, subject to gate",
-                "inception": "2008-07",
+                "inception": "2008-07",  # actual LLC inception per factsheet
+
                 "returns": GATOR,
                 "source": "Attribution Analysis May 2026 PDF",
             },

@@ -90,6 +90,8 @@ export function FundAnalysis() {
   const [maxWeights, setMaxWeights] = useState<Record<string, number>>(() =>
     Object.fromEntries(DEFAULT_MAX_WEIGHTS.map((m) => [m.assetId, m.maxWeight])),
   );
+  // Per-asset min-investment overrides — undefined = use catalog default.
+  const [minInvOverrides, setMinInvOverrides] = useState<Record<string, number>>({});
 
   const assetsQuery = useQuery({
     queryKey: ["fund-analysis", "assets"],
@@ -109,6 +111,9 @@ export function FundAnalysis() {
       maxWeights: Object.entries(maxWeights)
         .filter(([id]) => selected.has(id))
         .map(([assetId, maxWeight]) => ({ assetId, maxWeight })),
+      minInvestmentOverrides: Object.entries(minInvOverrides)
+        .filter(([id]) => selected.has(id))
+        .map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       samples: 30_000,
     });
   };
@@ -144,6 +149,17 @@ export function FundAnalysis() {
     });
   };
 
+  const setMinInv = (id: string, val: number | null) => {
+    setMinInvOverrides((prev) => {
+      const next = { ...prev };
+      if (val == null) delete next[id];
+      else next[id] = val;
+      return next;
+    });
+  };
+
+  const effectiveMinInv = (a: FundAsset) => minInvOverrides[a.id] ?? a.minInvestment;
+
   const assets = assetsQuery.data?.assets ?? [];
   const assetById = useMemo(() => {
     const m: Record<string, FundAsset> = {};
@@ -166,36 +182,65 @@ export function FundAnalysis() {
               <tr>
                 <th />
                 <th style={S.th}>Fund</th>
-                <th style={S.thNum}>μ (ann)</th>
+                <th style={S.thNum}>CAGR</th>
                 <th style={S.thNum}>σ (ann)</th>
                 <th style={S.thNum}>Months</th>
-                <th style={S.thNum}>Min Investment</th>
+                <th style={S.thNum}>Min Investment (editable)</th>
               </tr>
             </thead>
             <tbody>
-              {assets.map((a) => (
-                <tr key={a.id} style={selected.has(a.id) ? S.rowOn : S.rowOff}>
-                  <td>
-                    <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggle(a.id)} />
-                  </td>
-                  <td style={S.td}>
-                    <div style={{ fontWeight: 600, fontSize: "0.85rem", color: ASSET_COLOR[a.id] }}>
-                      {a.name}
-                    </div>
-                    <div style={S.chipRow}>
-                      <span style={{ ...S.chip, background: KIND_TINT[a.kind] }}>
-                        {a.kind === "hedge_fund" ? "Hedge Fund" : "Reference"}
-                      </span>
-                      <span style={S.chipMuted}>{a.strategy}</span>
-                    </div>
-                    {a.warning && <div style={S.warn}>{a.warning}</div>}
-                  </td>
-                  <td style={S.tdNum}>{PCT(a.annualisedReturn)}</td>
-                  <td style={S.tdNum}>{PCT(a.annualisedVol)}</td>
-                  <td style={S.tdNum}>{a.nMonths}</td>
-                  <td style={S.tdNum}>{CURRENCY(a.minInvestment)}</td>
-                </tr>
-              ))}
+              {assets.map((a) => {
+                const eff = effectiveMinInv(a);
+                const overridden = minInvOverrides[a.id] !== undefined && minInvOverrides[a.id] !== a.minInvestment;
+                return (
+                  <tr key={a.id} style={selected.has(a.id) ? S.rowOn : S.rowOff}>
+                    <td>
+                      <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggle(a.id)} />
+                    </td>
+                    <td style={S.td}>
+                      <div style={{ fontWeight: 600, fontSize: "0.85rem", color: ASSET_COLOR[a.id] }}>
+                        {a.name}
+                      </div>
+                      <div style={S.chipRow}>
+                        <span style={{ ...S.chip, background: KIND_TINT[a.kind] }}>
+                          {a.kind === "hedge_fund" ? "Hedge Fund" : "Reference"}
+                        </span>
+                        <span style={S.chipMuted}>{a.strategy}</span>
+                      </div>
+                      {a.warning && <div style={S.warn}>{a.warning}</div>}
+                    </td>
+                    <td style={S.tdNum}>{PCT(a.annualisedReturn)}</td>
+                    <td style={S.tdNum}>{PCT(a.annualisedVol)}</td>
+                    <td style={S.tdNum}>{a.nMonths}</td>
+                    <td style={S.tdNum}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                        <input
+                          type="number"
+                          value={eff}
+                          min={0}
+                          step={50_000}
+                          onChange={(e) => {
+                            const v = Number(e.target.value);
+                            setMinInv(a.id, Number.isFinite(v) && v >= 0 ? v : null);
+                          }}
+                          style={{ ...S.input, width: 130, textAlign: "right", background: overridden ? "#fef3c7" : undefined }}
+                          title={overridden ? `Overridden from PDF default ${CURRENCY(a.minInvestment)}` : "PDF default"}
+                        />
+                        {overridden && (
+                          <button
+                            type="button"
+                            onClick={() => setMinInv(a.id, null)}
+                            title="Reset to PDF default"
+                            style={{ all: "unset", cursor: "pointer", color: "#64748b", fontSize: "0.8rem" }}
+                          >
+                            ↺
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </section>
@@ -332,7 +377,7 @@ export function FundAnalysis() {
         </section>
       </div>
 
-      {result && <ResultView result={result} assetById={assetById} riskFreeRate={riskFreeRate} respectMin={respectMin} overrides={overrides} capital={capital} />}
+      {result && <ResultView result={result} assetById={assetById} riskFreeRate={riskFreeRate} respectMin={respectMin} overrides={overrides} capital={capital} minInvOverrides={minInvOverrides} />}
       {optimizeMutation.isError && (
         <div style={S.err}>{(optimizeMutation.error as Error).message}</div>
       )}
@@ -397,6 +442,7 @@ function ResultView({
   respectMin,
   overrides,
   capital,
+  minInvOverrides,
 }: {
   result: OptimizeResponse;
   assetById: Record<string, FundAsset>;
@@ -404,6 +450,7 @@ function ResultView({
   respectMin: boolean;
   overrides: Record<string, AssumptionOverrideIn>;
   capital: number;
+  minInvOverrides: Record<string, number>;
 }) {
   return (
     <>
@@ -446,6 +493,7 @@ function ResultView({
           respectMin={respectMin}
           overrides={overrides}
           capital={capital}
+          minInvOverrides={minInvOverrides}
         />
       </section>
 
@@ -835,6 +883,7 @@ function InteractiveBuilder({
   respectMin,
   overrides,
   capital,
+  minInvOverrides,
 }: {
   result: OptimizeResponse;
   assetById: Record<string, FundAsset>;
@@ -842,6 +891,7 @@ function InteractiveBuilder({
   respectMin: boolean;
   overrides: Record<string, AssumptionOverrideIn>;
   capital: number;
+  minInvOverrides: Record<string, number>;
 }) {
   const ids = result.stats.map((s) => s.assetId);
 
@@ -867,12 +917,13 @@ function InteractiveBuilder({
         totalCapital: capital,
         respectMinInvestment: respectMin,
         overrides: Object.values(overrides),
+        minInvestmentOverrides: Object.entries(minInvOverrides).map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       })
         .then((r) => setLive(r))
         .finally(() => setPending(false));
     }, 200);
     return () => clearTimeout(t);
-  }, [weights, riskFreeRate, capital, respectMin, overrides]);
+  }, [weights, riskFreeRate, capital, respectMin, overrides, minInvOverrides]);
 
   const seedFrom = (preset: PortfolioPoint) => {
     const w: Record<string, number> = {};

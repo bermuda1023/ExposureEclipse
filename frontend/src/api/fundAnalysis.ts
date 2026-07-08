@@ -40,6 +40,11 @@ export interface MaxWeightIn {
   maxWeight: number;
 }
 
+export interface MinInvestmentOverrideIn {
+  assetId: string;
+  minInvestment: number;
+}
+
 export interface OptimizeRequest {
   assetIds: string[];
   totalCapital: number;
@@ -47,6 +52,7 @@ export interface OptimizeRequest {
   respectMinInvestment: boolean;
   overrides: AssumptionOverrideIn[];
   maxWeights: MaxWeightIn[];
+  minInvestmentOverrides: MinInvestmentOverrideIn[];
   samples: number;
 }
 
@@ -75,6 +81,7 @@ export interface CustomPortfolioRequest {
   totalCapital: number;
   respectMinInvestment: boolean;
   overrides: AssumptionOverrideIn[];
+  minInvestmentOverrides: MinInvestmentOverrideIn[];
 }
 
 export interface CustomPortfolioResponse {

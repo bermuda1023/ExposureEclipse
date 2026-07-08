@@ -83,6 +83,11 @@ class MaxWeightIn(CamelModel):
     max_weight: float          # 0..1
 
 
+class MinInvestmentOverrideIn(CamelModel):
+    asset_id: str
+    min_investment: float      # dollars; 0 = no minimum
+
+
 class OptimizeRequest(CamelModel):
     asset_ids: list[str] = Field(..., description="Subset of catalog IDs")
     total_capital: float = Field(1_000_000, gt=0)
@@ -90,6 +95,7 @@ class OptimizeRequest(CamelModel):
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
     max_weights: list[MaxWeightIn] = Field(default_factory=list)
+    min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
     samples: int = Field(30_000, ge=1_000, le=100_000)
 
 
@@ -158,6 +164,7 @@ class CustomPortfolioRequest(CamelModel):
     total_capital: float = 1_000_000
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
+    min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
 
 
 class CustomPortfolioResponse(CamelModel):
@@ -259,10 +266,16 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
     rho, nn = correlation_matrix(series_by_id, ov_by_id)
 
+    # Effective min investments: catalog default, overridden by user.
+    min_inv_override = {m.asset_id: m.min_investment for m in req.min_investment_overrides}
+    effective_min_inv: dict[str, float] = {}
+    for a in req.asset_ids:
+        effective_min_inv[a] = min_inv_override.get(a, idx[a]["minInvestment"])
+
     min_weights: dict[str, float] = {}
     if req.respect_min_investment:
         for a in req.asset_ids:
-            mi = idx[a]["minInvestment"]
+            mi = effective_min_inv[a]
             if mi > 0:
                 min_weights[a] = min(1.0, mi / req.total_capital)
 
@@ -282,7 +295,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         out = []
         for a, w in weights.items():
             allocation = w * req.total_capital
-            mi = idx[a]["minInvestment"]
+            mi = effective_min_inv.get(a, idx[a]["minInvestment"])
             if w > 1e-6 and mi > 0 and allocation + 0.5 < mi:
                 out.append(a)
         return out
@@ -427,11 +440,12 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     if keep and keep[-1] != len(equity_months) - 1:
         keep.append(len(equity_months) - 1)
 
+    min_inv_override = {m.asset_id: m.min_investment for m in req.min_investment_overrides}
     violations: list[str] = []
     if req.respect_min_investment:
         for a, w in weights.items():
             alloc = w * req.total_capital
-            mi = idx[a]["minInvestment"]
+            mi = min_inv_override.get(a, idx[a]["minInvestment"])
             if w > 1e-6 and mi > 0 and alloc + 0.5 < mi:
                 violations.append(a)
 
