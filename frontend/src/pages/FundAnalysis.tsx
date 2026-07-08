@@ -21,6 +21,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   fetchFundAssets,
   optimizePortfolio,
+  rescoreIr,
   scoreCustomPortfolio,
   type AssetSeries,
   type AssumptionOverrideIn,
@@ -654,6 +655,58 @@ function ResultView({
 }) {
   const capital = result.totalCapital;
   const hasCurrent = result.currentTotal > 0;
+
+  // Live per-asset IR — seeded from the last optimize response, then
+  // updated on-the-fly via /rescore-ir whenever the user changes a
+  // benchmark dropdown. Keyed by assetId so unaffected rows persist.
+  type IrRow = { informationRatio: number; trackingError: number; benchmarkAssetId: string; benchmarkName: string };
+  const [liveIr, setLiveIr] = useState<Record<string, IrRow>>(() => {
+    const m: Record<string, IrRow> = {};
+    for (const s of result.stats) {
+      m[s.assetId] = {
+        informationRatio: s.informationRatio,
+        trackingError: s.trackingError,
+        benchmarkAssetId: s.benchmarkAssetId,
+        benchmarkName: s.benchmarkName,
+      };
+    }
+    return m;
+  });
+  const [pendingIr, setPendingIr] = useState(false);
+
+  // Whenever the user's per-asset benchmark map changes, debounce-refetch.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setPendingIr(true);
+      rescoreIr({
+        assetIds: result.stats.map((s) => s.assetId),
+        perAssetBenchmarks: Object.entries(perAssetBenchmarks)
+          .filter(([id]) => result.stats.some((s) => s.assetId === id))
+          .map(([assetId, benchmarkAssetId]) => ({ assetId, benchmarkAssetId })),
+        defaultBenchmarkAssetId: result.benchmarkAssetId,
+        historyWindowStart,
+      })
+        .then((resp) => {
+          setLiveIr((prev) => {
+            const next = { ...prev };
+            for (const r of resp.rows) {
+              next[r.assetId] = {
+                informationRatio: r.informationRatio,
+                trackingError: r.trackingError,
+                benchmarkAssetId: r.benchmarkAssetId,
+                benchmarkName: r.benchmarkName,
+              };
+            }
+            return next;
+          });
+        })
+        .finally(() => setPendingIr(false));
+    }, 180);
+    return () => clearTimeout(t);
+    // Re-run any time the per-asset benchmark map changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perAssetBenchmarks, historyWindowStart, result.benchmarkAssetId]);
+
   return (
     <>
       <section style={S.banner}>
@@ -718,13 +771,16 @@ function ResultView({
       </section>
 
       <section style={S.card}>
-        <h2 style={S.h2}>Asset stats (post-override)</h2>
+        <h2 style={S.h2}>
+          Asset stats (post-override){" "}
+          {pendingIr && <span style={{ ...S.hint, fontSize: "0.7rem", color: "#3b82f6" }}>· recomputing IR…</span>}
+        </h2>
         <p style={S.hint}>
           <b>Portfolio-level</b> IR is measured vs <b>{result.benchmarkName}</b> (the top-level
-          benchmark). <b>Per-asset</b> IR uses each row's chosen benchmark below — defaulted to
-          the benchmark each fund's own factsheet uses (Upslope→HFRX EH, Alluvial→Russell
-          MicroCap, Cedar Creek→Russell 2000). Change the dropdown per row to reframe how a
-          fund is judged.<br />
+          benchmark). <b>Per-asset</b> IR uses each row's chosen benchmark below — defaulted
+          to the benchmark each fund's own factsheet uses (Upslope→HFRX EH, Alluvial→Russell
+          MicroCap, Cedar Creek→Russell 2000). Change the dropdown per row and the IR updates
+          live — no re-optimize required.<br />
           Rule-of-thumb IR scale (Grinold &amp; Kahn):{" "}
           <span style={{ ...S.chipMuted, color: "#059669", fontWeight: 600 }}>&gt; 0.75 very good</span>
           {" · "}<span style={{ ...S.chipMuted, color: "#059669" }}>0.5–0.75 good</span>
@@ -751,7 +807,15 @@ function ResultView({
               const sharpe =
                 s.annualisedVol > 0 ? (s.annualisedReturn - result.riskFreeRate) / s.annualisedVol : 0;
               const seriesForAsset = result.assetSeries.find((x) => x.assetId === s.assetId);
-              const isBench = s.assetId === s.benchmarkAssetId;
+              // Use the LIVE IR row (updated on-the-fly via /rescore-ir)
+              // rather than the frozen server value from the last optimize.
+              const ir = liveIr[s.assetId] ?? {
+                informationRatio: s.informationRatio,
+                trackingError: s.trackingError,
+                benchmarkAssetId: s.benchmarkAssetId,
+                benchmarkName: s.benchmarkName,
+              };
+              const isBench = s.assetId === ir.benchmarkAssetId;
               return (
                 <tr key={s.assetId}>
                   <td style={S.td}>{assetById[s.assetId]?.name ?? s.assetId}</td>
@@ -760,7 +824,7 @@ function ResultView({
                   <td style={S.tdNum}>{sharpe.toFixed(2)}</td>
                   <td style={S.td}>
                     <select
-                      value={perAssetBenchmarks[s.assetId] ?? s.benchmarkAssetId}
+                      value={perAssetBenchmarks[s.assetId] ?? ir.benchmarkAssetId}
                       onChange={(e) => setPerAssetBenchmark(s.assetId, e.target.value)}
                       style={{ ...S.input, fontSize: "0.7rem", padding: "3px 6px" }}
                     >
@@ -771,10 +835,10 @@ function ResultView({
                       ))}
                     </select>
                   </td>
-                  <td style={{ ...S.tdNum, color: !isBench && s.informationRatio > 0 ? "#059669" : (s.informationRatio < 0 ? "#dc2626" : "#94a3b8"), fontWeight: 600 }}>
-                    {isBench ? "—" : (s.informationRatio !== 0 ? s.informationRatio.toFixed(2) : "—")}
+                  <td style={{ ...S.tdNum, color: !isBench && ir.informationRatio > 0 ? "#059669" : (ir.informationRatio < 0 ? "#dc2626" : "#94a3b8"), fontWeight: 600, transition: "color 0.15s" }}>
+                    {isBench ? "—" : (ir.informationRatio !== 0 ? ir.informationRatio.toFixed(2) : "—")}
                   </td>
-                  <td style={S.tdNum}>{isBench ? "—" : (s.trackingError > 0 ? PCT(s.trackingError) : "—")}</td>
+                  <td style={S.tdNum}>{isBench ? "—" : (ir.trackingError > 0 ? PCT(ir.trackingError) : "—")}</td>
                   <td style={{ ...S.tdNum, color: "#dc2626" }}>{PCT(seriesForAsset?.maxDrawdown ?? 0)}</td>
                   <td style={S.tdNum}>{s.nMonths}</td>
                 </tr>

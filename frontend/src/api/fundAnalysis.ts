@@ -155,3 +155,25 @@ export const optimizePortfolio = (req: OptimizeRequest) =>
 
 export const scoreCustomPortfolio = (req: CustomPortfolioRequest) =>
   apiPost<CustomPortfolioResponse>("/fund-analysis/custom", req);
+
+export interface RescoreIrRequest {
+  assetIds: string[];
+  perAssetBenchmarks: PerAssetBenchmarkIn[];
+  defaultBenchmarkAssetId: string;
+  historyWindowStart: string | null;
+}
+
+export interface RescoreIrRow {
+  assetId: string;
+  informationRatio: number;
+  trackingError: number;
+  benchmarkAssetId: string;
+  benchmarkName: string;
+}
+
+export interface RescoreIrResponse {
+  rows: RescoreIrRow[];
+}
+
+export const rescoreIr = (req: RescoreIrRequest) =>
+  apiPost<RescoreIrResponse>("/fund-analysis/rescore-ir", req);

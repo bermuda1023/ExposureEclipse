@@ -598,4 +598,77 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     )
 
 
+class RescoreIrRequest(CamelModel):
+    """Lightweight endpoint to recompute just the per-asset IR/TE for a
+    new benchmark selection — skips the whole MVO sampling. Used by the
+    frontend when the user changes a per-asset benchmark dropdown so
+    the row updates immediately without a full re-optimize."""
+    asset_ids: list[str]
+    per_asset_benchmarks: list[PerAssetBenchmarkIn] = Field(default_factory=list)
+    default_benchmark_asset_id: str = "spy"
+    history_window_start: str | None = None
+
+
+class RescoreIrRow(CamelModel):
+    asset_id: str
+    information_ratio: float
+    tracking_error: float
+    benchmark_asset_id: str
+    benchmark_name: str
+
+
+class RescoreIrResponse(CamelModel):
+    rows: list[RescoreIrRow]
+
+
+@router.post("/rescore-ir", response_model=RescoreIrResponse)
+def rescore_ir(req: RescoreIrRequest) -> RescoreIrResponse:
+    catalog = _load_catalog()
+    idx = _asset_by_id(catalog)
+
+    missing = [a for a in req.asset_ids if a not in idx]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "VALIDATION_ERROR", "message": f"Unknown asset(s): {missing}"},
+        )
+
+    def _series(asset_id: str):
+        s = series_from_asset_json(idx[asset_id])
+        if req.history_window_start:
+            s = s.since(req.history_window_start)
+        return s
+
+    per_asset_bench_id = {p.asset_id: p.benchmark_asset_id for p in req.per_asset_benchmarks}
+    default_bench = req.default_benchmark_asset_id if req.default_benchmark_asset_id in idx else "spy"
+    bench_series_cache: dict[str, "ReturnSeries"] = {}
+
+    def _bench(asset_id: str):
+        bid = per_asset_bench_id.get(asset_id, default_bench)
+        if bid not in idx:
+            bid = default_bench
+        if bid not in bench_series_cache:
+            bench_series_cache[bid] = _series(bid)
+        return bid, idx[bid]["name"], bench_series_cache[bid]
+
+    rows: list[RescoreIrRow] = []
+    for a in req.asset_ids:
+        asset_series = _series(a)
+        b_id, b_name, b_series = _bench(a)
+        if a == b_id:
+            ir, te = 0.0, 0.0
+        else:
+            ir, te = asset_information_ratio(asset_series, b_series)
+        rows.append(
+            RescoreIrRow(
+                asset_id=a,
+                information_ratio=round(ir, 6),
+                tracking_error=round(te, 6),
+                benchmark_asset_id=b_id,
+                benchmark_name=b_name,
+            )
+        )
+    return RescoreIrResponse(rows=rows)
+
+
 __all__ = ["router"]
