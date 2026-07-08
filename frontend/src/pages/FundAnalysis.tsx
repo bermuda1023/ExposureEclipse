@@ -293,32 +293,46 @@ export function FundAnalysis() {
                     <td style={S.tdNum}>{PCT(a.annualisedVol)}</td>
                     <td style={S.tdNum}>{a.nMonths}</td>
                     <td style={S.tdNum}>
-                      <DollarInput
-                        value={currentInvestments[a.id] ?? 0}
-                        onChange={(v) => setCurrentInv(a.id, v)}
-                        highlight={(currentInvestments[a.id] ?? 0) > 0 ? "#dbeafe" : undefined}
-                        title={(currentInvestments[a.id] ?? 0) > 0
-                          ? `Currently invested — will be a floor if "no-sell" is on`
-                          : "Enter your current position, if any"}
-                      />
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                        <DollarInput
+                          value={currentInvestments[a.id] ?? 0}
+                          onChange={(v) => setCurrentInv(a.id, v)}
+                          highlight={(currentInvestments[a.id] ?? 0) > 0 ? "#dbeafe" : undefined}
+                          title={(currentInvestments[a.id] ?? 0) > 0
+                            ? `Currently invested — will be a floor if "no-sell" is on`
+                            : "Enter your current position, if any"}
+                        />
+                        {(currentInvestments[a.id] ?? 0) > 0 && noSell && totalCapital > 0 && (
+                          <span style={S.floorHint}>
+                            → hard floor {PCT((currentInvestments[a.id]!) / totalCapital, 2)}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td style={S.tdNum}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                        <DollarInput
-                          value={eff}
-                          onChange={(v) => setMinInv(a.id, v)}
-                          highlight={overridden ? "#fef3c7" : undefined}
-                          title={overridden ? `Overridden from PDF default ${CURRENCY(a.minInvestment)}` : "PDF default"}
-                        />
-                        {overridden && (
-                          <button
-                            type="button"
-                            onClick={() => setMinInv(a.id, null)}
-                            title="Reset to PDF default"
-                            style={{ all: "unset", cursor: "pointer", color: "#64748b", fontSize: "0.8rem" }}
-                          >
-                            ↺
-                          </button>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <DollarInput
+                            value={eff}
+                            onChange={(v) => setMinInv(a.id, v)}
+                            highlight={overridden ? "#fef3c7" : undefined}
+                            title={overridden ? `Overridden from PDF default ${CURRENCY(a.minInvestment)}` : "PDF default"}
+                          />
+                          {overridden && (
+                            <button
+                              type="button"
+                              onClick={() => setMinInv(a.id, null)}
+                              title="Reset to PDF default"
+                              style={{ all: "unset", cursor: "pointer", color: "#64748b", fontSize: "0.8rem" }}
+                            >
+                              ↺
+                            </button>
+                          )}
+                        </div>
+                        {respectMin && eff > 0 && totalCapital > 0 && (
+                          <span style={S.floorHint}>
+                            → soft floor {PCT(eff / totalCapital, 2)}
+                          </span>
                         )}
                       </div>
                     </td>
@@ -933,6 +947,14 @@ function RobustnessCard({
           funds will show 100% frequency because we're forcing them to stay ≥ their current weight —
           that's constraint-driven, not merit. Turn no-sell OFF and re-run to see the merit-based
           picture. Held funds are marked <span style={S.forcedPill}>🔒 held</span> in the table below.
+          <br />
+          <br />
+          <b>Why median weights match certain floors:</b> the sampler applies
+          <code style={{ background: "#fef3c7", padding: "0 4px", borderRadius: 3 }}>max(soft min-investment floor when in sample, hard no-sell floor always)</code>.
+          The final floor is the LARGER of your min-investment (as % of total capital) and your
+          current-holding (as % of total capital). Look at the assets table — the small purple
+          "→ soft floor" and "→ hard floor" hints below each dollar input show the actual %
+          being applied per fund.
         </div>
       )}
       {!data && !isRunning && (
@@ -1956,6 +1978,13 @@ const S: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     fontSize: "0.6rem",
     fontWeight: 700,
+  },
+  floorHint: {
+    fontSize: "0.6rem",
+    color: "#7c3aed",
+    fontFamily: "monospace",
+    fontStyle: "italic",
+    lineHeight: 1,
   },
   chartTooltip: {
     marginTop: 4,
