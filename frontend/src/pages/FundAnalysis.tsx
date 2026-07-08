@@ -610,9 +610,10 @@ function ResultView({
         </section>
       </div>
 
-      <div style={S.grid4}>
+      <div style={S.grid5}>
         <PortfolioCard title="Max Sharpe" subtitle="Best risk-adjusted (vs. RF)" portfolio={result.maxSharpe} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#dc2626" />
         <PortfolioCard title="Max Sortino" subtitle="Best downside-adjusted" portfolio={result.maxSortino} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#7c3aed" />
+        <PortfolioCard title="Max Info Ratio" subtitle={`Best active alpha vs ${result.benchmarkName.split(" ")[0]}`} portfolio={result.maxInformationRatio} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#ea580c" />
         <PortfolioCard title="Min Variance" subtitle="Lowest vol" portfolio={result.minVariance} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#059669" />
         <PortfolioCard title="Min Drawdown" subtitle="Smallest historical loss" portfolio={result.minDrawdown} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#0891b2" />
       </div>
@@ -643,6 +644,7 @@ function ResultView({
 
       <section style={S.card}>
         <h2 style={S.h2}>Asset stats (post-override)</h2>
+        <p style={S.hint}>IR + Tracking Error are computed vs {result.benchmarkName}.</p>
         <table style={S.table}>
           <thead>
             <tr>
@@ -650,6 +652,8 @@ function ResultView({
               <th style={S.thNum}>μ (ann)</th>
               <th style={S.thNum}>σ (ann)</th>
               <th style={S.thNum}>Sharpe</th>
+              <th style={S.thNum}>IR</th>
+              <th style={S.thNum}>Tracking err.</th>
               <th style={S.thNum}>Max DD</th>
               <th style={S.thNum}>Empirical μ</th>
               <th style={S.thNum}>Empirical σ</th>
@@ -662,12 +666,17 @@ function ResultView({
               const sharpe =
                 s.annualisedVol > 0 ? (s.annualisedReturn - result.riskFreeRate) / s.annualisedVol : 0;
               const seriesForAsset = result.assetSeries.find((x) => x.assetId === s.assetId);
+              const isBench = s.assetId === result.benchmarkAssetId;
               return (
                 <tr key={s.assetId}>
-                  <td style={S.td}>{assetById[s.assetId]?.name ?? s.assetId}</td>
+                  <td style={S.td}>{assetById[s.assetId]?.name ?? s.assetId}{isBench && <span style={S.chipMuted}> · benchmark</span>}</td>
                   <td style={S.tdNum}>{PCT(s.annualisedReturn)}</td>
                   <td style={S.tdNum}>{PCT(s.annualisedVol)}</td>
                   <td style={S.tdNum}>{sharpe.toFixed(2)}</td>
+                  <td style={{ ...S.tdNum, color: !isBench && s.informationRatio > 0 ? "#059669" : (s.informationRatio < 0 ? "#dc2626" : "#94a3b8"), fontWeight: 600 }}>
+                    {isBench ? "—" : (s.informationRatio !== 0 ? s.informationRatio.toFixed(2) : "—")}
+                  </td>
+                  <td style={S.tdNum}>{isBench ? "—" : (s.trackingError > 0 ? PCT(s.trackingError) : "—")}</td>
                   <td style={{ ...S.tdNum, color: "#dc2626" }}>{PCT(seriesForAsset?.maxDrawdown ?? 0)}</td>
                   <td style={S.tdNumMuted}>{PCT(s.empiricalReturn)}</td>
                   <td style={S.tdNumMuted}>{PCT(s.empiricalVol)}</td>
@@ -721,11 +730,12 @@ function PortfolioCard({
     <section style={{ ...S.card, borderTop: `3px solid ${accent}`, marginBottom: 0 }}>
       <h2 style={{ ...S.h2, color: accent }}>{title}</h2>
       <p style={S.hint}>{subtitle}</p>
-      <div style={S.statGrid}>
+      <div style={S.statGridSmall}>
         <Stat label="Return" value={PCT(portfolio.annualisedReturn)} />
         <Stat label="Vol" value={PCT(portfolio.annualisedVol)} />
         <Stat label="Sharpe" value={portfolio.sharpe.toFixed(2)} />
         <Stat label="Sortino" value={portfolio.sortino !== 0 ? portfolio.sortino.toFixed(2) : "—"} />
+        <Stat label="IR" value={portfolio.informationRatio !== 0 ? portfolio.informationRatio.toFixed(2) : "—"} />
         <Stat label="Max DD" value={portfolio.maxDrawdown < -0.0001 ? PCT(portfolio.maxDrawdown) : "0.0%"} />
       </div>
       <table style={S.table}>
@@ -791,7 +801,7 @@ function FrontierChart({
   const iw = W - P.left - P.right;
   const ih = H - P.top - P.bottom;
 
-  const points = [...result.frontier, result.maxSharpe, result.maxSortino, result.minVariance, result.minDrawdown];
+  const points = [...result.frontier, result.maxSharpe, result.maxSortino, result.maxInformationRatio, result.minVariance, result.minDrawdown];
   const assetDots = result.stats.map((s) => ({ id: s.assetId, vol: s.annualisedVol, ret: s.annualisedReturn }));
 
   const allVols = [...points.map((p) => p.annualisedVol), ...assetDots.map((d) => d.vol)];
@@ -840,8 +850,9 @@ function FrontierChart({
         ))}
         <FrontierMarker x={x(result.maxSharpe.annualisedVol)} y={y(result.maxSharpe.annualisedReturn)} label="Max Sharpe" color="#dc2626" />
         <FrontierMarker x={x(result.maxSortino.annualisedVol)} y={y(result.maxSortino.annualisedReturn)} label="Max Sortino" color="#7c3aed" dy={-14} />
+        <FrontierMarker x={x(result.maxInformationRatio.annualisedVol)} y={y(result.maxInformationRatio.annualisedReturn)} label="Max IR" color="#ea580c" dy={14} />
         <FrontierMarker x={x(result.minVariance.annualisedVol)} y={y(result.minVariance.annualisedReturn)} label="Min Var" color="#059669" />
-        <FrontierMarker x={x(result.minDrawdown.annualisedVol)} y={y(result.minDrawdown.annualisedReturn)} label="Min DD" color="#0891b2" dy={14} />
+        <FrontierMarker x={x(result.minDrawdown.annualisedVol)} y={y(result.minDrawdown.annualisedReturn)} label="Min DD" color="#0891b2" dy={28} />
       </svg>
     </div>
   );
@@ -1113,6 +1124,7 @@ function InteractiveBuilder({
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
           <button style={S.pillBtn} onClick={() => seedFrom(result.maxSharpe)}>Seed: Max Sharpe</button>
           <button style={S.pillBtn} onClick={() => seedFrom(result.maxSortino)}>Seed: Max Sortino</button>
+          <button style={S.pillBtn} onClick={() => seedFrom(result.maxInformationRatio)}>Seed: Max IR</button>
           <button style={S.pillBtn} onClick={() => seedFrom(result.minVariance)}>Seed: Min Var</button>
           <button style={S.pillBtn} onClick={() => seedFrom(result.minDrawdown)}>Seed: Min DD</button>
           {result.currentTotal > 0 && (
@@ -1178,8 +1190,9 @@ function InteractiveBuilder({
               <Stat label="Return" value={PCT(live.portfolio.annualisedReturn)} />
               <Stat label="Vol" value={PCT(live.portfolio.annualisedVol)} />
               <Stat label="Sharpe" value={live.portfolio.sharpe.toFixed(2)} />
-              <Stat label="Sortino" value={live.portfolio.sortino > 0 ? live.portfolio.sortino.toFixed(2) : "—"} />
-              <Stat label="Max DD" value={live.portfolio.maxDrawdown < 0 ? PCT(live.portfolio.maxDrawdown) : "—"} />
+              <Stat label="Sortino" value={live.portfolio.sortino !== 0 ? live.portfolio.sortino.toFixed(2) : "—"} />
+              <Stat label="IR (vs SPY)" value={live.portfolio.informationRatio !== 0 ? live.portfolio.informationRatio.toFixed(2) : "—"} />
+              <Stat label="Max DD" value={live.portfolio.maxDrawdown < -0.0001 ? PCT(live.portfolio.maxDrawdown) : "0.0%"} />
             </div>
             {live.portfolio.violatesMinInvestment.length > 0 && (
               <div style={{ ...S.warn, marginTop: 6 }}>
@@ -1306,6 +1319,7 @@ const S: Record<string, React.CSSProperties> = {
   grid: { display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16, marginBottom: 16 },
   grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 },
   grid4: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 },
+  grid5: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 16 },
   card: {
     background: "white",
     border: "1px solid #e2e8f0",
@@ -1356,7 +1370,8 @@ const S: Record<string, React.CSSProperties> = {
   warn: { color: "#b45309", fontSize: "0.7rem", marginTop: 4 },
   err: { background: "#fee2e2", color: "#991b1b", padding: 12, borderRadius: 6, marginBottom: 16 },
   statGrid: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, marginBottom: 8 },
-  statGridWide: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 6 },
+  statGridSmall: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 3, marginBottom: 8 },
+  statGridWide: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 6 },
   stat: { background: "#f8fafc", borderRadius: 4, padding: "4px 6px" },
   statLabel: { fontSize: "0.6rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 },
   statValue: { fontSize: "0.95rem", fontWeight: 700, color: "#0f172a", fontVariantNumeric: "tabular-nums" },

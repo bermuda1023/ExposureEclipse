@@ -76,6 +76,8 @@ class PortfolioPoint:
     annualised_vol: float
     sharpe: float
     sortino: float = 0.0
+    information_ratio: float = 0.0
+    tracking_error: float = 0.0
     max_drawdown: float = 0.0
     violates_min_investment: list[str] = field(default_factory=list)
 
@@ -309,6 +311,56 @@ def drawdown_series(returns: list[float]) -> list[float]:
     return out
 
 
+IR_MAX = 15.0  # cap on IR — annualised values above this are spurious
+
+
+def information_ratio_and_te(
+    monthly_returns: list[tuple[str, float]],
+    benchmark: ReturnSeries,
+) -> tuple[float, float]:
+    """Annualised IR + tracking error vs a benchmark ReturnSeries.
+
+    IR = mean_active_monthly / std_active_monthly * sqrt(12)
+    TE = std_active_monthly * sqrt(12)
+
+    Active return per month = portfolio_ret - benchmark_ret for months
+    where both are defined. Requires ≥12 aligned months to be meaningful.
+    IR is capped at ±IR_MAX to prevent spurious huge values when a
+    short lucky sample almost perfectly tracks the benchmark.
+    """
+    if not monthly_returns:
+        return 0.0, 0.0
+    active: list[float] = []
+    for m, port_ret in monthly_returns:
+        if m in benchmark.returns:
+            active.append(port_ret - benchmark.returns[m])
+    n = len(active)
+    if n < 12:
+        return 0.0, 0.0
+    mean_active = sum(active) / n
+    if n < 2:
+        return 0.0, 0.0
+    var = sum((a - mean_active) ** 2 for a in active) / (n - 1)
+    te_monthly = math.sqrt(var)
+    if te_monthly == 0:
+        return 0.0, 0.0
+    ir = (mean_active / te_monthly) * math.sqrt(12)
+    te_annual = te_monthly * math.sqrt(12)
+    return max(-IR_MAX, min(IR_MAX, ir)), te_annual
+
+
+def asset_information_ratio(
+    asset: ReturnSeries,
+    benchmark: ReturnSeries,
+) -> tuple[float, float]:
+    """Convenience: IR + TE for a single asset series vs a benchmark."""
+    common = sorted(set(asset.returns) & set(benchmark.returns))
+    if len(common) < 12:
+        return 0.0, 0.0
+    pairs = [(m, asset.returns[m]) for m in common]
+    return information_ratio_and_te(pairs, benchmark)
+
+
 def portfolio_vol(
     weights: dict[str, float],
     stats: dict[str, AssetStat],
@@ -333,15 +385,17 @@ def compute_frontier(
     stats: dict[str, AssetStat],
     rho: dict[str, dict[str, float]],
     series_by_id: dict[str, ReturnSeries] | None = None,
+    benchmark_series: ReturnSeries | None = None,
     risk_free_rate: float = 0.04,
     min_weights: dict[str, float] | None = None,
     hard_min_weights: dict[str, float] | None = None,
     max_weights: dict[str, float] | None = None,
     samples: int = 40_000,
     seed: int = 42,
-) -> tuple[list[PortfolioPoint], PortfolioPoint, PortfolioPoint, PortfolioPoint | None, PortfolioPoint]:
+) -> tuple[list[PortfolioPoint], PortfolioPoint, PortfolioPoint, PortfolioPoint | None, PortfolioPoint, PortfolioPoint | None]:
     """Trace the efficient frontier by Dirichlet sampling. Returns
-    (frontier_hull, max_sharpe, min_variance, max_sortino, min_drawdown).
+    (frontier_hull, max_sharpe, min_variance, max_sortino, min_drawdown,
+    max_information_ratio).
 
     `min_weights[asset_id]` (optional) applies a per-asset **soft** lower
     bound — the floor only kicks in if the participation-subset draw
@@ -365,7 +419,7 @@ def compute_frontier(
     n = len(ids)
     if n == 0:
         empty = PortfolioPoint({}, 0.0, 0.0, 0.0)
-        return [], empty, empty, None, empty
+        return [], empty, empty, None, empty, None
     if n == 1:
         one = ids[0]
         p = PortfolioPoint(
@@ -374,7 +428,7 @@ def compute_frontier(
             annualised_vol=stats[one].annualised_vol,
             sharpe=(stats[one].annualised_return - risk_free_rate) / stats[one].annualised_vol if stats[one].annualised_vol > 0 else 0.0,
         )
-        return [p], p, p, p, p
+        return [p], p, p, p, p, p
 
     rng = random.Random(seed)
     min_weights = min_weights or {}
@@ -445,16 +499,21 @@ def compute_frontier(
         sharpe = (ret - risk_free_rate) / vol if vol > 0 else 0.0
         sortino = 0.0
         mdd = 0.0
+        ir = 0.0
+        te = 0.0
         if series_by_id is not None:
-            monthly = [r for _, r in portfolio_monthly_series(weights, series_by_id)]
-            if monthly:
-                sortino = sortino_from_monthly(monthly, mar_annual=risk_free_rate)
-                mdd = max_drawdown_from_monthly(monthly)
-        points.append(PortfolioPoint(weights, ret, vol, sharpe, sortino, mdd))
+            monthly_series = portfolio_monthly_series(weights, series_by_id)
+            monthly_rets = [r for _, r in monthly_series]
+            if monthly_rets:
+                sortino = sortino_from_monthly(monthly_rets, mar_annual=risk_free_rate)
+                mdd = max_drawdown_from_monthly(monthly_rets)
+                if benchmark_series is not None:
+                    ir, te = information_ratio_and_te(monthly_series, benchmark_series)
+        points.append(PortfolioPoint(weights, ret, vol, sharpe, sortino, ir, te, mdd))
 
     if not points:
         empty = PortfolioPoint({i: 0.0 for i in ids}, 0.0, 0.0, 0.0)
-        return [], empty, empty, None, empty
+        return [], empty, empty, None, empty, None
 
     # Extract the efficient frontier (upper envelope over vol bins).
     points.sort(key=lambda p: p.annualised_vol)
@@ -480,11 +539,14 @@ def compute_frontier(
     max_sharpe = max(points, key=lambda p: p.sharpe)
     min_var = min(points, key=lambda p: p.annualised_vol)
     max_sortino: PortfolioPoint | None = None
+    max_ir: PortfolioPoint | None = None
     min_dd = min_var
     if series_by_id is not None:
         max_sortino = max(points, key=lambda p: p.sortino)
         min_dd = max(points, key=lambda p: p.max_drawdown)  # least negative
-    return frontier, max_sharpe, min_var, max_sortino, min_dd
+    if benchmark_series is not None:
+        max_ir = max(points, key=lambda p: p.information_ratio)
+    return frontier, max_sharpe, min_var, max_sortino, min_dd, max_ir
 
 
 # ─────────────────────── loader ───────────────────────

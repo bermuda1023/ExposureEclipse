@@ -70,6 +70,8 @@ export interface PortfolioPoint {
   annualisedVol: number;
   sharpe: number;
   sortino: number;
+  informationRatio: number;
+  trackingError: number;
   maxDrawdown: number;
   violatesMinInvestment: string[];
 }
@@ -110,6 +112,8 @@ export interface AssetStat {
   empiricalReturn: number;
   empiricalVol: number;
   isOverridden: boolean;
+  informationRatio: number;
+  trackingError: number;
 }
 
 export interface OptimizeResponse {
@@ -119,6 +123,7 @@ export interface OptimizeResponse {
   frontier: PortfolioPoint[];
   maxSharpe: PortfolioPoint;
   maxSortino: PortfolioPoint;
+  maxInformationRatio: PortfolioPoint;
   minVariance: PortfolioPoint;
   minDrawdown: PortfolioPoint;
   totalCapital: number;
@@ -126,6 +131,8 @@ export interface OptimizeResponse {
   currentTotal: number;
   currentInvestments: Record<string, number>;
   riskFreeRate: number;
+  benchmarkAssetId: string;
+  benchmarkName: string;
   assetSeries: AssetSeries[];
   historyWindowStart: string | null;
   effectiveWindowMonths: number;

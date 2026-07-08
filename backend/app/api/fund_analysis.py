@@ -27,11 +27,13 @@ from pydantic import Field
 from ..models.common import CamelModel
 from ..services.portfolio_math import (
     AssumptionOverride,
+    asset_information_ratio,
     compute_asset_stats,
     compute_frontier,
     correlation_matrix,
     cumulative_curve,
     drawdown_series,
+    information_ratio_and_te,
     max_drawdown_from_monthly,
     portfolio_monthly_series,
     portfolio_return,
@@ -99,6 +101,7 @@ class OptimizeRequest(CamelModel):
     current_investments: list[CurrentInvestmentIn] = Field(default_factory=list)
     no_sell: bool = Field(False, description="If True, current holdings are minimum weights (can only add)")
     history_window_start: str | None = Field(None, description="YYYY-MM inclusive; None = full history")
+    benchmark_asset_id: str = Field("spy", description="Asset ID used as IR benchmark")
     risk_free_rate: float = 0.04
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
@@ -113,6 +116,8 @@ class PortfolioOut(CamelModel):
     annualised_vol: float
     sharpe: float
     sortino: float = 0.0
+    information_ratio: float = 0.0
+    tracking_error: float = 0.0
     max_drawdown: float = 0.0
     violates_min_investment: list[str] = Field(default_factory=list)
 
@@ -127,6 +132,8 @@ class AssetStatOut(CamelModel):
     empirical_return: float          # pre-override empirical
     empirical_vol: float
     is_overridden: bool
+    information_ratio: float = 0.0   # vs benchmark
+    tracking_error: float = 0.0
 
 
 class AssetSeriesOut(CamelModel):
@@ -147,6 +154,7 @@ class OptimizeResponse(CamelModel):
     frontier: list[PortfolioPoint_wire]
     max_sharpe: PortfolioOut
     max_sortino: PortfolioOut
+    max_information_ratio: PortfolioOut
     min_variance: PortfolioOut
     min_drawdown: PortfolioOut
     total_capital: float
@@ -154,6 +162,8 @@ class OptimizeResponse(CamelModel):
     current_total: float
     current_investments: dict[str, float]
     risk_free_rate: float
+    benchmark_asset_id: str
+    benchmark_name: str
     asset_series: list[AssetSeriesOut]
     history_window_start: str | None
     effective_window_months: int
@@ -165,6 +175,8 @@ class PortfolioPoint_wire(CamelModel):
     annualised_vol: float
     sharpe: float
     sortino: float = 0.0
+    information_ratio: float = 0.0
+    tracking_error: float = 0.0
     max_drawdown: float = 0.0
     violates_min_investment: list[str] = Field(default_factory=list)
 
@@ -273,6 +285,16 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         (len(series_by_id[a].returns) for a in req.asset_ids), default=0
     )
 
+    # Benchmark series (for IR) — always loaded regardless of whether
+    # user selected it as an investable asset. Windowed the same way.
+    benchmark_id = req.benchmark_asset_id
+    if benchmark_id not in idx:
+        benchmark_id = "spy"
+    benchmark_series = series_from_asset_json(idx[benchmark_id])
+    if req.history_window_start:
+        benchmark_series = benchmark_series.since(req.history_window_start)
+    benchmark_name = idx[benchmark_id]["name"]
+
     # Overrides
     ov_by_id: dict[str, AssumptionOverride] = {}
     for o in req.overrides:
@@ -324,10 +346,11 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
 
     max_weights: dict[str, float] = {mw.asset_id: mw.max_weight for mw in req.max_weights if mw.asset_id in req.asset_ids}
 
-    frontier, max_sharpe, min_var, max_sortino, min_dd = compute_frontier(
+    frontier, max_sharpe, min_var, max_sortino, min_dd, max_ir = compute_frontier(
         stats=stats,
         rho=rho,
         series_by_id=series_by_id,
+        benchmark_series=benchmark_series,
         risk_free_rate=req.risk_free_rate,
         min_weights=min_weights,
         hard_min_weights=hard_min_weights,
@@ -351,6 +374,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             annualised_vol=round(p.annualised_vol, 6),
             sharpe=round(p.sharpe, 6),
             sortino=round(p.sortino, 6),
+            information_ratio=round(p.information_ratio, 6),
+            tracking_error=round(p.tracking_error, 6),
             max_drawdown=round(p.max_drawdown, 6),
             violates_min_investment=_flag_violations(p.weights),
         )
@@ -362,6 +387,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             annualised_vol=round(p.annualised_vol, 6),
             sharpe=round(p.sharpe, 6),
             sortino=round(p.sortino, 6),
+            information_ratio=round(p.information_ratio, 6),
+            tracking_error=round(p.tracking_error, 6),
             max_drawdown=round(p.max_drawdown, 6),
             violates_min_investment=_flag_violations(p.weights),
         )
@@ -370,6 +397,11 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     for a in req.asset_ids:
         s = stats[a]
         e = empirical[a]
+        # Per-asset IR + TE vs benchmark (skip if asset IS the benchmark)
+        if a == benchmark_id:
+            asset_ir, asset_te = 0.0, 0.0
+        else:
+            asset_ir, asset_te = asset_information_ratio(series_by_id[a], benchmark_series)
         stats_out.append(
             AssetStatOut(
                 asset_id=a,
@@ -385,6 +417,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
                     ov_by_id[a].annualised_return is not None
                     or ov_by_id[a].annualised_vol is not None
                 ),
+                information_ratio=round(asset_ir, 6),
+                tracking_error=round(asset_te, 6),
             )
         )
 
@@ -421,6 +455,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         frontier=[_to_wire(p) for p in frontier],
         max_sharpe=_to_out(max_sharpe),
         max_sortino=_to_out(max_sortino if max_sortino is not None else max_sharpe),
+        max_information_ratio=_to_out(max_ir if max_ir is not None else max_sharpe),
         min_variance=_to_out(min_var),
         min_drawdown=_to_out(min_dd),
         total_capital=total_capital,
@@ -428,6 +463,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         current_total=current_total,
         current_investments={a: current_by_id.get(a, 0.0) for a in req.asset_ids},
         risk_free_rate=req.risk_free_rate,
+        benchmark_asset_id=benchmark_id,
+        benchmark_name=benchmark_name,
         asset_series=asset_series,
         history_window_start=req.history_window_start,
         effective_window_months=effective_window_months,
@@ -484,6 +521,14 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     sortino = sortino_from_monthly(monthly_rets, mar_annual=req.risk_free_rate) if monthly_rets else 0.0
     mdd = max_drawdown_from_monthly(monthly_rets) if monthly_rets else 0.0
 
+    # IR vs SPY (default). Always uses full history of SPY through the
+    # same window filter as the portfolio.
+    bench_id = "spy" if "spy" in idx else next(iter(idx))
+    bench = series_from_asset_json(idx[bench_id])
+    if req.history_window_start:
+        bench = bench.since(req.history_window_start)
+    ir, te = information_ratio_and_te(monthly, bench) if monthly else (0.0, 0.0)
+
     equity_months = [m for m, _ in monthly]
     equity = cumulative_curve(monthly_rets)
     dd = drawdown_series(monthly_rets)
@@ -509,6 +554,8 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
             annualised_vol=round(vol, 6),
             sharpe=round(sharpe, 6),
             sortino=round(sortino, 6),
+            information_ratio=round(ir, 6),
+            tracking_error=round(te, 6),
             max_drawdown=round(mdd, 6),
             violates_min_investment=violations,
         ),
