@@ -50,6 +50,11 @@ export interface CurrentInvestmentIn {
   amount: number;
 }
 
+export interface PerAssetBenchmarkIn {
+  assetId: string;
+  benchmarkAssetId: string;
+}
+
 export interface OptimizeRequest {
   assetIds: string[];
   newCapital: number;
@@ -57,6 +62,7 @@ export interface OptimizeRequest {
   noSell: boolean;
   historyWindowStart: string | null;
   benchmarkAssetId: string;
+  perAssetBenchmarks: PerAssetBenchmarkIn[];
   riskFreeRate: number;
   respectMinInvestment: boolean;
   overrides: AssumptionOverrideIn[];
@@ -115,6 +121,8 @@ export interface AssetStat {
   isOverridden: boolean;
   informationRatio: number;
   trackingError: number;
+  benchmarkAssetId: string;
+  benchmarkName: string;
 }
 
 export interface OptimizeResponse {

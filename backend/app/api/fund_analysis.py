@@ -95,13 +95,22 @@ class CurrentInvestmentIn(CamelModel):
     amount: float              # dollars currently held in this fund
 
 
+class PerAssetBenchmarkIn(CamelModel):
+    asset_id: str
+    benchmark_asset_id: str    # the benchmark to score this specific asset against
+
+
 class OptimizeRequest(CamelModel):
     asset_ids: list[str] = Field(..., description="Subset of catalog IDs")
     new_capital: float = Field(1_000_000, ge=0, description="New $ to deploy on top of current holdings")
     current_investments: list[CurrentInvestmentIn] = Field(default_factory=list)
     no_sell: bool = Field(False, description="If True, current holdings are minimum weights (can only add)")
     history_window_start: str | None = Field(None, description="YYYY-MM inclusive; None = full history")
-    benchmark_asset_id: str = Field("spy", description="Asset ID used as IR benchmark")
+    benchmark_asset_id: str = Field("spy", description="Portfolio-level IR benchmark")
+    per_asset_benchmarks: list[PerAssetBenchmarkIn] = Field(
+        default_factory=list,
+        description="Optional per-asset benchmark override for the asset stats table. Portfolio-level IR still uses benchmark_asset_id.",
+    )
     risk_free_rate: float = 0.04
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
@@ -132,8 +141,10 @@ class AssetStatOut(CamelModel):
     empirical_return: float          # pre-override empirical
     empirical_vol: float
     is_overridden: bool
-    information_ratio: float = 0.0   # vs benchmark
+    information_ratio: float = 0.0   # vs this asset's benchmark
     tracking_error: float = 0.0
+    benchmark_asset_id: str = ""     # which benchmark this row's IR is measured against
+    benchmark_name: str = ""
 
 
 class AssetSeriesOut(CamelModel):
@@ -285,8 +296,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         (len(series_by_id[a].returns) for a in req.asset_ids), default=0
     )
 
-    # Benchmark series (for IR) — always loaded regardless of whether
-    # user selected it as an investable asset. Windowed the same way.
+    # Portfolio-level benchmark (for the portfolio IR calc). Always
+    # loaded even if not in the investable set.
     benchmark_id = req.benchmark_asset_id
     if benchmark_id not in idx:
         benchmark_id = "spy"
@@ -294,6 +305,23 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     if req.history_window_start:
         benchmark_series = benchmark_series.since(req.history_window_start)
     benchmark_name = idx[benchmark_id]["name"]
+
+    # Per-asset benchmark overrides for the stats table. Defaults each
+    # asset to the portfolio benchmark; user can point any row at a
+    # different index. Series get cached so we only build each once.
+    per_asset_bench_id = {p.asset_id: p.benchmark_asset_id for p in req.per_asset_benchmarks}
+    bench_series_cache: dict[str, "ReturnSeries"] = {benchmark_id: benchmark_series}
+
+    def _bench_for(asset_id: str) -> tuple[str, str, "ReturnSeries"]:
+        bid = per_asset_bench_id.get(asset_id, benchmark_id)
+        if bid not in idx:
+            bid = benchmark_id
+        if bid not in bench_series_cache:
+            s = series_from_asset_json(idx[bid])
+            if req.history_window_start:
+                s = s.since(req.history_window_start)
+            bench_series_cache[bid] = s
+        return bid, idx[bid]["name"], bench_series_cache[bid]
 
     # Overrides
     ov_by_id: dict[str, AssumptionOverride] = {}
@@ -397,11 +425,14 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     for a in req.asset_ids:
         s = stats[a]
         e = empirical[a]
-        # Per-asset IR + TE vs benchmark (skip if asset IS the benchmark)
-        if a == benchmark_id:
+        # Per-asset IR + TE — uses the per-asset benchmark override if
+        # provided, else the portfolio benchmark. Skipped if the asset
+        # IS its own benchmark (IR-vs-self is undefined).
+        a_bench_id, a_bench_name, a_bench_series = _bench_for(a)
+        if a == a_bench_id:
             asset_ir, asset_te = 0.0, 0.0
         else:
-            asset_ir, asset_te = asset_information_ratio(series_by_id[a], benchmark_series)
+            asset_ir, asset_te = asset_information_ratio(series_by_id[a], a_bench_series)
         stats_out.append(
             AssetStatOut(
                 asset_id=a,
@@ -419,6 +450,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
                 ),
                 information_ratio=round(asset_ir, 6),
                 tracking_error=round(asset_te, 6),
+                benchmark_asset_id=a_bench_id,
+                benchmark_name=a_bench_name,
             )
         )
 

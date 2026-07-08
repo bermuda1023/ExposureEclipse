@@ -46,6 +46,29 @@ const DEFAULT_OVERRIDES: Record<string, AssumptionOverrideIn> = {
 // funds like CAS Sosin.
 const DEFAULT_MAX_WEIGHTS: MaxWeightIn[] = [];
 
+// Per-fund default IR benchmarks drawn from each fund's own PDF:
+//   Upslope     → HFRX Equity Hedge (Appendix A explicitly benchmarks
+//                  the strategy against HFRX EH)
+//   Alluvial    → Russell MicroCap TR (their factsheet's benchmark)
+//   Cedar Creek → Russell 2000 (they compare AAR against Russell 2000
+//                  in their appendix — 8.2% vs their 14.8%)
+//   CAS Sosin   → S&P 500 (Sosin's stated objective is to beat SPY)
+//   Bireme      → S&P 500 (their factsheet uses SPY)
+//   Gator       → S&P 500 (they compare monthly attribution to SPY and
+//                  S&P 1500 Financials; SPY is our closest proxy)
+//   Primary     → S&P 500 (physical rare-earth funds have no natural
+//                  index benchmark; SPY as the default "opportunity
+//                  cost of capital" is reasonable)
+const DEFAULT_PER_ASSET_BENCHMARKS: Record<string, string> = {
+  upslope: "hfrx_eh",
+  alluvial: "rmc",
+  cedar_creek: "r2k",
+  cas_sosin: "spy",
+  bireme: "spy",
+  gator: "spy",
+  primary_commodity: "spy",
+};
+
 const CURRENCY = (v: number) =>
   v.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
@@ -91,6 +114,9 @@ export function FundAnalysis() {
   const [historyWindow, setHistoryWindow] = useState<string | null>(null);   // null = all
   const [customWindowMonth, setCustomWindowMonth] = useState<string>("2019-01");
   const [benchmarkAssetId, setBenchmarkAssetId] = useState<string>("spy");
+  const [perAssetBenchmarks, setPerAssetBenchmarks] = useState<Record<string, string>>(
+    { ...DEFAULT_PER_ASSET_BENCHMARKS },
+  );
   const [riskFreeRate, setRiskFreeRate] = useState<number>(0.04);
   const [respectMin, setRespectMin] = useState<boolean>(true);
   const [overrides, setOverrides] = useState<Record<string, AssumptionOverrideIn>>(DEFAULT_OVERRIDES);
@@ -122,6 +148,9 @@ export function FundAnalysis() {
       noSell,
       historyWindowStart,
       benchmarkAssetId,
+      perAssetBenchmarks: Object.entries(perAssetBenchmarks)
+        .filter(([id]) => selected.has(id))
+        .map(([assetId, benchmarkAssetId]) => ({ assetId, benchmarkAssetId })),
       riskFreeRate,
       respectMinInvestment: respectMin,
       overrides: Object.values(overrides).filter((o) => selected.has(o.assetId)),
@@ -473,7 +502,22 @@ export function FundAnalysis() {
         </section>
       </div>
 
-      {result && <ResultView result={result} assetById={assetById} riskFreeRate={riskFreeRate} respectMin={respectMin} overrides={overrides} minInvOverrides={minInvOverrides} historyWindowStart={historyWindowStart} />}
+      {result && (
+        <ResultView
+          result={result}
+          assetById={assetById}
+          assets={assets}
+          riskFreeRate={riskFreeRate}
+          respectMin={respectMin}
+          overrides={overrides}
+          minInvOverrides={minInvOverrides}
+          historyWindowStart={historyWindowStart}
+          perAssetBenchmarks={perAssetBenchmarks}
+          setPerAssetBenchmark={(id, bid) =>
+            setPerAssetBenchmarks((prev) => ({ ...prev, [id]: bid }))
+          }
+        />
+      )}
       {optimizeMutation.isError && (
         <div style={S.err}>{(optimizeMutation.error as Error).message}</div>
       )}
@@ -588,19 +632,25 @@ function DollarInput({
 function ResultView({
   result,
   assetById,
+  assets,
   riskFreeRate,
   respectMin,
   overrides,
   minInvOverrides,
   historyWindowStart,
+  perAssetBenchmarks,
+  setPerAssetBenchmark,
 }: {
   result: OptimizeResponse;
   assetById: Record<string, FundAsset>;
+  assets: FundAsset[];
   riskFreeRate: number;
   respectMin: boolean;
   overrides: Record<string, AssumptionOverrideIn>;
   minInvOverrides: Record<string, number>;
   historyWindowStart: string | null;
+  perAssetBenchmarks: Record<string, string>;
+  setPerAssetBenchmark: (assetId: string, benchmarkAssetId: string) => void;
 }) {
   const capital = result.totalCapital;
   const hasCurrent = result.currentTotal > 0;
@@ -670,8 +720,12 @@ function ResultView({
       <section style={S.card}>
         <h2 style={S.h2}>Asset stats (post-override)</h2>
         <p style={S.hint}>
-          IR + Tracking Error are computed vs <b>{result.benchmarkName}</b>. Rule-of-thumb
-          IR scale (Grinold &amp; Kahn):{" "}
+          <b>Portfolio-level</b> IR is measured vs <b>{result.benchmarkName}</b> (the top-level
+          benchmark). <b>Per-asset</b> IR uses each row's chosen benchmark below — defaulted to
+          the benchmark each fund's own factsheet uses (Upslope→HFRX EH, Alluvial→Russell
+          MicroCap, Cedar Creek→Russell 2000). Change the dropdown per row to reframe how a
+          fund is judged.<br />
+          Rule-of-thumb IR scale (Grinold &amp; Kahn):{" "}
           <span style={{ ...S.chipMuted, color: "#059669", fontWeight: 600 }}>&gt; 0.75 very good</span>
           {" · "}<span style={{ ...S.chipMuted, color: "#059669" }}>0.5–0.75 good</span>
           {" · "}<span style={{ ...S.chipMuted, color: "#65a30d" }}>0.25–0.5 decent</span>
@@ -685,13 +739,11 @@ function ResultView({
               <th style={S.thNum}>μ (ann)</th>
               <th style={S.thNum}>σ (ann)</th>
               <th style={S.thNum}>Sharpe</th>
+              <th style={S.th}>IR benchmark</th>
               <th style={S.thNum}>IR</th>
               <th style={S.thNum}>Tracking err.</th>
               <th style={S.thNum}>Max DD</th>
-              <th style={S.thNum}>Empirical μ</th>
-              <th style={S.thNum}>Empirical σ</th>
               <th style={S.thNum}>Months</th>
-              <th style={S.thNum}>Overridden?</th>
             </tr>
           </thead>
           <tbody>
@@ -699,22 +751,32 @@ function ResultView({
               const sharpe =
                 s.annualisedVol > 0 ? (s.annualisedReturn - result.riskFreeRate) / s.annualisedVol : 0;
               const seriesForAsset = result.assetSeries.find((x) => x.assetId === s.assetId);
-              const isBench = s.assetId === result.benchmarkAssetId;
+              const isBench = s.assetId === s.benchmarkAssetId;
               return (
                 <tr key={s.assetId}>
-                  <td style={S.td}>{assetById[s.assetId]?.name ?? s.assetId}{isBench && <span style={S.chipMuted}> · benchmark</span>}</td>
+                  <td style={S.td}>{assetById[s.assetId]?.name ?? s.assetId}</td>
                   <td style={S.tdNum}>{PCT(s.annualisedReturn)}</td>
                   <td style={S.tdNum}>{PCT(s.annualisedVol)}</td>
                   <td style={S.tdNum}>{sharpe.toFixed(2)}</td>
+                  <td style={S.td}>
+                    <select
+                      value={perAssetBenchmarks[s.assetId] ?? s.benchmarkAssetId}
+                      onChange={(e) => setPerAssetBenchmark(s.assetId, e.target.value)}
+                      style={{ ...S.input, fontSize: "0.7rem", padding: "3px 6px" }}
+                    >
+                      {assets.map((a) => (
+                        <option key={a.id} value={a.id} disabled={a.id === s.assetId}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                   <td style={{ ...S.tdNum, color: !isBench && s.informationRatio > 0 ? "#059669" : (s.informationRatio < 0 ? "#dc2626" : "#94a3b8"), fontWeight: 600 }}>
                     {isBench ? "—" : (s.informationRatio !== 0 ? s.informationRatio.toFixed(2) : "—")}
                   </td>
                   <td style={S.tdNum}>{isBench ? "—" : (s.trackingError > 0 ? PCT(s.trackingError) : "—")}</td>
                   <td style={{ ...S.tdNum, color: "#dc2626" }}>{PCT(seriesForAsset?.maxDrawdown ?? 0)}</td>
-                  <td style={S.tdNumMuted}>{PCT(s.empiricalReturn)}</td>
-                  <td style={S.tdNumMuted}>{PCT(s.empiricalVol)}</td>
                   <td style={S.tdNum}>{s.nMonths}</td>
-                  <td style={S.tdNum}>{s.isOverridden ? "✓" : ""}</td>
                 </tr>
               );
             })}
