@@ -179,6 +179,57 @@ AGG_ANNUAL = {
 AGG_END_MONTH = {2026: 6}
 
 
+# HFRX Global Hedge Fund Index — broad HF benchmark; annualised σ ~5%
+HFRX_GLOBAL_ANNUAL = {
+    2006: 0.093, 2007: 0.042, 2008: -0.232, 2009: 0.134, 2010: 0.052,
+    2011: -0.089, 2012: 0.035, 2013: 0.067, 2014: -0.006, 2015: -0.036,
+    2016: 0.025, 2017: 0.060, 2018: -0.067, 2019: 0.086, 2020: 0.068,
+    2021: 0.037, 2022: -0.044, 2023: 0.045, 2024: 0.060, 2025: 0.075,
+    2026: 0.030,
+}
+HFRX_GLOBAL_END_MONTH = {2026: 6}
+
+# HFRX Equity Hedge Index — Upslope's stated benchmark; higher equity beta than Global
+HFRX_EH_ANNUAL = {
+    2006: 0.096, 2007: 0.038, 2008: -0.257, 2009: 0.135, 2010: 0.089,
+    2011: -0.199, 2012: 0.043, 2013: 0.117, 2014: 0.017, 2015: -0.023,
+    2016: 0.001, 2017: 0.100, 2018: -0.094, 2019: 0.110, 2020: 0.045,
+    2021: 0.112, 2022: -0.036, 2023: 0.039, 2024: 0.060, 2025: 0.065,
+    2026: -0.015,  # per Upslope's Q1 2026 factsheet
+}
+HFRX_EH_END_MONTH = {2026: 6}
+
+# Russell 2000 TR (IWM) — small-cap US equity
+R2K_ANNUAL = {
+    2006: 0.184, 2007: -0.016, 2008: -0.338, 2009: 0.272, 2010: 0.269,
+    2011: -0.042, 2012: 0.164, 2013: 0.388, 2014: 0.049, 2015: -0.044,
+    2016: 0.213, 2017: 0.146, 2018: -0.110, 2019: 0.255, 2020: 0.200,
+    2021: 0.147, 2022: -0.204, 2023: 0.169, 2024: 0.115, 2025: 0.128,
+    2026: 0.062,
+}
+R2K_END_MONTH = {2026: 6}
+
+# Russell MicroCap TR (IWC) — Alluvial's stated benchmark
+RMC_ANNUAL = {
+    2006: 0.150, 2007: -0.075, 2008: -0.395, 2009: 0.276, 2010: 0.281,
+    2011: -0.089, 2012: 0.146, 2013: 0.457, 2014: 0.031, 2015: -0.052,
+    2016: 0.201, 2017: 0.132, 2018: -0.131, 2019: 0.224, 2020: 0.210,
+    2021: 0.193, 2022: -0.219, 2023: 0.093, 2024: 0.125, 2025: 0.150,
+    2026: 0.216,  # per Alluvial factsheet YTD May 2026 = 21.6%
+}
+RMC_END_MONTH = {2026: 6}
+
+# S&P Midcap 400 TR (MDY) — Upslope's stated benchmark
+MDY_ANNUAL = {
+    2006: 0.103, 2007: 0.080, 2008: -0.367, 2009: 0.374, 2010: 0.266,
+    2011: -0.017, 2012: 0.179, 2013: 0.335, 2014: 0.097, 2015: -0.022,
+    2016: 0.207, 2017: 0.159, 2018: -0.113, 2019: 0.258, 2020: 0.135,
+    2021: 0.246, 2022: -0.133, 2023: 0.161, 2024: 0.136, 2025: 0.072,
+    2026: 0.025,
+}
+MDY_END_MONTH = {2026: 6}
+
+
 def _distribute_annual_into_months(
     year: int,
     annual_return: float,
@@ -228,6 +279,11 @@ def _build_reference(annual: dict[int, float], monthly_sigma: float, end_partial
 def main() -> None:
     spy = _build_reference(SPY_ANNUAL, monthly_sigma=0.045, end_partial=SPY_END_MONTH, seed=1)
     agg = _build_reference(AGG_ANNUAL, monthly_sigma=0.013, end_partial=AGG_END_MONTH, seed=2)
+    hfrx_global = _build_reference(HFRX_GLOBAL_ANNUAL, monthly_sigma=0.015, end_partial=HFRX_GLOBAL_END_MONTH, seed=3)
+    hfrx_eh = _build_reference(HFRX_EH_ANNUAL, monthly_sigma=0.020, end_partial=HFRX_EH_END_MONTH, seed=4)
+    r2k = _build_reference(R2K_ANNUAL, monthly_sigma=0.055, end_partial=R2K_END_MONTH, seed=5)
+    rmc = _build_reference(RMC_ANNUAL, monthly_sigma=0.065, end_partial=RMC_END_MONTH, seed=6)
+    mdy = _build_reference(MDY_ANNUAL, monthly_sigma=0.050, end_partial=MDY_END_MONTH, seed=7)
 
     payload = {
         "asOf": "2026-06-30",
@@ -372,7 +428,77 @@ def main() -> None:
                 "lockup": "Daily liquidity",
                 "inception": "2006-01",
                 "returns": agg,
-                "source": "Synthesised monthly (see JSON note); annual TR verified against public data",
+                "source": "Synthesised monthly; annual TR verified against public data",
+            },
+            {
+                "id": "hfrx_global",
+                "name": "HFRX Global Hedge Fund Index",
+                "kind": "reference",
+                "strategy": "Broad hedge fund benchmark (multi-strategy)",
+                "manager": "HFR Inc.",
+                "minInvestment": 0,
+                "aumMillions": None,
+                "fees": "N/A (index)",
+                "lockup": "N/A",
+                "inception": "2006-01",
+                "returns": hfrx_global,
+                "source": "Synthesised monthly from published HFRX Global annual TR anchors",
+            },
+            {
+                "id": "hfrx_eh",
+                "name": "HFRX Equity Hedge Index",
+                "kind": "reference",
+                "strategy": "L/S equity hedge fund benchmark (Upslope's stated benchmark)",
+                "manager": "HFR Inc.",
+                "minInvestment": 0,
+                "aumMillions": None,
+                "fees": "N/A (index)",
+                "lockup": "N/A",
+                "inception": "2006-01",
+                "returns": hfrx_eh,
+                "source": "Synthesised monthly; annual anchors cross-checked against Upslope's PDF-stated benchmark returns",
+            },
+            {
+                "id": "r2k",
+                "name": "Russell 2000 TR (IWM)",
+                "kind": "reference",
+                "strategy": "Small-cap US equity passive index",
+                "manager": "BlackRock",
+                "minInvestment": 0,
+                "aumMillions": None,
+                "fees": "0.19% expense ratio",
+                "lockup": "Daily liquidity",
+                "inception": "2006-01",
+                "returns": r2k,
+                "source": "Synthesised monthly; annual TR verified against public data",
+            },
+            {
+                "id": "rmc",
+                "name": "Russell MicroCap TR (IWC)",
+                "kind": "reference",
+                "strategy": "Micro-cap US equity index (Alluvial's stated benchmark)",
+                "manager": "BlackRock",
+                "minInvestment": 0,
+                "aumMillions": None,
+                "fees": "0.60% expense ratio",
+                "lockup": "Daily liquidity",
+                "inception": "2006-01",
+                "returns": rmc,
+                "source": "Synthesised monthly; recent YTD anchor from Alluvial's May 2026 factsheet",
+            },
+            {
+                "id": "mdy",
+                "name": "S&P Midcap 400 TR (MDY)",
+                "kind": "reference",
+                "strategy": "Mid-cap US equity passive index (Upslope's stated benchmark)",
+                "manager": "State Street",
+                "minInvestment": 0,
+                "aumMillions": None,
+                "fees": "0.22% expense ratio",
+                "lockup": "Daily liquidity",
+                "inception": "2006-01",
+                "returns": mdy,
+                "source": "Synthesised monthly; annual anchors verified against Upslope factsheet + public data",
             },
         ],
     }

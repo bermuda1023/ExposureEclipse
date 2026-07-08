@@ -79,6 +79,9 @@ const SHORT_NAME: Record<string, string> = {
 };
 
 export function FundAnalysis() {
+  // Default: check the 7 funds + SPY + AGG. HFRX / R2K / RMC / MDY are
+  // available in the catalog + benchmark dropdown but unchecked so the
+  // asset picker stays readable.
   const [selected, setSelected] = useState<Set<string>>(
     new Set(["gator", "bireme", "upslope", "primary_commodity", "cedar_creek", "cas_sosin", "alluvial", "spy", "agg"]),
   );
