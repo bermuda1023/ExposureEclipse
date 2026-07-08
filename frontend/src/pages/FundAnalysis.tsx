@@ -762,6 +762,11 @@ function ResultView({
         assetById={assetById}
         onRun={onRunRobustness}
         isRunning={isRobustnessRunning}
+        heldAssetIds={new Set(
+          Object.entries(result.currentInvestments)
+            .filter(([, v]) => v > 0)
+            .map(([id]) => id),
+        )}
       />
 
       <div style={S.grid2}>
@@ -897,11 +902,13 @@ function RobustnessCard({
   assetById,
   onRun,
   isRunning,
+  heldAssetIds,
 }: {
   data: RobustnessResponse | undefined;
   assetById: Record<string, FundAsset>;
   onRun: () => void;
   isRunning: boolean;
+  heldAssetIds: Set<string>;
 }) {
   return (
     <section style={S.card}>
@@ -909,7 +916,7 @@ function RobustnessCard({
         <div>
           <h2 style={S.h2}>Fund robustness scan</h2>
           <p style={S.hint}>
-            Runs the optimizer across <b>24 scenarios</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino) and reports how often each fund appears in the winning portfolio. Constant appearance = robust pick; only in specific regimes = situational; rare appearance = probably not needed.
+            Runs the optimizer across <b>24 scenarios</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino) and reports how often each fund appears in the winning portfolio. Uses <b>all your current settings</b> — overrides, min investments, concentration caps, current holdings, and no-sell if on.
           </p>
         </div>
         <button
@@ -920,12 +927,20 @@ function RobustnessCard({
           {isRunning ? "Scanning… (~7s)" : data ? "Re-run scan" : "Run robustness scan"}
         </button>
       </div>
+      {heldAssetIds.size > 0 && (
+        <div style={S.calloutInfo}>
+          ⚠ <b>Heads up:</b> you have {heldAssetIds.size} current position(s). If <b>no-sell</b> is on, held
+          funds will show 100% frequency because we're forcing them to stay ≥ their current weight —
+          that's constraint-driven, not merit. Turn no-sell OFF and re-run to see the merit-based
+          picture. Held funds are marked <span style={S.forcedPill}>🔒 held</span> in the table below.
+        </div>
+      )}
       {!data && !isRunning && (
         <p style={{ ...S.hint, marginTop: 8, fontStyle: "italic" }}>
           Click "Run robustness scan" to see which funds are consistent picks regardless of your history window / RF rate / objective choices.
         </p>
       )}
-      {data && <RobustnessTable data={data} assetById={assetById} />}
+      {data && <RobustnessTable data={data} assetById={assetById} heldAssetIds={heldAssetIds} />}
     </section>
   );
 }
@@ -933,9 +948,11 @@ function RobustnessCard({
 function RobustnessTable({
   data,
   assetById,
+  heldAssetIds,
 }: {
   data: RobustnessResponse;
   assetById: Record<string, FundAsset>;
+  heldAssetIds: Set<string>;
 }) {
   const CLASS_TINT: Record<string, string> = {
     core: "#059669",
@@ -980,15 +997,27 @@ function RobustnessTable({
           </tr>
         </thead>
         <tbody>
-          {data.rows.map((r) => (
+          {data.rows.map((r) => {
+            const isHeld = heldAssetIds.has(r.assetId);
+            // "Forced core" heuristic: fund is currently held AND classified
+            // as core with 100% frequency — that's the constraint doing it,
+            // not merit.
+            const forcedCore = isHeld && r.classification === "core" && r.selectionFrequency >= 0.99;
+            return (
             <tr key={r.assetId} style={{ background: CLASS_BG[r.classification], opacity: r.classification === "peripheral" ? 0.7 : 1 }}>
               <td style={{ ...S.td, fontWeight: 600, color: ASSET_COLOR[r.assetId] }}>
                 {assetById[r.assetId]?.name ?? r.assetId}
+                {isHeld && <span style={{ ...S.forcedPill, marginLeft: 6 }} title="You currently hold this fund">🔒 held</span>}
               </td>
               <td style={S.td}>
                 <span style={{ ...S.chip, background: CLASS_TINT[r.classification], fontSize: "0.6rem" }}>
                   {CLASS_LABEL[r.classification]}
                 </span>
+                {forcedCore && (
+                  <div style={{ fontSize: "0.6rem", color: "#92400e", marginTop: 2, fontStyle: "italic" }}>
+                    forced by no-sell
+                  </div>
+                )}
               </td>
               <td style={S.td}>
                 <div style={{ background: "#e2e8f0", borderRadius: 3, height: 14, position: "relative", width: 180 }}>
@@ -1019,7 +1048,8 @@ function RobustnessTable({
               <td style={S.tdNum}>{r.medianWeightWhenSelected > 0 ? PCT(r.medianWeightWhenSelected, 1) : "—"}</td>
               <td style={S.tdNum}>{PCT(r.maxWeight, 1)}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       <p style={{ ...S.hint, marginTop: 10 }}>
@@ -1906,6 +1936,26 @@ const S: Record<string, React.CSSProperties> = {
     width: 14,
     height: 3,
     borderRadius: 2,
+  },
+  calloutInfo: {
+    background: "#fef3c7",
+    border: "1px solid #fde68a",
+    borderRadius: 6,
+    padding: "8px 12px",
+    fontSize: "0.72rem",
+    color: "#92400e",
+    marginTop: 6,
+    marginBottom: 8,
+    lineHeight: 1.55,
+  },
+  forcedPill: {
+    display: "inline-block",
+    background: "#e0e7ff",
+    color: "#3730a3",
+    padding: "1px 6px",
+    borderRadius: 999,
+    fontSize: "0.6rem",
+    fontWeight: 700,
   },
   chartTooltip: {
     marginTop: 4,
