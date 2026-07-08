@@ -244,27 +244,30 @@ def portfolio_monthly_series(
     return out
 
 
-MIN_MONTHS_FOR_TAIL_METRICS = 24
+MIN_MONTHS_FOR_TAIL_METRICS = 12
+SORTINO_MAX = 15.0  # cap on Sortino — any higher is spurious for annualised data
 
 
 def sortino_from_monthly(returns: list[float], mar_annual: float = 0.0) -> float:
     """Annualised Sortino using CAGR in the numerator (matches factsheet
     convention) and monthly downside deviation vs the target in the
-    denominator. Returns 0.0 if the sample is too short (<24 months) or
-    fewer than 3 downside months — otherwise the ratio can spike to
-    nonsense values when a lucky sample avoids drawdowns."""
+    denominator. Returns 0.0 if the sample is <12 months or has fewer
+    than 2 downside months — either case makes the ratio meaningless.
+    Result is capped at SORTINO_MAX to prevent spurious huge values
+    when a short lucky sample almost avoids drawdowns."""
     if len(returns) < MIN_MONTHS_FOR_TAIL_METRICS:
         return 0.0
     mar_m = (1 + mar_annual) ** (1 / 12) - 1
     downside_vals = [(r - mar_m) ** 2 for r in returns if r < mar_m]
-    if len(downside_vals) < 3:
+    if len(downside_vals) < 2:
         return 0.0
     dd = math.sqrt(sum(downside_vals) / len(returns))
     if dd == 0:
         return 0.0
     ann_ret = _cagr(returns)
     ann_dd = dd * math.sqrt(12)
-    return (ann_ret - mar_annual) / ann_dd
+    sortino = (ann_ret - mar_annual) / ann_dd
+    return max(-SORTINO_MAX, min(SORTINO_MAX, sortino))
 
 
 def max_drawdown_from_monthly(returns: list[float]) -> float:

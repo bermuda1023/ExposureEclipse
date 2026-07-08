@@ -725,8 +725,8 @@ function PortfolioCard({
         <Stat label="Return" value={PCT(portfolio.annualisedReturn)} />
         <Stat label="Vol" value={PCT(portfolio.annualisedVol)} />
         <Stat label="Sharpe" value={portfolio.sharpe.toFixed(2)} />
-        <Stat label="Sortino" value={portfolio.sortino > 0 ? portfolio.sortino.toFixed(2) : "—"} />
-        <Stat label="Max DD" value={portfolio.maxDrawdown < 0 ? PCT(portfolio.maxDrawdown) : "—"} />
+        <Stat label="Sortino" value={portfolio.sortino !== 0 ? portfolio.sortino.toFixed(2) : "—"} />
+        <Stat label="Max DD" value={portfolio.maxDrawdown < -0.0001 ? PCT(portfolio.maxDrawdown) : "0.0%"} />
       </div>
       <table style={S.table}>
         <thead>
