@@ -644,7 +644,15 @@ function ResultView({
 
       <section style={S.card}>
         <h2 style={S.h2}>Asset stats (post-override)</h2>
-        <p style={S.hint}>IR + Tracking Error are computed vs {result.benchmarkName}.</p>
+        <p style={S.hint}>
+          IR + Tracking Error are computed vs <b>{result.benchmarkName}</b>. Rule-of-thumb
+          IR scale (Grinold &amp; Kahn):{" "}
+          <span style={{ ...S.chipMuted, color: "#059669", fontWeight: 600 }}>&gt; 0.75 very good</span>
+          {" · "}<span style={{ ...S.chipMuted, color: "#059669" }}>0.5–0.75 good</span>
+          {" · "}<span style={{ ...S.chipMuted, color: "#65a30d" }}>0.25–0.5 decent</span>
+          {" · "}<span style={{ ...S.chipMuted, color: "#94a3b8" }}>~0 no alpha</span>
+          {" · "}<span style={{ ...S.chipMuted, color: "#dc2626", fontWeight: 600 }}>&lt; 0 worse than benchmark</span>
+        </p>
         <table style={S.table}>
           <thead>
             <tr>
