@@ -56,6 +56,7 @@ export interface OptimizeRequest {
   currentInvestments: CurrentInvestmentIn[];
   noSell: boolean;
   historyWindowStart: string | null;
+  benchmarkAssetId: string;
   riskFreeRate: number;
   respectMinInvestment: boolean;
   overrides: AssumptionOverrideIn[];

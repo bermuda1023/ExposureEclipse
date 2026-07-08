@@ -87,6 +87,7 @@ export function FundAnalysis() {
   const [noSell, setNoSell] = useState<boolean>(false);
   const [historyWindow, setHistoryWindow] = useState<string | null>(null);   // null = all
   const [customWindowMonth, setCustomWindowMonth] = useState<string>("2019-01");
+  const [benchmarkAssetId, setBenchmarkAssetId] = useState<string>("spy");
   const [riskFreeRate, setRiskFreeRate] = useState<number>(0.04);
   const [respectMin, setRespectMin] = useState<boolean>(true);
   const [overrides, setOverrides] = useState<Record<string, AssumptionOverrideIn>>(DEFAULT_OVERRIDES);
@@ -117,6 +118,7 @@ export function FundAnalysis() {
         .map(([assetId, amount]) => ({ assetId, amount })),
       noSell,
       historyWindowStart,
+      benchmarkAssetId,
       riskFreeRate,
       respectMinInvestment: respectMin,
       overrides: Object.values(overrides).filter((o) => selected.has(o.assetId)),
@@ -332,6 +334,26 @@ export function FundAnalysis() {
             <span style={S.hint}>
               Filters monthly returns to this window. Useful to see how a fund's stats look in the
               current regime (e.g. Gator post-2020, when its Sharpe rose from 0.69 to 0.87).
+            </span>
+          </label>
+
+          <label style={S.label}>
+            IR benchmark
+            <select
+              value={benchmarkAssetId}
+              onChange={(e) => setBenchmarkAssetId(e.target.value)}
+              style={S.input}
+            >
+              {assets.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            <span style={S.hint}>
+              What the Information Ratio measures active return against. Default S&amp;P 500 for
+              "am I beating the market" — switch to AGG for "am I beating bonds," or to any
+              individual fund for pair-wise comparison (e.g. Upslope's IR vs. Cedar Creek).
             </span>
           </label>
 
