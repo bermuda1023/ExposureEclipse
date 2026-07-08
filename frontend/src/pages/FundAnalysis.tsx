@@ -236,14 +236,10 @@ export function FundAnalysis() {
                     <td style={S.tdNum}>{PCT(a.annualisedVol)}</td>
                     <td style={S.tdNum}>{a.nMonths}</td>
                     <td style={S.tdNum}>
-                      <input
-                        type="number"
+                      <DollarInput
                         value={currentInvestments[a.id] ?? 0}
-                        min={0}
-                        step={50_000}
-                        onChange={(e) => setCurrentInv(a.id, Math.max(0, Number(e.target.value) || 0))}
-                        style={{ ...S.input, width: 130, textAlign: "right",
-                                background: (currentInvestments[a.id] ?? 0) > 0 ? "#dbeafe" : undefined }}
+                        onChange={(v) => setCurrentInv(a.id, v)}
+                        highlight={(currentInvestments[a.id] ?? 0) > 0 ? "#dbeafe" : undefined}
                         title={(currentInvestments[a.id] ?? 0) > 0
                           ? `Currently invested — will be a floor if "no-sell" is on`
                           : "Enter your current position, if any"}
@@ -251,16 +247,10 @@ export function FundAnalysis() {
                     </td>
                     <td style={S.tdNum}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
-                        <input
-                          type="number"
+                        <DollarInput
                           value={eff}
-                          min={0}
-                          step={50_000}
-                          onChange={(e) => {
-                            const v = Number(e.target.value);
-                            setMinInv(a.id, Number.isFinite(v) && v >= 0 ? v : null);
-                          }}
-                          style={{ ...S.input, width: 130, textAlign: "right", background: overridden ? "#fef3c7" : undefined }}
+                          onChange={(v) => setMinInv(a.id, v)}
+                          highlight={overridden ? "#fef3c7" : undefined}
                           title={overridden ? `Overridden from PDF default ${CURRENCY(a.minInvestment)}` : "PDF default"}
                         />
                         {overridden && (
@@ -302,13 +292,10 @@ export function FundAnalysis() {
 
           <label style={S.label}>
             New capital to deploy ($)
-            <input
-              type="number"
+            <DollarInput
               value={newCapital}
-              min={0}
-              step={100_000}
-              onChange={(e) => setNewCapital(Math.max(0, Number(e.target.value) || 0))}
-              style={S.input}
+              onChange={(v) => setNewCapital(v)}
+              width={220}
             />
             <span style={S.hint}>Set per-fund current holdings in the Assets table above.</span>
           </label>
@@ -517,6 +504,60 @@ function PercentInput({
       />
       <span style={{ fontSize: "0.7rem", color: "#64748b" }}>%</span>
     </div>
+  );
+}
+
+/**
+ * Dollar amount input — displays with thousands separators, accepts
+ * digits (and optional commas which get stripped). Anything non-numeric
+ * is discarded. Empty string = 0.
+ *
+ * Uses a local text-state so the user can freely edit without the value
+ * jumping mid-keystroke.
+ */
+function DollarInput({
+  value,
+  onChange,
+  width = 130,
+  highlight,
+  title,
+  placeholder,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  width?: number;
+  highlight?: string;
+  title?: string;
+  placeholder?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState<string>("");
+  const display = focused
+    ? draft
+    : value > 0
+      ? value.toLocaleString("en-US")
+      : "";
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={display}
+      placeholder={placeholder ?? "0"}
+      onFocus={() => {
+        setDraft(value > 0 ? String(value) : "");
+        setFocused(true);
+      }}
+      onChange={(e) => {
+        // While focused we let anything through but only feed digits to
+        // the parent — this keeps typing 1000000 fluid.
+        const stripped = e.target.value.replace(/[^0-9]/g, "");
+        setDraft(stripped);
+        onChange(stripped === "" ? 0 : Number(stripped));
+      }}
+      onBlur={() => setFocused(false)}
+      style={{ ...S.input, width, textAlign: "right", background: highlight, fontVariantNumeric: "tabular-nums" }}
+      title={title}
+    />
   );
 }
 
