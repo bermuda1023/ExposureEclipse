@@ -85,13 +85,33 @@ def _monthly_stats(returns: Sequence[float]) -> tuple[float, float]:
     return mean, math.sqrt(var)
 
 
+def _cagr(returns: Sequence[float]) -> float:
+    """Compound annual growth rate — the industry-standard "annualised
+    return" quoted on fund factsheets. Differs from arithmetic-mean-based
+    annualisation whenever volatility > 0 (Jensen's inequality / volatility
+    drag). Matches the numbers on the Bireme / Upslope / Cedar Creek / CAS
+    / Alluvial letters."""
+    n = len(returns)
+    if n == 0:
+        return 0.0
+    cumulative = 1.0
+    for r in returns:
+        cumulative *= 1 + r
+    if cumulative <= 0:
+        return -1.0
+    return cumulative ** (12 / n) - 1
+
+
 def compute_asset_stats(series: ReturnSeries) -> AssetStat:
     if not series.returns:
         return AssetStat(series.asset_id, 0, 0.0, 0.0, 0.0, 0.0, "", "")
     months = sorted(series.returns)
     vals = [series.returns[m] for m in months]
     m_mean, m_std = _monthly_stats(vals)
-    annualised_return = (1.0 + m_mean) ** 12 - 1.0
+    # CAGR (geometric) — the industry standard. Volatility drag on CAS
+    # Sosin is ~10 pts vs arithmetic (34% arith → 24.6% CAGR), so this
+    # matters a lot for high-vol funds.
+    annualised_return = _cagr(vals)
     annualised_vol = m_std * math.sqrt(12)
     return AssetStat(
         asset_id=series.asset_id,
@@ -109,12 +129,14 @@ def _apply_overrides(
     stat: AssetStat,
     override: AssumptionOverride | None,
 ) -> AssetStat:
-    """Return a new AssetStat with overrides applied where provided."""
+    """Return a new AssetStat with overrides applied where provided.
+    User-supplied `annualised_return` is treated as CAGR (industry
+    convention). Monthly mean is back-solved as the CAGR-equivalent
+    monthly compounding rate."""
     if override is None:
         return stat
     ann_ret = override.annualised_return if override.annualised_return is not None else stat.annualised_return
     ann_vol = override.annualised_vol if override.annualised_vol is not None else stat.annualised_vol
-    # Back-solve monthly mean/std to keep everything consistent.
     monthly_mean = (1.0 + ann_ret) ** (1 / 12) - 1.0
     monthly_std = ann_vol / math.sqrt(12) if ann_vol > 0 else 0.0
     return AssetStat(
@@ -217,9 +239,9 @@ MIN_MONTHS_FOR_TAIL_METRICS = 24
 
 
 def sortino_from_monthly(returns: list[float], mar_annual: float = 0.0) -> float:
-    """Sortino ratio using monthly downside deviation vs the target
-    (annualised MAR / 12). Annualised. Returns 0.0 if the sample is too
-    short for the metric to be meaningful (<24 months) or if there are
+    """Annualised Sortino using CAGR in the numerator (matches factsheet
+    convention) and monthly downside deviation vs the target in the
+    denominator. Returns 0.0 if the sample is too short (<24 months) or
     fewer than 3 downside months — otherwise the ratio can spike to
     nonsense values when a lucky sample avoids drawdowns."""
     if len(returns) < MIN_MONTHS_FOR_TAIL_METRICS:
@@ -231,8 +253,7 @@ def sortino_from_monthly(returns: list[float], mar_annual: float = 0.0) -> float
     dd = math.sqrt(sum(downside_vals) / len(returns))
     if dd == 0:
         return 0.0
-    mean_m = sum(returns) / len(returns)
-    ann_ret = (1 + mean_m) ** 12 - 1
+    ann_ret = _cagr(returns)
     ann_dd = dd * math.sqrt(12)
     return (ann_ret - mar_annual) / ann_dd
 
