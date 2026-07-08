@@ -66,6 +66,8 @@ class PortfolioPoint:
     annualised_return: float
     annualised_vol: float
     sharpe: float
+    sortino: float = 0.0
+    max_drawdown: float = 0.0
     violates_min_investment: list[str] = field(default_factory=list)
 
 
@@ -189,6 +191,91 @@ def portfolio_return(weights: dict[str, float], stats: dict[str, AssetStat]) -> 
     return sum(weights[a] * stats[a].annualised_return for a in weights)
 
 
+def portfolio_monthly_series(
+    weights: dict[str, float],
+    series_by_id: dict[str, ReturnSeries],
+) -> list[tuple[str, float]]:
+    """Build the portfolio's monthly-return series over the union of months
+    that ALL selected (weight > 0) assets share. Returns [(month, ret), ...]
+    sorted by month. Used for portfolio Sortino, drawdown, and the growth-of-$1
+    chart on the frontend."""
+    active = [a for a, w in weights.items() if w > 1e-6]
+    if not active:
+        return []
+    common = set(series_by_id[active[0]].returns)
+    for a in active[1:]:
+        common &= set(series_by_id[a].returns)
+    months = sorted(common)
+    out: list[tuple[str, float]] = []
+    for m in months:
+        r = sum(weights[a] * series_by_id[a].returns[m] for a in active)
+        out.append((m, r))
+    return out
+
+
+MIN_MONTHS_FOR_TAIL_METRICS = 24
+
+
+def sortino_from_monthly(returns: list[float], mar_annual: float = 0.0) -> float:
+    """Sortino ratio using monthly downside deviation vs the target
+    (annualised MAR / 12). Annualised. Returns 0.0 if the sample is too
+    short for the metric to be meaningful (<24 months) or if there are
+    fewer than 3 downside months — otherwise the ratio can spike to
+    nonsense values when a lucky sample avoids drawdowns."""
+    if len(returns) < MIN_MONTHS_FOR_TAIL_METRICS:
+        return 0.0
+    mar_m = (1 + mar_annual) ** (1 / 12) - 1
+    downside_vals = [(r - mar_m) ** 2 for r in returns if r < mar_m]
+    if len(downside_vals) < 3:
+        return 0.0
+    dd = math.sqrt(sum(downside_vals) / len(returns))
+    if dd == 0:
+        return 0.0
+    mean_m = sum(returns) / len(returns)
+    ann_ret = (1 + mean_m) ** 12 - 1
+    ann_dd = dd * math.sqrt(12)
+    return (ann_ret - mar_annual) / ann_dd
+
+
+def max_drawdown_from_monthly(returns: list[float]) -> float:
+    """Max drawdown over the compounded equity curve. Returns a NEGATIVE
+    number (e.g. -0.32 = 32% peak-to-trough drawdown). Returns 0 if the
+    sample is too short to be meaningful."""
+    if len(returns) < MIN_MONTHS_FOR_TAIL_METRICS:
+        return 0.0
+    equity = 1.0
+    peak = 1.0
+    worst = 0.0
+    for r in returns:
+        equity *= 1 + r
+        peak = max(peak, equity)
+        dd = equity / peak - 1
+        worst = min(worst, dd)
+    return worst
+
+
+def cumulative_curve(returns: list[float]) -> list[float]:
+    """Compounded equity curve starting at 1.0."""
+    out = []
+    equity = 1.0
+    for r in returns:
+        equity *= 1 + r
+        out.append(equity)
+    return out
+
+
+def drawdown_series(returns: list[float]) -> list[float]:
+    """Per-month drawdown from running peak."""
+    out = []
+    equity = 1.0
+    peak = 1.0
+    for r in returns:
+        equity *= 1 + r
+        peak = max(peak, equity)
+        out.append(equity / peak - 1)
+    return out
+
+
 def portfolio_vol(
     weights: dict[str, float],
     stats: dict[str, AssetStat],
@@ -212,24 +299,34 @@ def _sample_dirichlet(n: int, alpha: float, rng: random.Random) -> list[float]:
 def compute_frontier(
     stats: dict[str, AssetStat],
     rho: dict[str, dict[str, float]],
+    series_by_id: dict[str, ReturnSeries] | None = None,
     risk_free_rate: float = 0.04,
     min_weights: dict[str, float] | None = None,
+    max_weights: dict[str, float] | None = None,
     samples: int = 40_000,
     seed: int = 42,
-) -> tuple[list[PortfolioPoint], PortfolioPoint, PortfolioPoint]:
+) -> tuple[list[PortfolioPoint], PortfolioPoint, PortfolioPoint, PortfolioPoint | None, PortfolioPoint]:
     """Trace the efficient frontier by Dirichlet sampling. Returns
-    (frontier_hull, max_sharpe, min_variance).
+    (frontier_hull, max_sharpe, min_variance, max_sortino, min_drawdown).
 
     `min_weights[asset_id]` (optional) applies a per-asset lower bound
     for any asset the sampler picks (participation floor from the
     minimum-investment constraint). Assets can still be picked out at
     weight 0 — floors only kick in for assets the sample includes.
+
+    `max_weights[asset_id]` (optional) hard-caps each asset at that
+    weight; violating samples are skipped. Useful for concentration
+    controls on volatile funds like Sosin.
+
+    When `series_by_id` is supplied we also compute per-sample Sortino
+    and max drawdown (from the joint monthly series) and return the
+    max-Sortino + min-drawdown points.
     """
     ids = list(stats)
     n = len(ids)
     if n == 0:
         empty = PortfolioPoint({}, 0.0, 0.0, 0.0)
-        return [], empty, empty
+        return [], empty, empty, None, empty
     if n == 1:
         one = ids[0]
         p = PortfolioPoint(
@@ -238,10 +335,11 @@ def compute_frontier(
             annualised_vol=stats[one].annualised_vol,
             sharpe=(stats[one].annualised_return - risk_free_rate) / stats[one].annualised_vol if stats[one].annualised_vol > 0 else 0.0,
         )
-        return [p], p, p
+        return [p], p, p, p, p
 
     rng = random.Random(seed)
     min_weights = min_weights or {}
+    max_weights = max_weights or {}
     points: list[PortfolioPoint] = []
 
     # Mix Dirichlet with concentration levels to cover both the diffuse
@@ -283,14 +381,27 @@ def compute_frontier(
                 else:
                     weights[a] = 0.0
 
+        # Hard max-weight cap: reject if any active asset breaches
+        if max_weights:
+            over = any(weights[a] > max_weights.get(a, 1.0) + 1e-9 for a in ids)
+            if over:
+                continue
+
         ret = portfolio_return(weights, stats)
         vol = portfolio_vol(weights, stats, rho)
         sharpe = (ret - risk_free_rate) / vol if vol > 0 else 0.0
-        points.append(PortfolioPoint(weights, ret, vol, sharpe))
+        sortino = 0.0
+        mdd = 0.0
+        if series_by_id is not None:
+            monthly = [r for _, r in portfolio_monthly_series(weights, series_by_id)]
+            if monthly:
+                sortino = sortino_from_monthly(monthly, mar_annual=risk_free_rate)
+                mdd = max_drawdown_from_monthly(monthly)
+        points.append(PortfolioPoint(weights, ret, vol, sharpe, sortino, mdd))
 
     if not points:
         empty = PortfolioPoint({i: 0.0 for i in ids}, 0.0, 0.0, 0.0)
-        return [], empty, empty
+        return [], empty, empty, None, empty
 
     # Extract the efficient frontier (upper envelope over vol bins).
     points.sort(key=lambda p: p.annualised_vol)
@@ -315,7 +426,12 @@ def compute_frontier(
 
     max_sharpe = max(points, key=lambda p: p.sharpe)
     min_var = min(points, key=lambda p: p.annualised_vol)
-    return frontier, max_sharpe, min_var
+    max_sortino: PortfolioPoint | None = None
+    min_dd = min_var
+    if series_by_id is not None:
+        max_sortino = max(points, key=lambda p: p.sortino)
+        min_dd = max(points, key=lambda p: p.max_drawdown)  # least negative
+    return frontier, max_sharpe, min_var, max_sortino, min_dd
 
 
 # ─────────────────────── loader ───────────────────────

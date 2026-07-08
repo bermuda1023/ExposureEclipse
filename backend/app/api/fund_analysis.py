@@ -30,7 +30,15 @@ from ..services.portfolio_math import (
     compute_asset_stats,
     compute_frontier,
     correlation_matrix,
+    cumulative_curve,
+    drawdown_series,
+    max_drawdown_from_monthly,
+    portfolio_monthly_series,
+    portfolio_return,
+    portfolio_vol,
     series_from_asset_json,
+    sortino_from_monthly,
+    _apply_overrides,
 )
 
 router = APIRouter(prefix="/fund-analysis", tags=["fund-analysis"])
@@ -70,12 +78,18 @@ class AssumptionOverrideIn(CamelModel):
     correlation_cap: float | None = None
 
 
+class MaxWeightIn(CamelModel):
+    asset_id: str
+    max_weight: float          # 0..1
+
+
 class OptimizeRequest(CamelModel):
     asset_ids: list[str] = Field(..., description="Subset of catalog IDs")
     total_capital: float = Field(1_000_000, gt=0)
     risk_free_rate: float = 0.04
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
+    max_weights: list[MaxWeightIn] = Field(default_factory=list)
     samples: int = Field(30_000, ge=1_000, le=100_000)
 
 
@@ -84,6 +98,8 @@ class PortfolioOut(CamelModel):
     annualised_return: float
     annualised_vol: float
     sharpe: float
+    sortino: float = 0.0
+    max_drawdown: float = 0.0
     violates_min_investment: list[str] = Field(default_factory=list)
 
 
@@ -99,15 +115,29 @@ class AssetStatOut(CamelModel):
     is_overridden: bool
 
 
+class AssetSeriesOut(CamelModel):
+    """Per-asset monthly returns + compounded equity + drawdown, aligned by
+    month. Feeds the growth-of-$1 and drawdown charts."""
+    asset_id: str
+    months: list[str]
+    returns: list[float]
+    equity: list[float]
+    drawdown: list[float]
+    max_drawdown: float
+
+
 class OptimizeResponse(CamelModel):
     stats: list[AssetStatOut]
-    correlation: dict[str, dict[str, float]]   # id → id → ρ
-    overlap_months: dict[str, dict[str, int]]  # id → id → # common months
+    correlation: dict[str, dict[str, float]]
+    overlap_months: dict[str, dict[str, int]]
     frontier: list[PortfolioPoint_wire]
     max_sharpe: PortfolioOut
+    max_sortino: PortfolioOut
     min_variance: PortfolioOut
+    min_drawdown: PortfolioOut
     total_capital: float
     risk_free_rate: float
+    asset_series: list[AssetSeriesOut]
 
 
 class PortfolioPoint_wire(CamelModel):
@@ -115,7 +145,26 @@ class PortfolioPoint_wire(CamelModel):
     annualised_return: float
     annualised_vol: float
     sharpe: float
+    sortino: float = 0.0
+    max_drawdown: float = 0.0
     violates_min_investment: list[str] = Field(default_factory=list)
+
+
+class CustomPortfolioRequest(CamelModel):
+    """Live-slider endpoint — user supplies weights, we return full stats
+    including a portfolio equity curve."""
+    weights: dict[str, float]
+    risk_free_rate: float = 0.04
+    total_capital: float = 1_000_000
+    respect_min_investment: bool = True
+    overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
+
+
+class CustomPortfolioResponse(CamelModel):
+    portfolio: PortfolioOut
+    equity_months: list[str]
+    equity: list[float]
+    drawdown: list[float]
 
 
 # ─────────────────────── data cache ───────────────────────
@@ -207,14 +256,9 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             correlation_cap=o.correlation_cap,
         )
 
-    # Apply overrides
-    from ..services.portfolio_math import _apply_overrides
     stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
-
-    # Correlation matrix
     rho, nn = correlation_matrix(series_by_id, ov_by_id)
 
-    # Min-weight floors from ticket size
     min_weights: dict[str, float] = {}
     if req.respect_min_investment:
         for a in req.asset_ids:
@@ -222,11 +266,15 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             if mi > 0:
                 min_weights[a] = min(1.0, mi / req.total_capital)
 
-    frontier, max_sharpe, min_var = compute_frontier(
+    max_weights: dict[str, float] = {mw.asset_id: mw.max_weight for mw in req.max_weights if mw.asset_id in req.asset_ids}
+
+    frontier, max_sharpe, min_var, max_sortino, min_dd = compute_frontier(
         stats=stats,
         rho=rho,
+        series_by_id=series_by_id,
         risk_free_rate=req.risk_free_rate,
         min_weights=min_weights,
+        max_weights=max_weights,
         samples=req.samples,
     )
 
@@ -235,7 +283,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         for a, w in weights.items():
             allocation = w * req.total_capital
             mi = idx[a]["minInvestment"]
-            if w > 1e-6 and mi > 0 and allocation + 0.5 < mi:  # 50-cent tolerance
+            if w > 1e-6 and mi > 0 and allocation + 0.5 < mi:
                 out.append(a)
         return out
 
@@ -245,6 +293,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             annualised_return=round(p.annualised_return, 6),
             annualised_vol=round(p.annualised_vol, 6),
             sharpe=round(p.sharpe, 6),
+            sortino=round(p.sortino, 6),
+            max_drawdown=round(p.max_drawdown, 6),
             violates_min_investment=_flag_violations(p.weights),
         )
 
@@ -254,6 +304,8 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             annualised_return=round(p.annualised_return, 6),
             annualised_vol=round(p.annualised_vol, 6),
             sharpe=round(p.sharpe, 6),
+            sortino=round(p.sortino, 6),
+            max_drawdown=round(p.max_drawdown, 6),
             violates_min_investment=_flag_violations(p.weights),
         )
 
@@ -279,15 +331,123 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             )
         )
 
+    # Per-asset equity + drawdown curves — feeds the growth-of-$1 chart.
+    # Downsample to ~150 points if longer to keep the payload small.
+    asset_series: list[AssetSeriesOut] = []
+    for a in req.asset_ids:
+        s = series_by_id[a]
+        months = sorted(s.returns)
+        rets = [s.returns[m] for m in months]
+        eq = cumulative_curve(rets)
+        dd = drawdown_series(rets)
+        mdd = max_drawdown_from_monthly(rets)
+        # Downsample
+        stride = max(1, len(months) // 200)
+        idx_keep = list(range(0, len(months), stride))
+        if idx_keep and idx_keep[-1] != len(months) - 1:
+            idx_keep.append(len(months) - 1)
+        asset_series.append(
+            AssetSeriesOut(
+                asset_id=a,
+                months=[months[i] for i in idx_keep],
+                returns=[round(rets[i], 6) for i in idx_keep],
+                equity=[round(eq[i], 6) for i in idx_keep],
+                drawdown=[round(dd[i], 6) for i in idx_keep],
+                max_drawdown=round(mdd, 6),
+            )
+        )
+
     return OptimizeResponse(
         stats=stats_out,
         correlation={a: {b: round(rho[a][b], 4) for b in req.asset_ids} for a in req.asset_ids},
         overlap_months={a: {b: nn[a][b] for b in req.asset_ids} for a in req.asset_ids},
         frontier=[_to_wire(p) for p in frontier],
         max_sharpe=_to_out(max_sharpe),
+        max_sortino=_to_out(max_sortino if max_sortino is not None else max_sharpe),
         min_variance=_to_out(min_var),
+        min_drawdown=_to_out(min_dd),
         total_capital=req.total_capital,
         risk_free_rate=req.risk_free_rate,
+        asset_series=asset_series,
+    )
+
+
+@router.post("/custom", response_model=CustomPortfolioResponse)
+def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
+    """Score an arbitrary user-supplied weight vector. Powers the
+    interactive-slider panel: user drags weights, we return live stats +
+    the compounded equity + drawdown curves for that portfolio."""
+    catalog = _load_catalog()
+    idx = _asset_by_id(catalog)
+
+    weights = {k: v for k, v in req.weights.items() if v > 0}
+    missing = [a for a in weights if a not in idx]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "VALIDATION_ERROR", "message": f"Unknown asset(s): {missing}"},
+        )
+    total = sum(weights.values())
+    if total <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "VALIDATION_ERROR", "message": "All weights are zero."},
+        )
+    weights = {k: v / total for k, v in weights.items()}
+
+    asset_ids = list(weights)
+    series_by_id = {a: series_from_asset_json(idx[a]) for a in asset_ids}
+    empirical = {a: compute_asset_stats(series_by_id[a]) for a in asset_ids}
+    ov_by_id: dict[str, AssumptionOverride] = {}
+    for o in req.overrides:
+        if o.asset_id not in asset_ids:
+            continue
+        ov_by_id[o.asset_id] = AssumptionOverride(
+            annualised_return=o.annualised_return,
+            annualised_vol=o.annualised_vol,
+            correlation_cap=o.correlation_cap,
+        )
+    stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in asset_ids}
+    rho, _ = correlation_matrix(series_by_id, ov_by_id)
+
+    ret = portfolio_return(weights, stats)
+    vol = portfolio_vol(weights, stats, rho)
+    sharpe = (ret - req.risk_free_rate) / vol if vol > 0 else 0.0
+    monthly = portfolio_monthly_series(weights, series_by_id)
+    monthly_rets = [r for _, r in monthly]
+    sortino = sortino_from_monthly(monthly_rets, mar_annual=req.risk_free_rate) if monthly_rets else 0.0
+    mdd = max_drawdown_from_monthly(monthly_rets) if monthly_rets else 0.0
+
+    equity_months = [m for m, _ in monthly]
+    equity = cumulative_curve(monthly_rets)
+    dd = drawdown_series(monthly_rets)
+    # Downsample for wire
+    stride = max(1, len(equity_months) // 200)
+    keep = list(range(0, len(equity_months), stride))
+    if keep and keep[-1] != len(equity_months) - 1:
+        keep.append(len(equity_months) - 1)
+
+    violations: list[str] = []
+    if req.respect_min_investment:
+        for a, w in weights.items():
+            alloc = w * req.total_capital
+            mi = idx[a]["minInvestment"]
+            if w > 1e-6 and mi > 0 and alloc + 0.5 < mi:
+                violations.append(a)
+
+    return CustomPortfolioResponse(
+        portfolio=PortfolioOut(
+            weights={k: round(v, 6) for k, v in weights.items()},
+            annualised_return=round(ret, 6),
+            annualised_vol=round(vol, 6),
+            sharpe=round(sharpe, 6),
+            sortino=round(sortino, 6),
+            max_drawdown=round(mdd, 6),
+            violates_min_investment=violations,
+        ),
+        equity_months=[equity_months[i] for i in keep],
+        equity=[round(equity[i], 6) for i in keep],
+        drawdown=[round(dd[i], 6) for i in keep],
     )
 
 

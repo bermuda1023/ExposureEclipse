@@ -35,12 +35,18 @@ export interface AssumptionOverrideIn {
   correlationCap?: number | null;
 }
 
+export interface MaxWeightIn {
+  assetId: string;
+  maxWeight: number;
+}
+
 export interface OptimizeRequest {
   assetIds: string[];
   totalCapital: number;
   riskFreeRate: number;
   respectMinInvestment: boolean;
   overrides: AssumptionOverrideIn[];
+  maxWeights: MaxWeightIn[];
   samples: number;
 }
 
@@ -49,7 +55,33 @@ export interface PortfolioPoint {
   annualisedReturn: number;
   annualisedVol: number;
   sharpe: number;
+  sortino: number;
+  maxDrawdown: number;
   violatesMinInvestment: string[];
+}
+
+export interface AssetSeries {
+  assetId: string;
+  months: string[];
+  returns: number[];
+  equity: number[];
+  drawdown: number[];
+  maxDrawdown: number;
+}
+
+export interface CustomPortfolioRequest {
+  weights: Record<string, number>;
+  riskFreeRate: number;
+  totalCapital: number;
+  respectMinInvestment: boolean;
+  overrides: AssumptionOverrideIn[];
+}
+
+export interface CustomPortfolioResponse {
+  portfolio: PortfolioPoint;
+  equityMonths: string[];
+  equity: number[];
+  drawdown: number[];
 }
 
 export interface AssetStat {
@@ -70,9 +102,12 @@ export interface OptimizeResponse {
   overlapMonths: Record<string, Record<string, number>>;
   frontier: PortfolioPoint[];
   maxSharpe: PortfolioPoint;
+  maxSortino: PortfolioPoint;
   minVariance: PortfolioPoint;
+  minDrawdown: PortfolioPoint;
   totalCapital: number;
   riskFreeRate: number;
+  assetSeries: AssetSeries[];
 }
 
 export const fetchFundAssets = () =>
@@ -80,3 +115,6 @@ export const fetchFundAssets = () =>
 
 export const optimizePortfolio = (req: OptimizeRequest) =>
   apiPost<OptimizeResponse>("/fund-analysis/optimize", req);
+
+export const scoreCustomPortfolio = (req: CustomPortfolioRequest) =>
+  apiPost<CustomPortfolioResponse>("/fund-analysis/custom", req);

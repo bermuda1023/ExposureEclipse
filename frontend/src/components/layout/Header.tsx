@@ -29,7 +29,24 @@ export function Header() {
           </div>
         </div>
       </div>
-      <div style={{ display: "flex", gap: 16, alignItems: "center", fontSize: "0.72rem", opacity: 0.85 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: "0.72rem", opacity: 0.85 }}>
+        <a
+          href="/fund-analysis"
+          style={{
+            color: "white",
+            background: "rgba(255,255,255,0.14)",
+            border: "1px solid rgba(255,255,255,0.28)",
+            padding: "5px 12px",
+            borderRadius: 999,
+            textDecoration: "none",
+            fontWeight: 600,
+            fontSize: "0.72rem",
+            letterSpacing: 0.2,
+          }}
+          title="Portfolio Optimizer — efficient frontier across CAS + 6 other funds + SPY + AGG"
+        >
+          📊 Fund Portfolio Optimizer
+        </a>
         {/* Programmes admin link hidden per request — the page still
             exists at /admin/programmes for direct navigation. */}
         {error && (
