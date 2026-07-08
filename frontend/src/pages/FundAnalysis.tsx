@@ -22,6 +22,7 @@ import {
   fetchFundAssets,
   optimizePortfolio,
   rescoreIr,
+  runRobustnessScan,
   scoreCustomPortfolio,
   type AssetSeries,
   type AssumptionOverrideIn,
@@ -30,6 +31,7 @@ import {
   type MaxWeightIn,
   type OptimizeResponse,
   type PortfolioPoint,
+  type RobustnessResponse,
 } from "../api/fundAnalysis";
 
 // Sensible priors for short-history / illiquid assets.
@@ -138,6 +140,27 @@ export function FundAnalysis() {
   });
 
   const optimizeMutation = useMutation({ mutationFn: optimizePortfolio });
+  const robustnessMutation = useMutation({ mutationFn: runRobustnessScan });
+
+  const runRobustness = () => {
+    robustnessMutation.mutate({
+      assetIds: [...selected],
+      currentInvestments: Object.entries(currentInvestments)
+        .filter(([id, amt]) => selected.has(id) && amt > 0)
+        .map(([assetId, amount]) => ({ assetId, amount })),
+      respectMinInvestment: respectMin,
+      noSell,
+      overrides: Object.values(overrides).filter((o) => selected.has(o.assetId)),
+      maxWeights: Object.entries(maxWeights)
+        .filter(([id]) => selected.has(id))
+        .map(([assetId, maxWeight]) => ({ assetId, maxWeight })),
+      minInvestmentOverrides: Object.entries(minInvOverrides)
+        .filter(([id]) => selected.has(id))
+        .map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
+      totalCapital: newCapital,
+      samplesPerScenario: 6000,
+    });
+  };
 
   const runOptimize = () => {
     optimizeMutation.mutate({
@@ -517,6 +540,9 @@ export function FundAnalysis() {
           setPerAssetBenchmark={(id, bid) =>
             setPerAssetBenchmarks((prev) => ({ ...prev, [id]: bid }))
           }
+          robustness={robustnessMutation.data}
+          onRunRobustness={runRobustness}
+          isRobustnessRunning={robustnessMutation.isPending}
         />
       )}
       {optimizeMutation.isError && (
@@ -641,6 +667,9 @@ function ResultView({
   historyWindowStart,
   perAssetBenchmarks,
   setPerAssetBenchmark,
+  robustness,
+  onRunRobustness,
+  isRobustnessRunning,
 }: {
   result: OptimizeResponse;
   assetById: Record<string, FundAsset>;
@@ -652,6 +681,9 @@ function ResultView({
   historyWindowStart: string | null;
   perAssetBenchmarks: Record<string, string>;
   setPerAssetBenchmark: (assetId: string, benchmarkAssetId: string) => void;
+  robustness: RobustnessResponse | undefined;
+  onRunRobustness: () => void;
+  isRobustnessRunning: boolean;
 }) {
   const capital = result.totalCapital;
   const hasCurrent = result.currentTotal > 0;
@@ -724,6 +756,13 @@ function ResultView({
         <p style={S.hint}>Each dot = one random portfolio; curve = Pareto-optimal set. Red = Max Sharpe, purple = Max Sortino, green = Min Variance, teal = Min Drawdown, grey = individual assets.</p>
         <FrontierChart result={result} assetById={assetById} />
       </section>
+
+      <RobustnessCard
+        data={robustness}
+        assetById={assetById}
+        onRun={onRunRobustness}
+        isRunning={isRobustnessRunning}
+      />
 
       <div style={S.grid2}>
         <section style={S.card}>
@@ -848,6 +887,147 @@ function ResultView({
         </table>
       </section>
     </>
+  );
+}
+
+// ─────────────────────── Robustness Scan card ───────────────────────
+
+function RobustnessCard({
+  data,
+  assetById,
+  onRun,
+  isRunning,
+}: {
+  data: RobustnessResponse | undefined;
+  assetById: Record<string, FundAsset>;
+  onRun: () => void;
+  isRunning: boolean;
+}) {
+  return (
+    <section style={S.card}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <h2 style={S.h2}>Fund robustness scan</h2>
+          <p style={S.hint}>
+            Runs the optimizer across <b>24 scenarios</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino) and reports how often each fund appears in the winning portfolio. Constant appearance = robust pick; only in specific regimes = situational; rare appearance = probably not needed.
+          </p>
+        </div>
+        <button
+          onClick={onRun}
+          disabled={isRunning}
+          style={{ ...S.primaryBtn, width: "auto", padding: "8px 16px" }}
+        >
+          {isRunning ? "Scanning… (~7s)" : data ? "Re-run scan" : "Run robustness scan"}
+        </button>
+      </div>
+      {!data && !isRunning && (
+        <p style={{ ...S.hint, marginTop: 8, fontStyle: "italic" }}>
+          Click "Run robustness scan" to see which funds are consistent picks regardless of your history window / RF rate / objective choices.
+        </p>
+      )}
+      {data && <RobustnessTable data={data} assetById={assetById} />}
+    </section>
+  );
+}
+
+function RobustnessTable({
+  data,
+  assetById,
+}: {
+  data: RobustnessResponse;
+  assetById: Record<string, FundAsset>;
+}) {
+  const CLASS_TINT: Record<string, string> = {
+    core: "#059669",
+    situational: "#d97706",
+    peripheral: "#94a3b8",
+  };
+  const CLASS_BG: Record<string, string> = {
+    core: "#dcfce7",
+    situational: "#fef3c7",
+    peripheral: "#f1f5f9",
+  };
+  const CLASS_LABEL: Record<string, string> = {
+    core: "CORE",
+    situational: "SITUATIONAL",
+    peripheral: "PERIPHERAL",
+  };
+  const CLASS_HINT: Record<string, string> = {
+    core: "In ≥ 2/3 of scenarios — pick with confidence",
+    situational: "Regime-dependent — only helps under specific assumptions",
+    peripheral: "Rarely helps — dominated by other funds",
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12, marginTop: 8 }}>
+        {(["core", "situational", "peripheral"] as const).map((k) => (
+          <span key={k} style={{ ...S.chip, background: CLASS_TINT[k], fontSize: "0.65rem" }}>
+            {CLASS_LABEL[k]}: {CLASS_HINT[k]}
+          </span>
+        ))}
+      </div>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>Fund</th>
+            <th style={S.th}>Class</th>
+            <th style={S.th}>Selection frequency</th>
+            <th style={S.thNum}>%</th>
+            <th style={S.thNum}>Median wt</th>
+            <th style={S.thNum}>Median wt<br />(when picked)</th>
+            <th style={S.thNum}>Max wt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((r) => (
+            <tr key={r.assetId} style={{ background: CLASS_BG[r.classification], opacity: r.classification === "peripheral" ? 0.7 : 1 }}>
+              <td style={{ ...S.td, fontWeight: 600, color: ASSET_COLOR[r.assetId] }}>
+                {assetById[r.assetId]?.name ?? r.assetId}
+              </td>
+              <td style={S.td}>
+                <span style={{ ...S.chip, background: CLASS_TINT[r.classification], fontSize: "0.6rem" }}>
+                  {CLASS_LABEL[r.classification]}
+                </span>
+              </td>
+              <td style={S.td}>
+                <div style={{ background: "#e2e8f0", borderRadius: 3, height: 14, position: "relative", width: 180 }}>
+                  <div
+                    style={{
+                      background: CLASS_TINT[r.classification],
+                      width: `${r.selectionFrequency * 100}%`,
+                      height: "100%",
+                      borderRadius: 3,
+                      transition: "width 0.4s",
+                    }}
+                  />
+                  <span style={{
+                    position: "absolute",
+                    left: 6,
+                    top: 0,
+                    lineHeight: "14px",
+                    fontSize: "0.65rem",
+                    fontWeight: 600,
+                    color: r.selectionFrequency > 0.35 ? "white" : "#334155",
+                  }}>
+                    {(r.selectionFrequency * 100).toFixed(0)}%
+                  </span>
+                </div>
+              </td>
+              <td style={S.tdNum}>{(r.selectionFrequency * 100).toFixed(0)}%</td>
+              <td style={S.tdNum}>{PCT(r.medianWeight, 1)}</td>
+              <td style={S.tdNum}>{r.medianWeightWhenSelected > 0 ? PCT(r.medianWeightWhenSelected, 1) : "—"}</td>
+              <td style={S.tdNum}>{PCT(r.maxWeight, 1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p style={{ ...S.hint, marginTop: 10 }}>
+        Scanned across {data.totalScenarios} scenarios. "Selection frequency" = fraction of scenarios where the fund got &gt;5% weight in the winning portfolio.
+        A CORE fund appears in most scenarios and is a defensible pick regardless of your specific assumption choices; a
+        SITUATIONAL fund only helps in some regimes; a PERIPHERAL fund rarely helps because other funds dominate it.
+      </p>
+    </div>
   );
 }
 

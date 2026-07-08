@@ -177,3 +177,35 @@ export interface RescoreIrResponse {
 
 export const rescoreIr = (req: RescoreIrRequest) =>
   apiPost<RescoreIrResponse>("/fund-analysis/rescore-ir", req);
+
+export interface RobustnessRequest {
+  assetIds: string[];
+  currentInvestments: CurrentInvestmentIn[];
+  respectMinInvestment: boolean;
+  noSell: boolean;
+  overrides: AssumptionOverrideIn[];
+  maxWeights: MaxWeightIn[];
+  minInvestmentOverrides: MinInvestmentOverrideIn[];
+  totalCapital: number;
+  samplesPerScenario: number;
+}
+
+export interface RobustnessRow {
+  assetId: string;
+  selectionFrequency: number;
+  medianWeight: number;
+  medianWeightWhenSelected: number;
+  maxWeight: number;
+  scenariosSelected: string[];
+  totalScenarios: number;
+  classification: "core" | "situational" | "peripheral";
+}
+
+export interface RobustnessResponse {
+  rows: RobustnessRow[];
+  totalScenarios: number;
+  scenarioLabels: string[];
+}
+
+export const runRobustnessScan = (req: RobustnessRequest) =>
+  apiPost<RobustnessResponse>("/fund-analysis/robustness", req);

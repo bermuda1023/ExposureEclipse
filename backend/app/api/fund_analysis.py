@@ -598,6 +598,174 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     )
 
 
+class RobustnessRequest(CamelModel):
+    """Sweep the optimizer across a grid of {history window × RF rate ×
+    objective} scenarios and report per-fund robustness statistics —
+    which funds appear consistently regardless of assumptions ('core'),
+    which only appear in specific regimes ('situational'), and which
+    rarely appear ('peripheral')."""
+    asset_ids: list[str]
+    current_investments: list[CurrentInvestmentIn] = Field(default_factory=list)
+    respect_min_investment: bool = True
+    no_sell: bool = False
+    overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
+    max_weights: list[MaxWeightIn] = Field(default_factory=list)
+    min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
+    total_capital: float = Field(1_000_000, gt=0)
+    samples_per_scenario: int = Field(8_000, ge=1_000, le=30_000)
+
+
+class RobustnessRow(CamelModel):
+    asset_id: str
+    selection_frequency: float          # 0..1 — fraction of scenarios where weight > 5%
+    median_weight: float                # median weight across ALL scenarios (incl. 0s)
+    median_weight_when_selected: float  # median weight only when weight > 5%
+    max_weight: float
+    scenarios_selected: list[str]       # human-readable labels of scenarios where selected
+    total_scenarios: int
+    classification: str                 # 'core' | 'situational' | 'peripheral'
+
+
+class RobustnessResponse(CamelModel):
+    rows: list[RobustnessRow]
+    total_scenarios: int
+    scenario_labels: list[str]
+
+
+@router.post("/robustness", response_model=RobustnessResponse)
+def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
+    """Run the optimizer across a scenario grid and score fund robustness.
+
+    Scenarios varied:
+      - History window: full / since 2021 / since 2019 / since 2016
+      - Risk-free rate: 2% / 4% / 6%
+      - Objective: Max Sharpe / Max Sortino
+      = 24 scenarios per fund.
+
+    A fund's selection_frequency = the fraction of the 24 scenarios
+    where the winning portfolio allocates it >5% weight. Classification:
+      - core         >= 0.65   (in 2/3+ of scenarios — robust pick)
+      - situational  0.25-0.65 (depends on regime)
+      - peripheral   < 0.25    (rarely chosen)
+    """
+    catalog = _load_catalog()
+    idx = _asset_by_id(catalog)
+
+    missing = [a for a in req.asset_ids if a not in idx]
+    if missing:
+        raise HTTPException(status_code=422, detail={"code": "VALIDATION_ERROR", "message": f"Unknown: {missing}"})
+    if len(req.asset_ids) < 2:
+        raise HTTPException(status_code=422, detail={"code": "VALIDATION_ERROR", "message": "Pick at least 2 assets."})
+
+    ov_by_id: dict[str, AssumptionOverride] = {}
+    for o in req.overrides:
+        if o.asset_id not in req.asset_ids:
+            continue
+        ov_by_id[o.asset_id] = AssumptionOverride(
+            annualised_return=o.annualised_return,
+            annualised_vol=o.annualised_vol,
+            correlation_cap=o.correlation_cap,
+        )
+
+    current_by_id = {c.asset_id: c.amount for c in req.current_investments if c.amount > 0}
+    current_total = sum(current_by_id.values())
+    total_capital = current_total + req.total_capital
+
+    min_inv_override = {m.asset_id: m.min_investment for m in req.min_investment_overrides}
+    effective_min_inv = {a: min_inv_override.get(a, idx[a]["minInvestment"]) for a in req.asset_ids}
+    max_w_map = {mw.asset_id: mw.max_weight for mw in req.max_weights if mw.asset_id in req.asset_ids}
+
+    hard_min_weights: dict[str, float] = {}
+    if req.no_sell:
+        for a in req.asset_ids:
+            if current_by_id.get(a, 0) > 0:
+                hard_min_weights[a] = min(1.0, current_by_id[a] / total_capital)
+
+    windows: list[tuple[str, str | None]] = [
+        ("Full history", None),
+        ("Since 2021", "2021-01"),
+        ("Since 2019", "2019-01"),
+        ("Since 2016", "2016-01"),
+    ]
+    rf_rates = [(f"RF {int(rf*100)}%", rf) for rf in (0.02, 0.04, 0.06)]
+    objectives = [("Max Sharpe", "sharpe"), ("Max Sortino", "sortino")]
+
+    scenario_labels: list[str] = []
+    # Track weights per scenario per fund
+    weights_matrix: dict[str, list[float]] = {a: [] for a in req.asset_ids}
+    selected_in: dict[str, list[str]] = {a: [] for a in req.asset_ids}
+
+    THRESHOLD = 0.05
+
+    for w_label, w_start in windows:
+        for rf_label, rf in rf_rates:
+            for obj_label, obj in objectives:
+                label = f"{w_label} · {rf_label} · {obj_label}"
+
+                # Build series + stats for this window
+                full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
+                series_by_id = {a: (full_series[a].since(w_start) if w_start else full_series[a]) for a in req.asset_ids}
+                empirical = {a: compute_asset_stats(series_by_id[a]) for a in req.asset_ids}
+                stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
+                rho, _ = correlation_matrix(series_by_id, ov_by_id)
+
+                soft_min: dict[str, float] = {}
+                if req.respect_min_investment:
+                    for a in req.asset_ids:
+                        if effective_min_inv[a] > 0:
+                            soft_min[a] = min(1.0, effective_min_inv[a] / total_capital)
+
+                frontier, max_sharpe, min_var, max_sortino, min_dd, _max_ir = compute_frontier(
+                    stats=stats,
+                    rho=rho,
+                    series_by_id=series_by_id,
+                    risk_free_rate=rf,
+                    min_weights=soft_min,
+                    hard_min_weights=hard_min_weights,
+                    max_weights=max_w_map,
+                    samples=req.samples_per_scenario,
+                )
+                picked = max_sharpe if obj == "sharpe" else (max_sortino if max_sortino is not None else max_sharpe)
+                scenario_labels.append(label)
+                for a in req.asset_ids:
+                    w = picked.weights.get(a, 0.0)
+                    weights_matrix[a].append(w)
+                    if w > THRESHOLD:
+                        selected_in[a].append(label)
+
+    def _median(xs: list[float]) -> float:
+        if not xs:
+            return 0.0
+        s = sorted(xs)
+        n = len(s)
+        return s[n // 2] if n % 2 else 0.5 * (s[n // 2 - 1] + s[n // 2])
+
+    rows: list[RobustnessRow] = []
+    n_scen = len(scenario_labels)
+    for a in req.asset_ids:
+        selected = [w for w in weights_matrix[a] if w > THRESHOLD]
+        freq = len(selected) / n_scen if n_scen > 0 else 0.0
+        med = _median(weights_matrix[a])
+        med_sel = _median(selected)
+        classification = "core" if freq >= 0.65 else ("situational" if freq >= 0.25 else "peripheral")
+        rows.append(
+            RobustnessRow(
+                asset_id=a,
+                selection_frequency=round(freq, 4),
+                median_weight=round(med, 4),
+                median_weight_when_selected=round(med_sel, 4),
+                max_weight=round(max(weights_matrix[a]), 4) if weights_matrix[a] else 0.0,
+                scenarios_selected=selected_in[a],
+                total_scenarios=n_scen,
+                classification=classification,
+            )
+        )
+    # Sort by selection frequency desc
+    rows.sort(key=lambda r: (-r.selection_frequency, -r.median_weight))
+
+    return RobustnessResponse(rows=rows, total_scenarios=n_scen, scenario_labels=scenario_labels)
+
+
 class RescoreIrRequest(CamelModel):
     """Lightweight endpoint to recompute just the per-asset IR/TE for a
     new benchmark selection — skips the whole MVO sampling. Used by the
