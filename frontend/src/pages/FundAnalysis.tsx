@@ -70,6 +70,10 @@ const DEFAULT_PER_ASSET_BENCHMARKS: Record<string, string> = {
   bireme: "spy",
   gator: "spy",
   primary_commodity: "spy",
+  // Contrarius is long-only global equity; MSCI World would be the true
+  // benchmark but we don't ship it. SPY is the closest global-equity
+  // proxy available in the catalog.
+  contrarius: "spy",
 };
 
 const CURRENCY = (v: number) =>
@@ -88,6 +92,7 @@ const ASSET_COLOR: Record<string, string> = {
   cedar_creek: "#dc2626",
   cas_sosin: "#db2777",
   alluvial: "#2563eb",
+  contrarius: "#0f766e",
   spy: "#64748b",
   agg: "#a3a3a3",
 };
@@ -100,6 +105,7 @@ const SHORT_NAME: Record<string, string> = {
   cedar_creek: "Cedar Creek",
   cas_sosin: "CAS Sosin",
   alluvial: "Alluvial",
+  contrarius: "Contrarius",
   spy: "S&P 500",
   agg: "US Bonds",
 };
@@ -109,7 +115,10 @@ export function FundAnalysis() {
   // available in the catalog + benchmark dropdown but unchecked so the
   // asset picker stays readable.
   const [selected, setSelected] = useState<Set<string>>(
-    new Set(["gator", "bireme", "upslope", "primary_commodity", "cedar_creek", "cas_sosin", "alluvial", "spy", "agg"]),
+    new Set([
+      "gator", "bireme", "upslope", "primary_commodity", "cedar_creek",
+      "cas_sosin", "alluvial", "contrarius", "spy", "agg",
+    ]),
   );
   const [newCapital, setNewCapital] = useState<number>(1_000_000);
   const [currentInvestments, setCurrentInvestments] = useState<Record<string, number>>({});
