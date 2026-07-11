@@ -4,7 +4,7 @@
  */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { runErtJob } from "../../api/jobs";
 import { useErtJobStatus } from "../../api/hooks";
 import type { Dataset } from "../../api/types";
@@ -42,13 +42,19 @@ export function useRunErtJob(dataset: Dataset | null | undefined) {
   // Refresh any programme-status badge for this dataset's underlying EDM when
   // the job reaches a terminal state. We don't know the programmeId from a
   // bare Dataset shape, so we invalidate the broader programmes namespace.
-  if (
-    statusQuery.data &&
-    (statusQuery.data.status === "completed" || statusQuery.data.status === "failed") &&
-    dataset
-  ) {
+  // Fire ONCE per job on the transition into a terminal status — invalidating
+  // in the render body re-ran on every render while the status stayed
+  // terminal, looping invalidate→refetch against CedentTree's
+  // ["programmes", id, "status"] queries.
+  const status = statusQuery.data?.status;
+  const invalidatedJobRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!jobId || !dataset) return;
+    if (status !== "completed" && status !== "failed") return;
+    if (invalidatedJobRef.current === jobId) return;
+    invalidatedJobRef.current = jobId;
     qc.invalidateQueries({ queryKey: ["programmes"] });
-  }
+  }, [jobId, status, dataset, qc]);
 
   return {
     run: () => mutation.mutate(false),

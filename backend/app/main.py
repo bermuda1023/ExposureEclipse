@@ -56,6 +56,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    # Exact-match list can't express wildcard hosts (Vercel previews); the
+    # regex path handles those. None = disabled.
+    allow_origin_regex=settings.cors_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -108,7 +111,8 @@ app.include_router(exports.router, prefix="/api")
 app.include_router(hurricanes.router, prefix="/api")
 app.include_router(hazards.router, prefix="/api")
 app.include_router(live.router, prefix="/api")
-app.include_router(fund_analysis.router, prefix="/api")
+if settings.fund_analysis_enabled:
+    app.include_router(fund_analysis.router, prefix="/api")
 
 
 # ───────────────────────── Exception handlers ─────────────────────────

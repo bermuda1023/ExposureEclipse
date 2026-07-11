@@ -76,24 +76,24 @@ class AssetsResponse(CamelModel):
 
 class AssumptionOverrideIn(CamelModel):
     asset_id: str
-    annualised_return: float | None = None
-    annualised_vol: float | None = None
-    correlation_cap: float | None = None
+    annualised_return: float | None = Field(None, ge=-1.0, le=5.0, allow_inf_nan=False)
+    annualised_vol: float | None = Field(None, ge=0.0, le=5.0, allow_inf_nan=False)
+    correlation_cap: float | None = Field(None, ge=-1.0, le=1.0, allow_inf_nan=False)
 
 
 class MaxWeightIn(CamelModel):
     asset_id: str
-    max_weight: float          # 0..1
+    max_weight: float = Field(..., ge=0.0, le=1.0, allow_inf_nan=False)
 
 
 class MinInvestmentOverrideIn(CamelModel):
     asset_id: str
-    min_investment: float      # dollars; 0 = no minimum
+    min_investment: float = Field(..., ge=0.0, le=1e12, allow_inf_nan=False)  # dollars; 0 = no minimum
 
 
 class CurrentInvestmentIn(CamelModel):
     asset_id: str
-    amount: float              # dollars currently held in this fund
+    amount: float = Field(..., ge=0.0, le=1e12, allow_inf_nan=False)  # dollars currently held in this fund
 
 
 class PerAssetBenchmarkIn(CamelModel):
@@ -103,7 +103,10 @@ class PerAssetBenchmarkIn(CamelModel):
 
 class OptimizeRequest(CamelModel):
     asset_ids: list[str] = Field(..., description="Subset of catalog IDs")
-    new_capital: float = Field(1_000_000, ge=0, description="New $ to deploy on top of current holdings")
+    new_capital: float = Field(
+        1_000_000, ge=0, le=1e12, allow_inf_nan=False,
+        description="New $ to deploy on top of current holdings",
+    )
     current_investments: list[CurrentInvestmentIn] = Field(default_factory=list)
     no_sell: bool = Field(False, description="If True, current holdings are hard floors (can only add)")
     allocate_new_capital_only: bool = Field(
@@ -118,12 +121,14 @@ class OptimizeRequest(CamelModel):
         default_factory=list,
         description="Optional per-asset benchmark override for the asset stats table. Portfolio-level IR still uses benchmark_asset_id.",
     )
-    risk_free_rate: float = 0.04
+    risk_free_rate: float = Field(0.04, ge=-0.10, le=0.50, allow_inf_nan=False)
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
     max_weights: list[MaxWeightIn] = Field(default_factory=list)
     min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
-    samples: int = Field(30_000, ge=1_000, le=100_000)
+    # Cap chosen so a worst-case request stays ~1-2s of CPU on one core —
+    # these endpoints are sync, unauthenticated, and pure Python.
+    samples: int = Field(10_000, ge=1_000, le=10_000)
 
 
 class PortfolioOut(CamelModel):
@@ -205,8 +210,8 @@ class CustomPortfolioRequest(CamelModel):
     """Live-slider endpoint — user supplies weights, we return full stats
     including a portfolio equity curve."""
     weights: dict[str, float]
-    risk_free_rate: float = 0.04
-    total_capital: float = 1_000_000
+    risk_free_rate: float = Field(0.04, ge=-0.10, le=0.50, allow_inf_nan=False)
+    total_capital: float = Field(1_000_000, ge=0.0, le=1e12, allow_inf_nan=False)
     respect_min_investment: bool = True
     history_window_start: str | None = None
     benchmark_asset_id: str = "spy"
@@ -782,6 +787,15 @@ def rolling_stats(req: RollingStatsRequest) -> RollingStatsResponse:
 
     fund_months = sorted(fund_series.returns)
     n_months = len(fund_months)
+    if n_months == 0:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "No return history in the requested window.",
+                "details": {"assetId": req.asset_id, "historyWindowStart": req.history_window_start},
+            },
+        )
 
     # Data adequacy
     if n_months < 24:
@@ -1085,12 +1099,17 @@ class RobustnessRequest(CamelModel):
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
     max_weights: list[MaxWeightIn] = Field(default_factory=list)
     min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
-    new_capital: float = Field(1_000_000, ge=0, description="New $ to deploy (added to current holdings)")
+    new_capital: float = Field(
+        1_000_000, ge=0, le=1e12, allow_inf_nan=False,
+        description="New $ to deploy (added to current holdings)",
+    )
     # Deprecated alias — if clients still send totalCapital as "new" dollars
-    total_capital: float | None = Field(None, description="Deprecated: use newCapital")
+    total_capital: float | None = Field(None, ge=0.0, le=1e12, allow_inf_nan=False, description="Deprecated: use newCapital")
     allocate_new_capital_only: bool = True
     net_of_fees: bool = True
-    samples_per_scenario: int = Field(8_000, ge=1_000, le=30_000)
+    # 24 scenarios x this many samples runs on every /robustness call — keep
+    # the ceiling low enough that one request can't pin a core for a minute.
+    samples_per_scenario: int = Field(3_000, ge=1_000, le=3_000)
 
 
 class RobustnessRow(CamelModel):

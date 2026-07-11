@@ -8,7 +8,8 @@
  *   COUNTY layer  ← bermuda1023.wnwbodo0p98t / b2e6c22804c918d996b3 (key: GEOID  → 5-digit FIPS)
  *
  * Vector tiles → no GeoJSON download; pan/zoom stays smooth at any grain.
- * Auto-level:  zoom < 6.0  → STATE, zoom ≥ 6.0 → COUNTY (drives /api refetch).
+ * Auto-level:  zoom < 4.0 → STATE, zoom ≥ 4.0 → COUNTY (COUNTY_THRESHOLD;
+ * drives /api refetch).
  * Hover → tooltip with formula reminders. Click → opens detail panel.
  *
  * Map data comes ONLY from /api/exposures/map (CLAUDE.md rule 1).
@@ -390,12 +391,15 @@ export function MapView({ data, isLoading, error }: Props) {
       if (gid) setSelected(gid);
     };
 
+    // "mouseleave" is a layer-scoped event in Mapbox GL — at map level it
+    // never fires. "mouseout" is the map-level event for the cursor leaving
+    // the canvas, which is what clears the tooltip.
     map.on("mousemove", onMove);
-    map.on("mouseleave", onLeave);
+    map.on("mouseout", onLeave);
     map.on("click", onClick);
     return () => {
       map.off("mousemove", onMove);
-      map.off("mouseleave", onLeave);
+      map.off("mouseout", onLeave);
       map.off("click", onClick);
     };
   }, [valuesByGeographyId, setSelected]);
@@ -411,9 +415,14 @@ export function MapView({ data, isLoading, error }: Props) {
     const otherIdSetRef = targetIsCounty ? stateSetIdsRef : countySetIdsRef;
     const otherSrc = targetIsCounty ? STATE_TILESET : COUNTY_TILESET;
 
-    // Clear feature-state on the OTHER level so old colors don't linger.
+    // Clear choropleth feature-state on the OTHER level so old colors don't
+    // linger. Remove ONLY the fill/hasData keys — a wholesale
+    // removeFeatureState would also wipe stormHit/stormFocused outlines,
+    // which must survive a state↔county level swap.
     for (const id of otherIdSetRef.current) {
-      map.removeFeatureState({ source: otherSrc.src, sourceLayer: otherSrc.layer, id });
+      const target = { source: otherSrc.src, sourceLayer: otherSrc.layer, id };
+      map.removeFeatureState(target, "fill");
+      map.removeFeatureState(target, "hasData");
     }
     otherIdSetRef.current.clear();
 
@@ -435,10 +444,13 @@ export function MapView({ data, isLoading, error }: Props) {
         },
       );
     }
-    // Clear any previously-painted ids that are no longer in the response.
+    // Clear any previously-painted ids that are no longer in the response
+    // (again fill/hasData only, preserving storm outline keys).
     for (const id of targetIdSetRef.current) {
       if (!desired.has(id)) {
-        map.removeFeatureState({ source: targetSrc.src, sourceLayer: targetSrc.layer, id });
+        const target = { source: targetSrc.src, sourceLayer: targetSrc.layer, id };
+        map.removeFeatureState(target, "fill");
+        map.removeFeatureState(target, "hasData");
       }
     }
     targetIdSetRef.current = desired;

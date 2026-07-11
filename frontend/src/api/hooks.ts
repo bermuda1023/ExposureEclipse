@@ -6,7 +6,7 @@
  * without touching the UI. CLAUDE.md rule 1.
  */
 
-import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { listCedents } from "./cedents";
 import { fetchDetail, fetchMap, fetchPivot } from "./exposures";
 import { apiGet } from "./client";
@@ -59,6 +59,9 @@ export const useMapData = (
     queryKey: req ? queryKeys.map(req) : ["exposures", "map", null],
     queryFn: () => fetchMap(req as MapRequest),
     enabled: Boolean(req) && (opts?.enabled ?? true),
+    // Keep the previous choropleth on screen while a zoom/peril/filter change
+    // refetches — without this the map blanks on every request-key change.
+    placeholderData: keepPreviousData,
     ...opts,
   });
 

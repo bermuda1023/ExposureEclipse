@@ -59,6 +59,16 @@ class FactCache(Generic[T]):
         self._loads = 0
         self._load_errors = 0
         self._evictions = 0
+        # Bumped on any content mutation (set / evict / TTL-expiry / invalidate)
+        # so callers can memoize derived views keyed on the generation.
+        self._generation = 0
+
+    @property
+    def generation(self) -> int:
+        """Monotonic counter of content mutations — memoization key for
+        derived views (geometry availability, flattened portfolio)."""
+        with self._lock:
+            return self._generation
 
     def _is_fresh(self, entry: _Entry[T]) -> bool:
         if self._ttl <= 0:
@@ -72,6 +82,7 @@ class FactCache(Generic[T]):
                 return None
             if not self._is_fresh(entry):
                 del self._data[key]
+                self._generation += 1
                 return None
             self._data.move_to_end(key)
             self._hits += 1
@@ -86,9 +97,11 @@ class FactCache(Generic[T]):
             )
             self._data[key] = _Entry(value=value, loaded_at=time.monotonic(), row_count=n)
             self._data.move_to_end(key)
+            self._generation += 1
             while len(self._data) > self._max:
                 self._data.popitem(last=False)
                 self._evictions += 1
+                self._generation += 1
 
     def invalidate(self, key: str | None = None) -> int:
         """Drop one key, or all keys when ``key`` is None. Returns count dropped."""
@@ -96,9 +109,12 @@ class FactCache(Generic[T]):
             if key is None:
                 n = len(self._data)
                 self._data.clear()
+                if n:
+                    self._generation += 1
                 return n
             if key in self._data:
                 del self._data[key]
+                self._generation += 1
                 return 1
             return 0
 

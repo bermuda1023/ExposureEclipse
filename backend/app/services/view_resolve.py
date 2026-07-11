@@ -82,6 +82,23 @@ def require_at_most_one_target(payload: Any) -> None:
 _require_exactly_one_target = require_at_most_one_target
 
 
+def _default_combination_method(
+    facts: list[ExposureFactNormalized],
+) -> CombinationMethod | None:
+    """CLAUDE.md rule 3 — never plain-sum TIV across distinct perils.
+
+    Single-target selections (programme / chain / dataset) resolve to one EDM,
+    but a programme is multi-peril by default (WS+EQ+CS rows ride together).
+    When the resolved facts span more than one distinct peril, the view must
+    combine under ``MAX_ACROSS_PERILS_AT_VIEW_GRAIN``; a single-peril fact set
+    keeps the plain-sum path (method ``None``).
+    """
+    perils = {f.peril for f in facts}
+    if len(perils) > 1:
+        return CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
+    return None
+
+
 def _not_found(code: ErrorCode, message: str, details: dict) -> HTTPException:
     return HTTPException(
         status_code=404,
@@ -206,7 +223,7 @@ def resolve_view(
         method = (
             CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
             if len(dataset_ids) > 1
-            else None
+            else _default_combination_method(facts)
         )
         if method is not None:
             warnings.append(make_warning(WarningCode.WARN_DATASET_GROUP_MAX_ACROSS_PERILS))
@@ -231,7 +248,7 @@ def resolve_view(
         return ResolvedView(
             facts=facts,
             currency=prog.edm.currency,
-            combination_method=None,
+            combination_method=_default_combination_method(facts),
             base_dataset_id=prog.dataset_id,
             comparison_dataset_id=resolve_comparison_dataset_id(provider, payload),
             warnings=load_warnings,
@@ -260,7 +277,7 @@ def resolve_view(
         return ResolvedView(
             facts=facts,
             currency=current.edm.currency,
-            combination_method=None,
+            combination_method=_default_combination_method(facts),
             base_dataset_id=current.dataset_id,
             comparison_dataset_id=comparison_id,
             warnings=load_warnings,
@@ -292,7 +309,9 @@ def resolve_view(
             warnings.append(make_warning(WarningCode.WARN_CURRENCY_MISMATCH))
         currency = next(iter(currencies)) if len(currencies) == 1 else "MIXED"
         method = (
-            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN if len(chains) > 1 else None
+            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
+            if len(chains) > 1
+            else _default_combination_method(facts)
         )
         if method is not None:
             warnings.append(make_warning(WarningCode.WARN_DATASET_GROUP_MAX_ACROSS_PERILS))
@@ -330,7 +349,7 @@ def resolve_view(
         method = (
             CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
             if len(cedent.chains) > 1
-            else None
+            else _default_combination_method(facts)
         )
         if method is not None:
             warnings.append(make_warning(WarningCode.WARN_DATASET_GROUP_MAX_ACROSS_PERILS))
@@ -355,7 +374,7 @@ def resolve_view(
         return ResolvedView(
             facts=facts,
             currency=prog.edm.currency,
-            combination_method=None,
+            combination_method=_default_combination_method(facts),
             base_dataset_id=prog.dataset_id,
             comparison_dataset_id=resolve_comparison_dataset_id(provider, payload),
             warnings=load_warnings,

@@ -41,6 +41,7 @@ ExposureEclipse/
 │   │   │     ert_jobs        in-process ERT-job lifecycle (mock)
 │   │   │     exports         Excel streaming
 │   │   │     exposures       /map /detail /pivot (parallel multi-EDM resolve)
+│   │   │     fund_analysis   fund/MVO workbench — secondary, quarantined (SYSTEM_DESIGN.md)
 │   │   │     hazards         tornado / hail / wildfire pre-baked grids
 │   │   │     hurricanes      historical IBTrACS storms + impact engine
 │   │   │     live            NHC active + IBTrACS replay + alerts + buoys + SST
@@ -73,7 +74,7 @@ ExposureEclipse/
 │   │     build_tornado_grid   pyshp SPC SVRGIS → mockdata/hazard_tornado_grid.json
 │   │     build_hail_grid      pyshp SPC SVRGIS → mockdata/hazard_hail_grid.json
 │   │     build_wildfire_grid  CSV WFIGS → mockdata/hazard_wildfire_grid.json
-│   └── tests/                pytest (~107, incl. multi-EDM cache/parallel)
+│   └── tests/                pytest (100+, incl. multi-EDM cache/parallel)
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
@@ -140,7 +141,7 @@ ExposureEclipse/
 | Resizable panes | react-resizable-panels v2 | persisted layout per shape key |
 | Frontend tests | Vitest + Testing Library | `npx vitest run` (34) |
 | Backend | Python 3.12, FastAPI, Pydantic v2, openpyxl | uvicorn dev on 8000 |
-| Backend tests | pytest + httpx | `pytest -q` (~107) |
+| Backend tests | pytest + httpx | `pytest -q` (100+) |
 | Multi-EDM SQL | pyodbc (optional extra `[sql]`) | hybrid/sqlserver providers || Storms (historical) | stdlib `urllib` + lru_cache | IBTrACS NA fetch → 3 indexes (tracks + Rmax + R64 quads) |
 | Storms (live) | stdlib `urllib` | NHC CurrentStorms.json + IBTrACS replay |
 | Marine + alerts | stdlib `urllib` | NDBC `latest_obs.txt`, NWS `api.weather.gov`, JPL MUR SST via ERDDAP CSV |

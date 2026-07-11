@@ -441,6 +441,11 @@ engine is API-only until a "what-if" panel is built.
 
 ## Admin — programme treaty metadata
 
+> All **mutating** admin routes (the PUT/POST rows below plus cache
+> warmup/invalidate) require the `X-Admin-Token` header when the
+> `ADMIN_TOKEN` env var is set (401 `UNAUTHORIZED` otherwise). Unset =
+> open, for local dev only.
+
 | Verb | Path | Purpose |
 |---|---|---|
 | GET | `/api/admin/programmes` | joined treaty rows + EDM linkage + auto-suggest |
@@ -450,6 +455,8 @@ engine is API-only until a "what-if" panel is built.
 
 Backs the `/admin/programmes` page. Treaty rows persist to
 `mockdata/treaty_metadata.json`; EDM links to `mockdata/edm_linkage.json`.
+When the mockdata dir is not writable (Vercel), writes fall back to a
+per-instance tmp overlay — see `docs/DEPLOY.md` §Serverless caveats.
 Auto-suggest matches treaty rows to cedent EDMs by reinsured-name
 substring; the UI surfaces the suggestion as an "Apply suggestion" action
 per row.
@@ -465,7 +472,13 @@ tolerate both `FS display` (with space) and `fs_display` (snake) variants.
 | GET | `/api/admin/connections?probe=true` | same + live `SELECT 1` per host |
 | GET | `/api/admin/cache` | fact-cache hit/miss/eviction stats + cached ids |
 | POST | `/api/admin/cache/warmup` | parallel preload of EDM facts into process cache |
-| DELETE | `/api/admin/cache` | invalidate entire cache |
+| DELETE | `/api/admin/cache` |
+| GET | `/api/fund-analysis/assets` |
+| POST | `/api/fund-analysis/optimize` |
+| POST | `/api/fund-analysis/custom` |
+| POST | `/api/fund-analysis/rolling-stats` |
+| POST | `/api/fund-analysis/robustness` |
+| POST | `/api/fund-analysis/rescore-ir` | invalidate entire cache |
 | DELETE | `/api/admin/cache?datasetId=ds-…` | invalidate one EDM |
 
 ### Warmup body
@@ -484,6 +497,26 @@ tolerate both `FS display` (with space) and `fs_display` (snake) variants.
 Under `DATA_PROVIDER=mock`, connections list is empty but cache endpoints
 still work (JSON facts). Under `hybrid`/`sqlserver`, servers come from
 `SQLSERVER_SERVERS_FILE` / `SQLSERVER_SERVERS_JSON`. See `docs/MULTI_EDM.md`.
+
+## Fund analysis (secondary / quarantined surface)
+
+| Verb | Path | Purpose |
+|---|---|---|
+| GET | `/api/fund-analysis/assets` | catalog of the demo assets (6 funds + SPY + AGG) |
+| POST | `/api/fund-analysis/optimize` | MVO efficient frontier + max-Sharpe + min-variance |
+| POST | `/api/fund-analysis/custom` | score a user-supplied weight vector |
+| POST | `/api/fund-analysis/rolling-stats` | rolling return / vol / IR series |
+| POST | `/api/fund-analysis/robustness` | perturbation / resampling robustness checks |
+| POST | `/api/fund-analysis/rescore-ir` | information-ratio rescoring |
+
+A self-contained portfolio-optimization workbench that shares nothing with the
+exposure data plane. **Secondary surface** — quarantined per
+`SYSTEM_DESIGN.md` PR-04a; don't build exposure features on it. The whole
+router can be removed with `FUND_ANALYSIS_ENABLED=false` (recommended for
+firm builds). Inputs are bounds-checked and Monte-Carlo sample counts are
+capped (10k `/optimize`, 3k per `/robustness` scenario) so a single
+unauthenticated request can't pin a CPU core; operational guards are covered
+by `backend/tests/test_api_fund_analysis.py`.
 
 ## Endpoint summary
 

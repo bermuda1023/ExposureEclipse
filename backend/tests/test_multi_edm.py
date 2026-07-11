@@ -208,6 +208,45 @@ def test_connection_registry_odbc_string() -> None:
     assert "UID=u" in s
 
 
+def test_connection_registry_rejects_unsafe_database_names() -> None:
+    """ODBC injection guard: database names must be plain identifiers."""
+    cfg = ServerConnectionConfig(server_name="S", host="h")
+    for bad in ("EDM;UID=sa", "EDM}x", "EDM name", "", "EDM;"):
+        with pytest.raises(ValueError):
+            cfg.odbc_connect_string(bad)
+    # Legitimate identifier characters pass.
+    assert "DATABASE=Re_BER-27.EDM_01" in cfg.odbc_connect_string("Re_BER-27.EDM_01")
+
+
+def test_connection_registry_rejects_unsafe_extra_odbc() -> None:
+    cfg = ServerConnectionConfig(
+        server_name="S", host="h", extra_odbc="Authentication=X;PWD=evil"
+    )
+    with pytest.raises(ValueError):
+        cfg.odbc_connect_string("EDM_01")
+    # A single trailing semicolon is tolerated (normalized away).
+    ok = ServerConnectionConfig(
+        server_name="S", host="h", extra_odbc="Authentication=ActiveDirectoryInteractive;"
+    )
+    assert "Authentication=ActiveDirectoryInteractive" in ok.odbc_connect_string("EDM_01")
+
+
+def test_fact_cache_generation_bumps_on_mutations() -> None:
+    cache: FactCache[list[int]] = FactCache(max_datasets=2, ttl_seconds=0)
+    g0 = cache.generation
+    cache.set("a", [1])
+    assert cache.generation > g0
+    g1 = cache.generation
+    cache.get("a")  # read-only — no bump
+    assert cache.generation == g1
+    cache.set("b", [2])
+    cache.set("c", [3])  # evicts "a" → bump for insert + eviction
+    g2 = cache.generation
+    assert g2 > g1
+    cache.invalidate("b")
+    assert cache.generation > g2
+
+
 # ───────────────────────── mock lazy + parallel ─────────────────────────
 
 

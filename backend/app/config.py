@@ -33,8 +33,19 @@ class Settings(BaseSettings):
 
     export_max_rows: int = 100_000
 
+    # Shared token gating the mutating /api/admin routes (header X-Admin-Token).
+    # Unset (default) = open, for local dev. Set in any shared/hosted deploy.
+    admin_token: str | None = None
+
+    # Fund-analysis router (personal portfolio optimizer — SYSTEM_DESIGN PR-04a).
+    # Default on so the demo keeps its fund page; firm builds should set false.
+    fund_analysis_enabled: bool = True
+
     # Vite dev :5173 (proxied), Vite preview :4173 (direct, needs CORS).
     cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
+    # Optional regex for origins that can't be enumerated (e.g. Vercel preview
+    # deploys). Passed to CORSMiddleware's allow_origin_regex.
+    cors_allow_origin_regex: str | None = None
 
     # ── Multi-EDM fact plane ──────────────────────────────────────
     # Cap on cached EDMs (each holds its full pre-aggregated fact list).

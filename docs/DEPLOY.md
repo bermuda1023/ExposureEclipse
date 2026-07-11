@@ -83,6 +83,15 @@ may land on a different lambda, so:
    surface today; the cedent/office model replaced the group-create UI.
 4. **SQL connection pools** — not meaningful across ephemeral lambdas; keep
    `DATA_PROVIDER=mock` on Vercel.
+5. **Admin treaty / EDM-linkage writes** (`services/treaty_metadata.py`) —
+   the bundled `mockdata/` dir is **read-only** inside the function. Writes
+   fall back to a per-instance tmp overlay
+   (`$TMPDIR/exposure_eclipse_admin/`, read back on load), so an edit
+   survives warm invocations on the SAME lambda but not cold starts or
+   other instances. Treat `/admin/programmes` edits as ephemeral on Vercel;
+   the durable fix is external storage (Vercel KV / blob). Also set
+   `ADMIN_TOKEN` so the mutating `/api/admin/*` routes require the
+   `X-Admin-Token` header instead of being open to any caller.
 
 Everything else (cedent tree, map, detail, pivot, export, hurricanes against
 mock facts) reads from bundled fixtures and is effectively stateless.

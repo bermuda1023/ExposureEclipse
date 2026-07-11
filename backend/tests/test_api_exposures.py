@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -38,6 +39,63 @@ def test_map_state_returns_features_with_metric_value_mirror() -> None:
     # metricValue mirrors the requested metric (here = TIV)
     assert fl["metricValue"] == fl["tiv"]
     assert fl["tiv"] > 0
+
+
+def test_map_multi_peril_programme_uses_max_across_perils_not_sum() -> None:
+    """CLAUDE.md rule 3 — never sum TIV across distinct perils.
+
+    `ds-farmers-bda-2027` (programme `prog-farmers-bda-2027`) carries WS+EQ+CS
+    rows of $19,920,890,039.30 EACH in US-FL. The map must show the
+    max-across-perils value (~$19.92B), never the 3-peril sum (~$59.76B).
+    """
+    resp = client.post(
+        "/api/exposures/map",
+        json={
+            "programmeId": "prog-farmers-bda-2027",
+            "aggregationLevel": AggregationLevel.STATE.value,
+            "metric": MetricKey.TIV.value,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    fl = next(f for f in resp.json()["features"] if f["geographyId"] == "US-FL")
+    assert fl["tiv"] == pytest.approx(19_920_890_039.30, rel=1e-9)
+    assert fl["metricValue"] == pytest.approx(19_920_890_039.30, rel=1e-9)
+
+
+def test_map_portfolio_share_of_itself_is_one() -> None:
+    """Numerator and denominator must combine perils the same way: the
+    in-force portfolio viewed against itself gives share ≈ 1.0 everywhere."""
+    resp = client.post(
+        "/api/exposures/map",
+        json={
+            "aggregationLevel": AggregationLevel.STATE.value,
+            "metric": MetricKey.DEAL_SHARE_OF_PORTFOLIO_IN_GEOGRAPHY.value,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    features = resp.json()["features"]
+    assert len(features) > 0
+    for f in features:
+        assert f["dealShareOfPortfolioInGeography"] == pytest.approx(1.0), (
+            f["geographyId"]
+        )
+
+
+def test_detail_portfolio_share_of_itself_is_one() -> None:
+    resp = client.post(
+        "/api/exposures/detail",
+        json={
+            "aggregationLevel": AggregationLevel.STATE.value,
+            "metric": MetricKey.TIV.value,
+            "geographyId": "US-FL",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"]["dealShareOfPortfolioInGeography"] == pytest.approx(1.0)
+    assert body["dealVsPortfolio"]["dealTiv"] == pytest.approx(
+        body["dealVsPortfolio"]["portfolioTiv"]
+    )
 
 
 def test_map_county_with_ied_gap_emits_market_share_warning() -> None:

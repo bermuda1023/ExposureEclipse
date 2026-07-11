@@ -190,6 +190,7 @@ Warning object shape:
 | Code | HTTP | User-facing? |
 |---|---|---|
 | `VALIDATION_ERROR` | 422 | yes |
+| `UNAUTHORIZED` | 401 | yes (mutating `/api/admin/*` routes when `ADMIN_TOKEN` is set) |
 | `DATASET_NOT_FOUND` | 404 | yes |
 | `DATASET_GROUP_NOT_FOUND` | 404 | yes |
 | `CURRENCY_MISMATCH` | 409 | yes |

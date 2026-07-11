@@ -86,7 +86,7 @@ def _parse_float(s: str) -> float | None:
 
 
 @lru_cache(maxsize=1)
-def _parse_csv() -> tuple[
+def _parse_csv_cached() -> tuple[
     dict[tuple[str, str], float],                                # rmax index
     dict[tuple[str, str], float],                                # r64 mean (legacy)
     dict[tuple[str, str], tuple[float, float, float, float]],    # r64 quadrants (NE, SE, SW, NW)
@@ -102,7 +102,7 @@ def _parse_csv() -> tuple[
     reader = csv.reader(io.StringIO(raw))
     header = next(reader, None)
     if header is None:
-        return {}, {}
+        return {}, {}, {}, {}
     # Row 2 is units; skip.
     _units = next(reader, None)
 
@@ -223,6 +223,24 @@ def _parse_csv() -> tuple[
         s.track.sort(key=lambda p: p.datetime_utc)
 
     return rmax_index, r64_index, r64_quads_index, storms
+
+
+def _parse_csv() -> tuple[
+    dict[tuple[str, str], float],
+    dict[tuple[str, str], float],
+    dict[tuple[str, str], tuple[float, float, float, float]],
+    dict[str, Storm],
+]:
+    """Cached parse, but never PIN an empty result.
+
+    A network failure raises (lru_cache doesn't cache exceptions), but a
+    successful fetch with a drifted/truncated payload used to cache four empty
+    indexes for the process lifetime. Clear the cache so the next call retries.
+    """
+    result = _parse_csv_cached()
+    if not result[3]:
+        _parse_csv_cached.cache_clear()
+    return result
 
 
 def _rmax_index() -> dict[tuple[str, str], float]:

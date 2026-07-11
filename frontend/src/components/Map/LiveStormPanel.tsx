@@ -62,27 +62,57 @@ export function LiveStormPanel() {
     impactStore.start(activeId, payload);
     fetchHurricaneImpact(activeId, payload)
       .then((d) => {
+        // The store's setData drops stale payloads itself; only push to the
+        // detail rail when this response is still the active storm.
+        if (useHurricaneImpactStore.getState().activeStormId !== activeId) return;
         impactStore.setData(d);
         impactStore.pushToDetail();
       })
-      .catch((e) => impactStore.setError(String(e?.message ?? e)));
+      .catch((e) => {
+        if (useHurricaneImpactStore.getState().activeStormId !== activeId) return;
+        impactStore.setError(String(e?.message ?? e));
+      });
   }
 
-  // Fetch the full bundle whenever activeId changes, throttled to once per
-  // 60s while a storm is live (cache).
+  // Fetch the full bundle via TanStack Query, keyed on (stormId, includes).
+  // staleTime 60s → a layer-checkbox toggle within the window is served from
+  // cache, and toggle-only key changes never blank the store (the store keeps
+  // rendering the previous bundle until the new one lands). Storm switches
+  // still blank via StormPicker's store.start(id).
+  const bundleQuery = useQuery({
+    queryKey: [
+      "live-storm-bundle",
+      activeId,
+      {
+        includeObs: store.showBuoys,
+        includeAlerts: store.showAlerts,
+        includeSst: store.showSst,
+        includeLand: store.showLand,
+      },
+    ],
+    queryFn: () =>
+      fetchLiveStormBundle(activeId as string, {
+        includeObs: store.showBuoys,
+        includeAlerts: store.showAlerts,
+        includeSst: store.showSst,
+        includeLand: store.showLand,
+      }),
+    enabled: Boolean(activeId),
+    staleTime: 60_000,
+  });
+
+  // Sync query results into the store — it stays the render source for the
+  // panel and LiveStormLayer, so this is the least-churn integration.
+  const setData = store.setData;
+  const setError = store.setError;
   useEffect(() => {
-    if (!activeId) return;
-    store.start(activeId);
-    fetchLiveStormBundle(activeId, {
-      includeObs: store.showBuoys,
-      includeAlerts: store.showAlerts,
-      includeSst: store.showSst,
-      includeLand: store.showLand,
-    })
-      .then(store.setData)
-      .catch((e) => store.setError(String(e?.message ?? e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, store.showBuoys, store.showAlerts, store.showSst, store.showLand]);
+    if (bundleQuery.data) setData(bundleQuery.data);
+  }, [bundleQuery.data, setData]);
+  useEffect(() => {
+    if (bundleQuery.error) {
+      setError(String((bundleQuery.error as Error)?.message ?? bundleQuery.error));
+    }
+  }, [bundleQuery.error, setError]);
 
   return (
     <div

@@ -292,9 +292,14 @@ export function HurricaneLayer({ map }: Props) {
           };
 
           startImpact(stormId, selectionPayload);
+          // setImpactData drops stale payloads itself (store guard on
+          // stormId); errors don't carry a stormId, so guard here instead.
           fetchHurricaneImpact(stormId, selectionPayload)
             .then((data) => setImpactData(data))
-            .catch((err) => setImpactError(String((err as Error)?.message ?? err)));
+            .catch((err) => {
+              if (useHurricaneImpactStore.getState().activeStormId !== stormId) return;
+              setImpactError(String((err as Error)?.message ?? err));
+            });
         };
 
         map.on("mousemove", LINE_LAYER, onMove);

@@ -38,6 +38,17 @@ import { Pivot } from "../Pivot/Pivot";
 import { Header } from "./Header";
 import { WarningsPanel } from "./WarningsPanel";
 import type { MapRequest } from "../../api/types";
+import type { ApiWarning } from "../../api/client";
+import { WarningCode, WarningSeverity } from "../../types/contracts";
+
+// Client-side warning for the "scope chips match zero chains" case — the wire
+// has no empty-chain sentinel (chainIds: [] means portfolio to the backend),
+// so no request is sent and this warning is surfaced locally instead.
+const NO_SCOPE_MATCH_WARNING: ApiWarning = {
+  code: WarningCode.WARN_FILTERS_RETURN_NO_ROWS,
+  severity: WarningSeverity.INFO,
+  message: "No programmes match the current scope filters.",
+};
 
 export function Shell() {
   const scope = useEffectiveScope();
@@ -56,6 +67,9 @@ export function Shell() {
   // hurricane impact) sees the SAME set of programmes.
 
   const mapRequest = useMemo<MapRequest | null>(() => {
+    // Scope chips active but matching zero chains → explicitly-empty view.
+    // Sending the request anyway would fall back to the full portfolio.
+    if (scope.isEmpty) return null;
     return {
       cedentId: scope.cedentId,
       chainId: scope.chainId,
@@ -81,6 +95,7 @@ export function Shell() {
     scope.chainId,
     scope.programmeId,
     scope.chainIds,
+    scope.isEmpty,
     comparisonProgrammeId,
     aggregationLevel,
     metric,
@@ -97,7 +112,9 @@ export function Shell() {
 
   const mapQuery = useMapData(mapRequest);
   const featureWarnings = mapQuery.data?.features.flatMap((f) => f.warnings) ?? [];
-  const allWarnings = [...(mapQuery.data?.warnings ?? []), ...featureWarnings];
+  const allWarnings = scope.isEmpty
+    ? [NO_SCOPE_MATCH_WARNING]
+    : [...(mapQuery.data?.warnings ?? []), ...featureWarnings];
   const hasSelection = true; // portfolio mode is always a valid view
 
   const layoutKey = `ee-cols-${leftOpen ? "L" : "x"}-${rightOpen ? "R" : "x"}`;
@@ -165,7 +182,10 @@ export function Shell() {
                         }
                       >
                         <MapView
-                          data={mapQuery.data}
+                          // keepPreviousData still surfaces the previous
+                          // payload while the empty-scope query is disabled —
+                          // force the empty view so no stale choropleth shows.
+                          data={scope.isEmpty ? null : mapQuery.data}
                           isLoading={mapQuery.isLoading}
                           error={mapQuery.error}
                         />

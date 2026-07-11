@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import json
 import secrets
+import threading
 from abc import abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,6 +90,20 @@ class JsonCatalogProvider(ExposureDataProvider):
         self._fact_files: set[str] = set()
         if facts_dir.exists():
             self._fact_files = {p.stem for p in facts_dir.glob("*.json")}
+
+        # Derived-view memos, keyed on the fact cache's generation counter so
+        # per-request work is O(1) while the cache content is unchanged
+        # (previously get_geometry_availability rescanned every cached row and
+        # get_portfolio_facts re-flattened the whole portfolio per request).
+        self._views_lock = threading.RLock()
+        # dataset_id → geography ids, filled on cache insert (loader hook).
+        # Bounded by the catalog size; entries for evicted datasets are simply
+        # skipped when unioning over currently-cached keys.
+        self._geo_ids_by_dataset: dict[str, frozenset[str]] = {}
+        self._geo_avail_memo: tuple[int, set[str]] | None = None
+        self._portfolio_memo: (
+            tuple[int, tuple[str, ...], list[ExposureFactNormalized]] | None
+        ) = None
 
     # ── subclass hooks ──────────────────────────────────────────
 
@@ -259,10 +274,18 @@ class JsonCatalogProvider(ExposureDataProvider):
     # ── facts ───────────────────────────────────────────────────
 
     def get_facts_for_dataset(self, dataset_id: str) -> list[ExposureFactNormalized]:
+        def _load() -> list[ExposureFactNormalized]:
+            facts = self._load_facts_uncached(dataset_id)
+            # Maintain the geography set incrementally at insert time so
+            # get_geometry_availability never rescans fact rows per request.
+            with self._views_lock:
+                self._geo_ids_by_dataset[dataset_id] = frozenset(
+                    f.geography_id for f in facts
+                )
+            return facts
+
         # Cache holds the list; treat as immutable — return as-is (no full copy).
-        return self._cache.get_or_load(
-            dataset_id, lambda: self._load_facts_uncached(dataset_id)
-        )
+        return self._cache.get_or_load(dataset_id, _load)
 
     def get_facts_for_datasets(self, dataset_ids: Sequence[str]) -> FactBatch:
         errors: list[LoadError] = []
@@ -299,22 +322,59 @@ class JsonCatalogProvider(ExposureDataProvider):
         return ids
 
     def get_portfolio_facts(self) -> list[ExposureFactNormalized]:
-        """Share-metric denominator: same universe as portfolio map view."""
+        """Share-metric denominator: same universe as portfolio map view.
+
+        Memoized on the fact cache's generation so repeat requests don't
+        re-flatten the whole portfolio; any insert/evict/flush invalidates.
+        Callers must treat the returned list as immutable (same contract as
+        ``get_facts_for_dataset``).
+        """
         ids = self.portfolio_dataset_ids(in_force_only=True)
+        gen = self._cache.generation
+        with self._views_lock:
+            memo = self._portfolio_memo
+            if memo is not None and memo[0] == gen and memo[1] == tuple(ids):
+                return memo[2]
         batch = self.get_facts_for_datasets(ids)
-        return batch.flatten(ids)
+        facts = batch.flatten(ids)
+        # Loading may have bumped the generation — key the memo on the
+        # post-load value so the next unchanged-cache call hits it.
+        gen = self._cache.generation
+        with self._views_lock:
+            self._portfolio_memo = (gen, tuple(ids), facts)
+        return facts
 
     def get_ied_industry(self) -> list[IEDIndustryRow]:
         return list(self._ied)
 
     def get_geometry_availability(self) -> set[str]:
+        """Geometry ids from disk + geography ids of all cached datasets.
+
+        Uses the per-dataset geography sets maintained at cache-insert time
+        (see :meth:`get_facts_for_dataset`), memoized on the cache generation
+        — no per-request scan over every cached fact row.
+        """
+        gen = self._cache.generation
+        with self._views_lock:
+            memo = self._geo_avail_memo
+            if memo is not None and memo[0] == gen:
+                return memo[1]
         ids: set[str] = set(self._geometry_ids)
         for ds_id in self._cache.cached_keys():
-            rows = self._cache.get(ds_id)
-            if not rows:
-                continue
-            for f in rows:
-                ids.add(f.geography_id)
+            with self._views_lock:
+                geo = self._geo_ids_by_dataset.get(ds_id)
+            if geo is None:
+                # Entry cached without going through our loader (e.g. direct
+                # cache.set in tests) — derive + remember its set once.
+                rows = self._cache.get(ds_id)
+                geo = frozenset(f.geography_id for f in (rows or []))
+                with self._views_lock:
+                    self._geo_ids_by_dataset[ds_id] = geo
+            ids |= geo
+        with self._views_lock:
+            # Keyed on the pre-scan generation: a concurrent mutation bumps the
+            # live counter past `gen`, so a possibly-stale memo self-invalidates.
+            self._geo_avail_memo = (gen, ids)
         return ids
 
     # ── ops surface ─────────────────────────────────────────────
