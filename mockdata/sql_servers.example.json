@@ -1,0 +1,27 @@
+{
+  "BERMUDA-SQL01": {
+    "host": "bermuda-sql01.example.local",
+    "port": 1433,
+    "user": "ee_readonly",
+    "password": "CHANGE_ME",
+    "driver": "ODBC Driver 18 for SQL Server",
+    "trustServerCertificate": true,
+    "encrypt": true
+  },
+  "LONDON-SQL01": {
+    "host": "london-sql01.example.local",
+    "port": 1433,
+    "user": "ee_readonly",
+    "password": "CHANGE_ME",
+    "driver": "ODBC Driver 18 for SQL Server",
+    "trustServerCertificate": true,
+    "encrypt": true
+  },
+  "NYC-SQL01": {
+    "host": "nyc-sql01.example.local",
+    "port": 1433,
+    "driver": "ODBC Driver 18 for SQL Server",
+    "trustServerCertificate": true,
+    "encrypt": true
+  }
+}

@@ -247,13 +247,28 @@ def test_every_state_with_data_has_at_least_one_county(
 def test_portfolio_facts_exclude_non_portfolio_datasets(
     provider: MockExposureDataProvider,
 ) -> None:
-    """`ds-sample-27-ws` is `isIncludedInPortfolio=false` → must not show up."""
+    """Option A: in-force BOUND only; no orphan fact stems; no sample/alwaysfails."""
     portfolio_dataset_ids = {f.dataset_id for f in provider.get_portfolio_facts()}
     assert "ds-sample-27-ws" not in portfolio_dataset_ids
     assert "ds-alwaysfails-27-ws" not in portfolio_dataset_ids
-    assert {"ds-farmers-bda-2027", "ds-farmers-bda-2027", "ds-acmere-26-multi"}.issubset(
-        portfolio_dataset_ids
-    )
+    # Legacy per-peril orphan stems must not pollute the denominator.
+    for orphan in (
+        "ds-farmers-25-ws",
+        "ds-farmers-26-ws",
+        "ds-farmers-26-eq",
+        "ds-farmers-26-cs",
+        "ds-farmers-27-ws",
+        "ds-farmers-27-eq",
+        "ds-farmers-27-cs",
+    ):
+        assert orphan not in portfolio_dataset_ids
+    # In-force multi-peril Farmers BDA year should still be present when in force.
+    # (Date-sensitive: if fixtures expire, at least orphan exclusion holds.)
+    ids = provider.portfolio_dataset_ids(in_force_only=True)
+    assert "ds-sample-27-ws" not in ids
+    assert all(o not in ids for o in (
+        "ds-farmers-25-ws", "ds-farmers-26-ws", "ds-farmers-27-ws",
+    ))
 
 
 # ───────────────────────── dataset-group CRUD ─────────────────────────

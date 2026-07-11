@@ -2,12 +2,14 @@
 
 Domain terms an engineer must understand to build this correctly.
 
+> New here? Read [`FOR_INTERNAL_DEVELOPERS.md`](./FOR_INTERNAL_DEVELOPERS.md).
+
 | Term | Definition |
 |---|---|
 | **Property Cat** | Property Catastrophe (re)insurance — covers losses from natural catastrophes (hurricane, EQ, etc.). |
 | **TIV** | Total Insured Value — the aggregate insured value of exposures. Core monetary measure throughout the app. = Building + Contents + BI. |
-| **EDM** | Exposure Data Module — an RMS database holding a client's modeled exposure. Often **one EDM per peril** historically; the v1 mock bundles multi-peril per office-year. |
-| **ERT** | Existing SQL routine/output that breaks an EDM into standardized cuts (TIV by state, peril, occupancy, DTC, etc.). V1 consumes ERT outputs; does not rewrite ERT. |
+| **EDM** | Exposure Data Module — an RMS database holding a client's modeled exposure. Often **one EDM per peril** historically; the v1 mock bundles multi-peril per office-year. Typically one SQL **database** per EDM. |
+| **ERT** | Existing SQL routine/output that breaks an EDM into standardized cuts (TIV by state, peril, occupancy, DTC, etc.). This app **consumes** ERT outputs; it does not rewrite ERT. |
 | **CRESTA** | Catastrophe Risk Evaluation and Standardizing Target Accumulations — geographic zoning scheme for cat accumulation. An aggregation level. |
 | **RMS IED** | RMS Industry Exposure Database — static reference of **industry** TIV by geography (and occupancy). Denominator for client market share. County-level granularity. |
 | **Market share** | Client TIV ÷ RMS IED industry TIV for the same geography (and occupancy segment where available). |
@@ -31,8 +33,13 @@ Domain terms an engineer must understand to build this correctly.
 | **Construction / Year built / Number of stories / Geocoding quality** | Building/data dimensions used in pivots and tooltips. |
 | **Current viewed grain** | The full set of active grouping dimensions in the current view. Max-across-perils is computed at this grain. |
 | **Choropleth** | A map where areas are shaded by a metric value. Our v1 map type — implemented via Mapbox vector tilesets + feature-state. |
-| **Portfolio** | In v1, all programmes whose EDM has fact data loaded. |
+| **Portfolio** | Default map/pivot scope when nothing is selected: all **in-force BOUND** programmes (status + date window). Facts loaded in parallel via the multi-EDM plane. |
 | **YoY mode** | View modifier: when on, the chosen metric's `metricValue` becomes its YoY change vs the prior period. |
+| **FactCache** | Process-local LRU + TTL cache of normalized fact lists keyed by `datasetId`. Single-flight loads prevent stampeding. |
+| **Connection registry** | Map of logical `serverName` → SQL host credentials. Many EDMs share a few hosts. |
+| **hybrid provider** | `DATA_PROVIDER=hybrid`: SQL when the server is registered, else mock JSON fact files. Best for partial live demos. |
+| **ee_exposure_facts** | Preferred stable SQL view name inside each EDM database for pre-aggregated facts. Tried before the evolution table pattern. |
+| **Warmup** | `POST /api/admin/cache/warmup` — parallel preload of EDM facts before a demo so portfolio views are cache-hot. |
 | **HURDAT2** | NOAA's hurricane track database (Atlantic, 1851→). Kept as a helper module (`category_for_wind`, `landfall_summary`, `peak_wind`); the primary historical track source is now IBTrACS. |
 | **IBTrACS** | NOAA's International Best Track Archive for Climate Stewardship. Source for historical hurricane tracks (3-hour interpolated USA fixes), recon Rmax (`USA_RMW`), and per-quadrant R64 (`USA_R64_NE/SE/SW/NW`). |
 | **Saffir-Simpson (SSHWS)** | Hurricane wind-speed scale: TD <34kt, TS 34–63, Cat 1 64–82, Cat 2 83–95, Cat 3 96–112, Cat 4 113–136, Cat 5 ≥137. |
@@ -44,4 +51,4 @@ Domain terms an engineer must understand to build this correctly.
 | **SPC SVRGIS** | NOAA Storm Prediction Center's GIS dataset of tornado / hail / wind events 1950-present. Source for the hazard-overlay grids. |
 | **WFIGS** | Wildland Fire Interagency Geospatial Services — perimeter dataset 2020-present (NIFC). Source for the wildfire hazard grid. |
 | **Climatology blend** | The hazard-map approach used for tornado + hail: 60% smooth Brooks/Tippett/Cintineo prior + 40% historical KDE of SPC reports. Avoids the per-city reporting-bias artifact. |
-| **Provider** | Backend data-access implementation behind `ExposureDataProvider`. Mock today; SQL Server / Databricks later. |
+| **Provider** | Backend data-access implementation behind `ExposureDataProvider`. Modes: `mock`, `hybrid`, `sqlserver` (Databricks reserved). |

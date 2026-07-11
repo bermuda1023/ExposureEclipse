@@ -221,6 +221,173 @@ async def import_csv(
     )
 
 
+# ─────────────────────────── multi-EDM cache / connections ───────────────────
+
+
+class CacheStatsOut(CamelModel):
+    hits: int
+    misses: int
+    loads: int
+    load_errors: int
+    evictions: int
+    datasets_cached: int
+    rows_cached: int
+    max_datasets: int
+    ttl_seconds: float
+    in_flight: int
+    cached_dataset_ids: list[str] = []
+
+
+class WarmupRequest(CamelModel):
+    dataset_ids: list[str] | None = None
+    in_force_only: bool = True
+
+
+class WarmupResponse(CamelModel):
+    loaded: dict[str, int]
+    total_datasets: int
+    total_rows: int
+
+
+class ServerStatusOut(CamelModel):
+    server_name: str
+    host: str
+    port: int
+    registered: bool = True
+    probe_ok: bool | None = None
+    probe_message: str | None = None
+
+
+class ConnectionsResponse(CamelModel):
+    data_provider: str
+    server_count: int
+    servers: list[ServerStatusOut]
+    fact_cache: CacheStatsOut
+
+
+def _cache_stats_from_provider(provider: ExposureDataProvider) -> CacheStatsOut:
+    from ..providers.base import ProviderOps
+
+    if not isinstance(provider, ProviderOps):
+        return CacheStatsOut(
+            hits=0,
+            misses=0,
+            loads=0,
+            load_errors=0,
+            evictions=0,
+            datasets_cached=0,
+            rows_cached=0,
+            max_datasets=0,
+            ttl_seconds=0.0,
+            in_flight=0,
+        )
+    cache = provider.fact_cache
+    s = cache.stats()
+    return CacheStatsOut(
+        hits=s.hits,
+        misses=s.misses,
+        loads=s.loads,
+        load_errors=s.load_errors,
+        evictions=s.evictions,
+        datasets_cached=s.datasets_cached,
+        rows_cached=s.rows_cached,
+        max_datasets=s.max_datasets,
+        ttl_seconds=s.ttl_seconds,
+        in_flight=s.in_flight,
+        cached_dataset_ids=cache.cached_keys(),
+    )
+
+
+@router.get("/connections", response_model=ConnectionsResponse)
+def list_connections(
+    probe: bool = False,
+    provider: ExposureDataProvider = Depends(get_provider),
+) -> ConnectionsResponse:
+    """List registered SQL hosts + fact-cache stats.
+
+    Pass ``?probe=true`` to attempt a live ``SELECT 1`` against each host
+    (requires pyodbc + network). Off by default for snappy admin UI.
+    """
+    from ..config import get_settings
+    from ..providers.base import ProviderWithRegistry
+
+    settings = get_settings()
+    servers_out: list[ServerStatusOut] = []
+    if isinstance(provider, ProviderWithRegistry):
+        registry = provider.connection_registry
+        for cfg in registry.list_servers():
+            ok: bool | None = None
+            msg: str | None = None
+            if probe:
+                ok, msg = registry.probe(cfg.server_name)
+            servers_out.append(
+                ServerStatusOut(
+                    server_name=cfg.server_name,
+                    host=cfg.host,
+                    port=cfg.port,
+                    registered=True,
+                    probe_ok=ok,
+                    probe_message=msg,
+                )
+            )
+    return ConnectionsResponse(
+        data_provider=settings.data_provider,
+        server_count=len(servers_out),
+        servers=servers_out,
+        fact_cache=_cache_stats_from_provider(provider),
+    )
+
+
+@router.get("/cache", response_model=CacheStatsOut)
+def get_cache_stats(
+    provider: ExposureDataProvider = Depends(get_provider),
+) -> CacheStatsOut:
+    """Fact-cache hit/miss/eviction stats (multi-EDM readiness)."""
+    return _cache_stats_from_provider(provider)
+
+
+@router.post("/cache/warmup", response_model=WarmupResponse)
+def warmup_cache(
+    payload: WarmupRequest | None = None,
+    provider: ExposureDataProvider = Depends(get_provider),
+) -> WarmupResponse:
+    """Preload EDM facts into the process cache (parallel).
+
+    Call once after deploy / before a live demo so portfolio + multi-deal
+    views don't pay first-hit load latency across hundreds of EDMs.
+    """
+    from ..providers.base import ProviderOps
+
+    body = payload or WarmupRequest()
+    if isinstance(provider, ProviderOps):
+        loaded = provider.warmup(
+            body.dataset_ids,
+            in_force_only=body.in_force_only,
+        )
+    else:
+        facts = provider.get_portfolio_facts()
+        loaded = {"_portfolio": len(facts)}
+    return WarmupResponse(
+        loaded=loaded,
+        total_datasets=len(loaded),
+        total_rows=sum(loaded.values()),
+    )
+
+
+@router.delete("/cache")
+def clear_cache(
+    dataset_id: str | None = None,
+    provider: ExposureDataProvider = Depends(get_provider),
+) -> dict[str, object]:
+    """Invalidate one dataset or the entire fact cache."""
+    from ..providers.base import ProviderOps
+
+    if not isinstance(provider, ProviderOps):
+        return {"dropped": 0}
+    dropped = provider.fact_cache.invalidate(dataset_id)
+    return {"dropped": dropped, "datasetId": dataset_id}
+
+
 # Suppress lint about unused import — kept for downstream callers.
 _ = json
 

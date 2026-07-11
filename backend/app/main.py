@@ -67,12 +67,33 @@ api = APIRouter(prefix="/api")
 @api.get("/health", tags=["meta"])
 def health() -> dict[str, object]:
     """Liveness probe — see docs/API_SPEC.md table at line 318."""
-    return {
+    from .providers import get_provider
+
+    body: dict[str, object] = {
         "status": "ok",
         "service": "exposure-eclipse-backend",
         "version": app.version,
         "dataProvider": settings.data_provider,
+        "factCacheMaxDatasets": settings.fact_cache_max_datasets,
+        "factLoadMaxWorkers": settings.fact_load_max_workers,
     }
+    try:
+        provider = get_provider()
+        cache = getattr(provider, "fact_cache", None)
+        if cache is not None:
+            stats = cache.stats()
+            body["factCache"] = {
+                "datasetsCached": stats.datasets_cached,
+                "rowsCached": stats.rows_cached,
+                "hits": stats.hits,
+                "misses": stats.misses,
+            }
+        registry = getattr(provider, "connection_registry", None)
+        if registry is not None:
+            body["sqlServersRegistered"] = len(registry)
+    except Exception:
+        pass
+    return body
 
 
 app.include_router(api)

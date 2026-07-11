@@ -12,9 +12,10 @@ historical hurricane tracks + asymmetric wind-field cones, runs deterministic
 layered-loss scenarios, supplies a tornado / hail hazard climatology, plus
 NHC-style live-storm forecasts with marine + alert + SST context.
 
-**V1 = mock-data prototype.** No SQL Server. `MockExposureDataProvider`
-satisfies the same `ExposureDataProvider` ABC the SQL provider will satisfy
-later.
+**V1 = mock-data prototype with multi-EDM data plane.** Default provider is
+`mock` (lazy JSON facts + process cache + parallel multi-deal load).
+`hybrid` / `sqlserver` read the same pre-aggregated cut shape from real EDM
+databases via a multi-host connection registry (`EDMRef.serverName`).
 
 ## Capability snapshot (2026-06-29)
 
@@ -60,8 +61,9 @@ later.
 
 1. **Frontend never touches data sources.** All data flows
    *Frontend → FastAPI → Provider → mock JSON*.
-2. **Mock data first.** `MockExposureDataProvider` reads `mockdata/cedents.json`
-   + `mockdata/exposure_facts/<datasetId>.json`. SQL provider is later.
+2. **Mock data first.** Catalog + default facts from `mockdata/`. Facts load
+   **lazily** per `datasetId` through `FactCache`. `hybrid`/`sqlserver`
+   providers use the same ABC; never bypass the provider from routers/UI.
 3. **Default group combination is `MAX_ACROSS_PERILS_AT_VIEW_GRAIN`.**
    Never sum TIV across distinct perils unless `SUM_DISTINCT_SEGMENTS` with
    `distinctSegmentsConfirmed=true`.
@@ -162,15 +164,18 @@ Excel.
 api/                  Vercel Python entrypoint (api/index.py re-exports app.main:app)
 backend/app/          FastAPI app — api/ (routers), services/, models/, providers/
 backend/scripts/      Data-generation + hazard-grid build scripts
-backend/tests/        pytest (95)
+backend/tests/        pytest (~107)
 frontend/src/         React app — never imports a data client
 mockdata/             cedents.json + exposure_facts/ + treaty_metadata.json
                       + hazard_*_grid.json + ied_industry.csv
-docs/                 spec pack
+                      + sql_servers.example.json
+docs/                 spec pack (start: FOR_INTERNAL_DEVELOPERS.md for humans)
 vercel.json           single-deploy config
 ```
 
 See `docs/ARCHITECTURE.md` for the directory tree in detail.
+See `docs/MULTI_EDM.md` for multi-host SQL / cache / warmup.
+See `docs/FOR_INTERNAL_DEVELOPERS.md` for engineer onboarding + review stance.
 
 ## Per-task required reading (token discipline)
 
@@ -181,7 +186,9 @@ See `docs/ARCHITECTURE.md` for the directory tree in detail.
 | Calculations / grouping / impact / layers | `docs/CALCULATIONS.md` |
 | API endpoints | `docs/API.md` |
 | Architecture / deploy | `docs/ARCHITECTURE.md`, `docs/DEPLOY.md` |
+| Multi-EDM / SQL / cache | `docs/MULTI_EDM.md`, `docs/ARCHITECTURE.md` § Multi-EDM |
 | Hazard maps + bias correction | `docs/CALCULATIONS.md` §Hazard climatology blend |
+| Human review / bring-in | `docs/FOR_INTERNAL_DEVELOPERS.md` |
 
 When delegating to sub-agents: scope them to the row above + `CONTRACTS.md`,
 nothing more. Agents return diffs/summaries, not file dumps.

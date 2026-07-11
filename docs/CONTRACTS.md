@@ -4,6 +4,10 @@
 > MUST come from here. If a value isn't here, it doesn't exist yet — add it here first,
 > then implement. Frontend defines these as TS `const`/union types; backend as Python
 > `Enum`/`Literal`. Keep both generated from or checked against this file.
+>
+> Cross-check: `backend/app/models/enums.py` · `frontend/src/types/contracts.ts` ·
+> `frontend/src/tests/contracts.test.ts`.
+> System overview for reviewers: [`FOR_INTERNAL_DEVELOPERS.md`](./FOR_INTERNAL_DEVELOPERS.md).
 
 ## Conventions
 
@@ -172,6 +176,8 @@ Stable codes. UI renders `message`; logs/exports include `code`. Severity: `info
 | `WARN_ERT_NOT_FOUND` | warn | No ERT output tables found for this dataset. |
 | `WARN_MAP_GEOMETRY_MISSING` | info | Map geometry is unavailable for some features at this level. |
 | `WARN_FILTERS_RETURN_NO_ROWS` | info | No exposure records match the current filters. |
+| `WARN_EDM_LOAD_FAILED` | warn | One or more EDM fact loads failed; results may understate exposure. |
+| `WARN_EDM_MOCK_FALLBACK` | warn | One or more EDMs used mock fixtures instead of SQL (hybrid mode). |
 | `WARN_EXPORT_TOO_LARGE` | warn | Export exceeds the size limit; refine filters or aggregation. |
 
 Warning object shape:

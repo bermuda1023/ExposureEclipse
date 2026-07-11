@@ -5,6 +5,11 @@ All formulas live ONCE in `backend/app/services/calculations.py` +
 Heaviest test coverage lives here (`backend/tests/test_calculations.py` +
 `test_grouping.py`).
 
+> Inputs are always `ExposureFactNormalized[]` from the provider (mock JSON
+> or SQL cuts). Loading/caching is orthogonal — see
+> [`MULTI_EDM.md`](./MULTI_EDM.md). Engineer overview:
+> [`FOR_INTERNAL_DEVELOPERS.md`](./FOR_INTERNAL_DEVELOPERS.md).
+
 ## Universal principles
 
 - **One source of truth.** Don't recompute a metric differently per surface.
@@ -20,8 +25,10 @@ Heaviest test coverage lives here (`backend/tests/test_calculations.py` +
 
 - **Selected deal** = the chosen `programmeId` / `chainId` / `chainIds[]` /
   `cedentId` (combined per its method).
-- **Portfolio** = all programmes whose EDM has loaded facts (v1 = every
-  programme with a fact file).
+- **Portfolio** = all **in-force BOUND** programmes when no selection target
+  is supplied. Facts for those programmes are loaded in parallel (cache-aware)
+  then combined under `MAX_ACROSS_PERILS_AT_VIEW_GRAIN` when more than one
+  programme is included.
 - **Geography TIV** = `Σ fact.tiv` for a given `geographyId` at the active
   `aggregationLevel`.
 - **Current viewed grain** = ordered tuple of active grouping dimensions

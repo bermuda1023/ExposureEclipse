@@ -1,14 +1,17 @@
 # MOCK_DATA — fixtures + scenario coverage
 
-Everything `MockExposureDataProvider` (and the hazard / admin endpoints)
+Everything `MockExposureDataProvider` (and the hybrid/SQL providers' catalog)
 read lives under `mockdata/`. The frontend never reads these directly — it
 goes through `/api/*`.
+
+Facts load **lazily** per `datasetId` into the process-wide `FactCache`
+(not all files at process start). See [`MULTI_EDM.md`](./MULTI_EDM.md).
 
 ## Files
 
 ```
 mockdata/
-├── cedents.json              ← Cedent → Chain → Programme tree (primary)
+├── cedents.json              ← Cedent → Chain → Programme tree (primary catalog)
 ├── dataset_groups.json       ← seed for the in-memory group store (usually [])
 ├── datasets.json             ← legacy flat dataset list (kept for back-compat)
 ├── ied_industry.csv          ← RMS IED denominator (intentional gaps)
@@ -16,9 +19,12 @@ mockdata/
 │   └── <datasetId>.json      ← ExposureFactNormalized[] per programme's EDM
 ├── treaty_metadata.json      ← admin treaty rows (auto-saved by /api/admin)
 ├── edm_linkage.json          ← fs_display_id → (serverName, edmDatabaseName)
-├── hazard_tornado_grid.json  ← {stepDeg, cells[{lat,lon,raw}]}, bias-corrected blend
+├── sql_servers.example.json  ← multi-host SQL registry template
+├── sql_servers.json          ← local registry (create from example; do not commit secrets)
+├── hazard_tornado_grid.json  ← {stepDeg, cells[{lat,lon,raw}]}, climatology blend
 ├── hazard_hail_grid.json     ← same shape
 ├── hazard_wildfire_grid.json ← same shape
+├── fund_returns.json         ← fund-analysis demo series (if enabled)
 └── geo/                      ← tiny country + CRESTA features only
                                  (state + county come from Mapbox tilesets,
                                   not GeoJSON)
@@ -36,7 +42,10 @@ mockdata/
 | Sample Client AG | Nationwide | LON | `ERT_NOT_FOUND` scenario |
 | Designed To Fail Co. | Test | BDA | EDM name contains "AlwaysFails" → jobs service simulates failure |
 
-Total: 7 cedents · 10 chains · ~15 programmes · ~20 EDM fact files.
+Total: 7 cedents · 10 chains · ~15 programmes · ~19 EDM fact files · ~42k fact rows · ~47 MB on disk.
+
+Largest files (Farmers BDA multi-year multi-peril) are ~10k rows / ~12 MB each —
+representative of a rich pre-aggregated cut, not a raw location dump.
 
 ## Required scenarios (each must be reachable)
 
@@ -55,8 +64,9 @@ Total: 7 cedents · 10 chains · ~15 programmes · ~20 EDM fact files.
 | Hurricane historical overlay | Hurricanes button + filters | NOAA IBTrACS tracks coloured by Saffir-Simpson |
 | Hurricane impact engine | click a storm on the map | wind cone + county roll-up + per-programme breakdown |
 | Live storm replay | Hurricanes button → replay row (no active storms) | bundle with cones + alerts + buoys + SST |
-| Hazard overlay | "Risk: Tornado" / "Hail" chip | bias-corrected hazard surface; exposure choropleth hides while active |
+| Hazard overlay | "Risk: Tornado" / "Hail" chip | hazard surface; exposure choropleth hides while active |
 | Treaty admin | URL `/admin/programmes` | editable table + CSV import + EDM auto-suggest |
+| Cache warmup | `POST /api/admin/cache/warmup` | facts land in process cache (see `/api/admin/cache`) |
 
 ## Generator + build scripts
 
@@ -72,14 +82,15 @@ Total: 7 cedents · 10 chains · ~15 programmes · ~20 EDM fact files.
 | `build_hail_grid.py` | Same for the SPC hail shapefile. |
 | `build_wildfire_grid.py` | Reads WFIGS perimeters CSV → acres-weighted KDE → `hazard_wildfire_grid.json`. |
 | `_climatology.py` | Smooth Gaussian anchors (Brooks/Tippett/Cintineo) used by the tornado + hail builds. |
-| `_pop_bias.py` | Per-city deflator + local-spike smoother. **Unused** in the shipped pipeline (the climatology blend replaces it) but kept for reference; see `docs/CALCULATIONS.md §Hazard climatology blend` for why it was retired. |
+| `_pop_bias.py` | Per-city deflator + local-spike smoother. **Unused** in the shipped pipeline (the climatology blend replaces it) but kept for reference; see `docs/CALCULATIONS.md` § Hazard climatology blend. |
 
 Re-running any of them is safe.
 
 ## ExposureFactNormalized shape
 
-See `docs/DATA_MODEL.md §ExposureFactNormalized`. The mock validates rows
-into Pydantic models on load — schema drift surfaces immediately at startup.
+See `docs/DATA_MODEL.md` § ExposureFactNormalized. The mock validates rows
+into Pydantic models **on first load of that dataset** (cache miss) — schema
+drift surfaces on first request for that EDM, not necessarily at process start.
 
 ## IED denominator
 
@@ -99,6 +110,12 @@ EDM. Both are auto-saved by `/api/admin/programmes/edm-links` and the
 `/import` endpoint — drop a CSV into the admin page UI and the metadata
 file gets replaced atomically.
 
+## SQL server registry (hybrid / sqlserver)
+
+`sql_servers.example.json` documents the multi-host map. Copy to
+`sql_servers.json` and fill real hosts. Never commit production passwords.
+Details: [`MULTI_EDM.md`](./MULTI_EDM.md).
+
 ## Hazard grids
 
 Each `mockdata/hazard_*_grid.json` is `{stepDeg, cells: [{lat, lon, raw}]}`.
@@ -114,10 +131,15 @@ fires over land; WFIGS perimeters are only land-fire records).
 
 1. Pick a `datasetId` (e.g. `ds-newco-bda-2027`).
 2. Add the programme entry under the appropriate cedent/chain in
-   `mockdata/cedents.json` (or create a new cedent/chain).
+   `mockdata/cedents.json` (or create a new cedent/chain). Include a full
+   `edm` block (`serverName`, `edmDatabaseName`, `currency`, `ertStatus`, …).
 3. Generate or hand-write `mockdata/exposure_facts/<datasetId>.json` —
    `ExposureFactNormalized[]` with country + state + at least one county
    row per state (otherwise drill-in is empty).
 4. (Optional) Add IED rows for new geographies in `ied_industry.csv` to
    give the market-share metric a denominator.
-5. Restart uvicorn — the mock provider eager-loads on init.
+5. Restart is **not** required for new fact files if the process already
+   knows the programme from `cedents.json` — but new catalogue entries need
+   a provider reload (restart uvicorn / clear provider singleton).
+6. First map request for that `datasetId` loads and caches the facts.
+   Optional: `POST /api/admin/cache/warmup` with that id.

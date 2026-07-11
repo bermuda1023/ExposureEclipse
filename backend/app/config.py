@@ -1,4 +1,4 @@
-"""Env-driven settings. All knobs from docs/STACK_AND_SETUP.md live here."""
+"""Env-driven settings. All knobs live here (CLAUDE.md rule 8)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    data_provider: Literal["mock", "sqlserver", "databricks"] = "mock"
+    # mock = JSON facts only
+    # sqlserver = SQL facts (requires registry); no mock fallback
+    # hybrid = SQL when server registered, else mock fact files (demo default for multi-DB)
+    data_provider: Literal["mock", "sqlserver", "hybrid", "databricks"] = "mock"
     mock_data_dir: str = "../mockdata"
 
     support_error_email: str = "support@example.invalid"
@@ -33,7 +36,33 @@ class Settings(BaseSettings):
     # Vite dev :5173 (proxied), Vite preview :4173 (direct, needs CORS).
     cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
 
+    # ── Multi-EDM fact plane ──────────────────────────────────────
+    # Cap on cached EDMs (each holds its full pre-aggregated fact list).
+    fact_cache_max_datasets: int = 256
+    # 0 = no TTL expiry (only LRU eviction).
+    fact_cache_ttl_seconds: float = 3600.0
+    # Parallel fan-out when loading many EDMs (portfolio / cedent / office).
+    fact_load_max_workers: int = 16
+
+    # ── SQL Server multi-host registry ────────────────────────────
+    # Path to JSON: { "BERMUDA-SQL01": { "host": "...", "port": 1433, ... }, ... }
+    # Relative paths resolve from backend/.
+    sqlserver_servers_file: str | None = "../mockdata/sql_servers.json"
+    # Inline JSON alternative (useful for quick demos / Vercel env).
+    sqlserver_servers_json: str | None = None
+    # Defaults applied when a server entry omits credentials.
+    sqlserver_default_user: str | None = None
+    sqlserver_default_password: str | None = None
+    sqlserver_default_driver: str = "ODBC Driver 18 for SQL Server"
+    # Table name pattern inside each EDM database. Prefer a stable view
+    # ``ee_exposure_facts`` when you control the schema (tried first).
+    sqlserver_evolution_table_pattern: str = "{edm}__EVOLUTION"
+    # Hybrid only: on SQL failure / unregistered server, fall back to mock JSON.
+    # Firm builds should set false so failures surface as empty + WARN_EDM_LOAD_FAILED.
+    hybrid_fallback_on_sql_error: bool = True
+    # Legacy single-conn string kept for docs/back-compat; registry is preferred.
     sqlserver_conn: str | None = None
+
     databricks_host: str | None = None
     databricks_token: str | None = None
     databricks_warehouse_id: str | None = None

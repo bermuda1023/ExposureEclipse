@@ -1,5 +1,9 @@
 # ARCHITECTURE — repo layout, stack, key boundaries, gotchas
 
+> New to the repo? Engineers should read
+> [`FOR_INTERNAL_DEVELOPERS.md`](./FOR_INTERNAL_DEVELOPERS.md) first.
+> Multi-DB runbook: [`MULTI_EDM.md`](./MULTI_EDM.md).
+
 ## Tree
 
 ```
@@ -7,6 +11,8 @@ ExposureEclipse/
 ├── CLAUDE.md                ← operating manual (auto-loaded)
 ├── README.md
 ├── docs/                    spec pack
+│   ├── FOR_INTERNAL_DEVELOPERS.md  engineer onboarding + review guide
+│   ├── MULTI_EDM.md          multi-host SQL + cache runbook
 │   ├── ARCHITECTURE.md       (this file)
 │   ├── DATA_MODEL.md
 │   ├── CONTRACTS.md          ⭐ canonical enums
@@ -27,19 +33,20 @@ ExposureEclipse/
 │   │   ├── main.py           FastAPI app, CORS, exception → ErrorEnvelope
 │   │   ├── config.py         Pydantic Settings
 │   │   ├── api/              thin routers
-│   │   │     admin           treaty metadata + EDM linkage (/api/admin/programmes)
+│   │   │     admin           treaty metadata + EDM linkage + cache/connections
 │   │   │     calc            layered-loss engine (/api/calc/layers)
 │   │   │     cedents         cedent tree + chain + programme + status
 │   │   │     counties        per-county reference data
 │   │   │     dataset_groups  legacy ad-hoc group store
 │   │   │     ert_jobs        in-process ERT-job lifecycle (mock)
 │   │   │     exports         Excel streaming
-│   │   │     exposures       /map /detail /pivot
+│   │   │     exposures       /map /detail /pivot (parallel multi-EDM resolve)
 │   │   │     hazards         tornado / hail / wildfire pre-baked grids
 │   │   │     hurricanes      historical IBTrACS storms + impact engine
 │   │   │     live            NHC active + IBTrACS replay + alerts + buoys + SST
 │   │   ├── models/           Pydantic v2 (cedent, exposure, dataset, jobs, warnings, enums, common)
-│   │   ├── providers/        ExposureDataProvider ABC + MockExposureDataProvider
+│   │   ├── providers/        ABC + mock + sqlserver/hybrid + fact_cache +
+│   │   │                       connection_registry + parallel_load + sql_row_map
 │   │   ├── services/
 │   │   │     calculations      core metric math
 │   │   │     grouping          max-across-perils at the view grain
@@ -66,7 +73,7 @@ ExposureEclipse/
 │   │     build_tornado_grid   pyshp SPC SVRGIS → mockdata/hazard_tornado_grid.json
 │   │     build_hail_grid      pyshp SPC SVRGIS → mockdata/hazard_hail_grid.json
 │   │     build_wildfire_grid  CSV WFIGS → mockdata/hazard_wildfire_grid.json
-│   └── tests/                pytest (95)
+│   └── tests/                pytest (~107, incl. multi-EDM cache/parallel)
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
@@ -114,6 +121,8 @@ ExposureEclipse/
     ├── treaty_metadata.json      admin treaty rows (auto-saved by /api/admin)
     ├── edm_linkage.json          fs_display_id → (serverName, edmDatabaseName)
     ├── dataset_groups.json       seed for legacy in-memory group store
+    ├── sql_servers.example.json  multi-host SQL registry template
+    ├── sql_servers.json          (local only — real hosts/creds; gitignored if present)
     ├── hazard_tornado_grid.json  pre-baked SPC + climatology hazard grid
     ├── hazard_hail_grid.json
     ├── hazard_wildfire_grid.json
@@ -131,8 +140,8 @@ ExposureEclipse/
 | Resizable panes | react-resizable-panels v2 | persisted layout per shape key |
 | Frontend tests | Vitest + Testing Library | `npx vitest run` (34) |
 | Backend | Python 3.12, FastAPI, Pydantic v2, openpyxl | uvicorn dev on 8000 |
-| Backend tests | pytest + httpx | `pytest -q` (95) |
-| Storms (historical) | stdlib `urllib` + lru_cache | IBTrACS NA fetch → 3 indexes (tracks + Rmax + R64 quads) |
+| Backend tests | pytest + httpx | `pytest -q` (~107) |
+| Multi-EDM SQL | pyodbc (optional extra `[sql]`) | hybrid/sqlserver providers || Storms (historical) | stdlib `urllib` + lru_cache | IBTrACS NA fetch → 3 indexes (tracks + Rmax + R64 quads) |
 | Storms (live) | stdlib `urllib` | NHC CurrentStorms.json + IBTrACS replay |
 | Marine + alerts | stdlib `urllib` | NDBC `latest_obs.txt`, NWS `api.weather.gov`, JPL MUR SST via ERDDAP CSV |
 | County reference | stdlib `urllib` + lru_cached us-atlas TopoJSON | centroids + curated + synthetic per-county stats |
@@ -150,14 +159,39 @@ function stays small.
   `useMapData`, `useDetailData`, `usePivotData`, `useErtJobStatus`,
   `useProgrammeStatus`, etc.).
 - **Backend services depend only on `providers/base.ExposureDataProvider`.**
-  The concrete provider is chosen at startup by `DATA_PROVIDER` env (today
-  always `mock`).
+  The concrete provider is chosen at startup by `DATA_PROVIDER` env
+  (`mock` | `hybrid` | `sqlserver` | `databricks`).
 - **Calculations live once, in `services/calculations.py` + `grouping.py`.**
   Map, detail, pivot, and Excel export all call the same functions.
 - **Hurricane impact + hazards live in their own services** but follow the
   same "build once, render in many surfaces" pattern.
 - **Single source of effective scope** — `frontend/src/state/useEffectiveScope.ts`
   is the only place that decides "what programmes are we operating on."
+
+## Multi-EDM data plane (hundreds of pre-aggregated DBs)
+
+Each programme already carries an `EDMRef` (`serverName` + `edmDatabaseName`).
+Facts are **pre-aggregated ERT cuts** (same shape as `mockdata/exposure_facts/*`),
+not location-level EDM dumps — still large when many deals are open at once.
+
+| Piece | Role |
+|---|---|
+| `providers/fact_cache.py` | Process-wide LRU + TTL cache, single-flight loads per `datasetId` |
+| `providers/parallel_load.py` | Bounded thread-pool fan-out for multi-deal scopes |
+| `providers/connection_registry.py` | Map `serverName` → host/creds; one pool slot per (server, database) |
+| `providers/sqlserver.py` | Catalog from `cedents.json`; facts from SQL (or mock fallback in `hybrid`) |
+| `providers/sql_row_map.py` | ERT / camelCase column mapping → `ExposureFactNormalized` |
+| `GET/POST /api/admin/cache*` | Stats, warmup, invalidate |
+| `GET /api/admin/connections` | Registered SQL hosts (+ optional `?probe=true`) |
+
+**Load path:** request → resolve programme/chain/portfolio dataset ids →
+`get_facts_for_datasets` (parallel) → cache hit or load mock JSON / SQL
+`ee_exposure_facts` or `{edm}__EVOLUTION` → calc services.
+
+**Recommended demo setup:** `DATA_PROVIDER=hybrid`, copy
+`mockdata/sql_servers.example.json` → `sql_servers.json`, point live hosts at
+real EDMs; unregistered servers keep using mock fact files. Call
+`POST /api/admin/cache/warmup` once before the walkthrough.
 
 ## Routing
 
@@ -176,8 +210,15 @@ nav** — power-user URL only. Re-link if you want it surfaced.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `DATA_PROVIDER` | `mock` | `mock` only in v1 |
-| `MOCK_DATA_DIR` | `../mockdata` | fixture location |
+| `DATA_PROVIDER` | `mock` | `mock` \| `hybrid` \| `sqlserver` \| `databricks` |
+| `MOCK_DATA_DIR` | `../mockdata` | catalog + mock fact fixtures |
+| `FACT_CACHE_MAX_DATASETS` | `256` | LRU cap on cached EDMs |
+| `FACT_CACHE_TTL_SECONDS` | `3600` | `0` = no time expiry |
+| `FACT_LOAD_MAX_WORKERS` | `16` | parallel multi-EDM loads |
+| `SQLSERVER_SERVERS_FILE` | `../mockdata/sql_servers.json` | multi-host registry |
+| `SQLSERVER_SERVERS_JSON` | — | inline registry JSON |
+| `SQLSERVER_DEFAULT_USER` / `PASSWORD` / `DRIVER` | — | defaults for registry entries |
+| `SQLSERVER_EVOLUTION_TABLE_PATTERN` | `{edm}__EVOLUTION` | fact table name pattern |
 | `SUPPORT_ERROR_EMAIL` | `support@example.invalid` | error report recipient |
 | `EMAIL_TRANSPORT` | `noop` | `noop` \| `smtp` \| `graph` |
 | `EXPORT_MAX_ROWS` | `100000` | over → `413 EXPORT_TOO_LARGE` |
@@ -236,9 +277,10 @@ back immediately when the hazard layer goes away.
 5. **Pydantic `use_enum_values=True`** returns raw strings, not enum
    instances. Coerce back to the enum when you need `.value` or `==`
    against members (see `_segment_for_market_share`).
-6. **In-memory state on serverless** — the ERT job registry won't survive
-   between Vercel lambda invocations. Acceptable for the demo; persist
-   in Vercel KV when needed.
+6. **In-memory state on serverless** — the ERT job registry **and** the
+   fact cache won't survive between Vercel lambda invocations. Acceptable
+   for the mock demo; for multi-EDM SQL use a long-lived API host (see
+   `DEPLOY.md` + `MULTI_EDM.md`). Persist jobs in KV/Redis when needed.
 7. **CRLF warnings on `git add`** on Windows are harmless line-ending
    normalisation. The repo doesn't ship a `.gitattributes`; add one if
    it bothers you.

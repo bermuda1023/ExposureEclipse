@@ -23,12 +23,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from ..api.exposures import (  # reuse the router builder functions for parity with the wire
-    _resolve_view,
+from ..api.exposures import (  # reuse router builders so export numbers match the wire
     exposures_detail as _build_detail,
     exposures_map as _build_map,
     exposures_pivot as _build_pivot,
 )
+from ..services.view_resolve import resolve_view as _resolve_view
 from ..config import get_settings
 from ..models.enums import ErrorCode, Measure, MetricKey, WarningCode
 from ..models.exposure import DetailRequest, MapRequest, PivotRequest

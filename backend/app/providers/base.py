@@ -1,15 +1,10 @@
-"""ExposureDataProvider — the boundary between API/services and the data source.
-
-Per CLAUDE.md rule 1: routers/services depend ONLY on this ABC. Mock and SQL
-providers satisfy the same shape; the frontend cannot tell them apart.
-
-Calculations operate on the normalized `ExposureFactNormalized` shape so the
-calc service is identical regardless of provider.
-"""
+"""ExposureDataProvider — the boundary between API/services and the data source."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
 
 from ..models.cedent import Cedent, Programme, ProgrammeChain
 from ..models.dataset import (
@@ -17,77 +12,118 @@ from ..models.dataset import (
     DatasetGroupCreate,
     DatasetStatusResponse,
 )
-from ..models.enums import AggregationLevel
 from ..models.exposure import ExposureFactNormalized, IEDIndustryRow
+from .fact_load import FactBatch
 
 
 class ExposureDataProvider(ABC):
-    """Abstract contract every provider (mock, sqlserver, databricks) must satisfy."""
+    """Abstract contract every provider (mock, sqlserver, hybrid) must satisfy.
 
-    # ───── Cedent → Chain → Programme tree (the primary navigation entity) ─────
+    Prefer :meth:`get_facts_for_datasets` for multi-programme scopes.
+    Prefer :meth:`portfolio_dataset_ids` for the in-force portfolio universe
+    (map view and share-metric denominators share this set).
+    """
 
-    @abstractmethod
-    def list_cedents(self) -> list[Cedent]:
-        """Return the full cedent → chain → programme tree."""
-
-    @abstractmethod
-    def get_cedent(self, cedent_id: str) -> Cedent | None:
-        """Fetch one cedent (with its chains+programmes) by id, or None."""
+    # Parallelism for bulk loads; subclasses set from settings.
+    fact_load_workers: int = 16
 
     @abstractmethod
-    def get_chain(self, chain_id: str) -> ProgrammeChain | None:
-        """Fetch one chain (with its programmes) by id, or None."""
+    def list_cedents(self) -> list[Cedent]: ...
 
     @abstractmethod
-    def get_programme(self, programme_id: str) -> Programme | None:
-        """Fetch one programme by id, or None."""
+    def get_cedent(self, cedent_id: str) -> Cedent | None: ...
 
     @abstractmethod
-    def get_programme_by_dataset_id(self, dataset_id: str) -> Programme | None:
-        """Look up a programme by the legacy fact-file dataset_id."""
-
-    # ───── ERT-status (per programme, keyed by the underlying dataset_id) ─────
+    def get_chain(self, chain_id: str) -> ProgrammeChain | None: ...
 
     @abstractmethod
-    def get_dataset_status(self, dataset_id: str) -> DatasetStatusResponse:
-        """ERT-table status for one programme's EDM (drives the ERT badge)."""
-
-    # ───── Dataset groups (kept for ad-hoc combinations beyond cedent/chain) ─────
+    def get_programme(self, programme_id: str) -> Programme | None: ...
 
     @abstractmethod
-    def list_dataset_groups(self) -> list[DatasetGroup]:
-        """Return all persisted dataset groups."""
+    def get_programme_by_dataset_id(self, dataset_id: str) -> Programme | None: ...
 
     @abstractmethod
-    def get_dataset_group(self, dataset_group_id: str) -> DatasetGroup | None:
-        """Fetch one group by id, or None."""
+    def get_dataset_status(self, dataset_id: str) -> DatasetStatusResponse: ...
 
     @abstractmethod
-    def create_dataset_group(self, payload: DatasetGroupCreate) -> DatasetGroup:
-        """Persist a new dataset group. Provider may validate currency consistency, etc."""
+    def list_dataset_groups(self) -> list[DatasetGroup]: ...
 
-    # ───── Fact rows + denominators ─────
+    @abstractmethod
+    def get_dataset_group(self, dataset_group_id: str) -> DatasetGroup | None: ...
+
+    @abstractmethod
+    def create_dataset_group(self, payload: DatasetGroupCreate) -> DatasetGroup: ...
 
     @abstractmethod
     def get_facts_for_dataset(self, dataset_id: str) -> list[ExposureFactNormalized]:
-        """All normalized fact rows for one programme's underlying EDM."""
+        """Normalized fact rows for one EDM. Implementations SHOULD cache."""
+
+    def get_facts_for_datasets(self, dataset_ids: Sequence[str]) -> FactBatch:
+        """Bulk-load many EDMs (parallel). Returns facts + per-dataset errors."""
+        from .fact_load import LoadError
+        from .parallel_load import load_many
+
+        errors: list[LoadError] = []
+
+        def loader(ds_id: str) -> list[ExposureFactNormalized]:
+            try:
+                return self.get_facts_for_dataset(ds_id)
+            except Exception as exc:
+                errors.append(
+                    LoadError(dataset_id=ds_id, message=f"{type(exc).__name__}: {exc}")
+                )
+                return []
+
+        by_id = load_many(
+            list(dataset_ids),
+            loader,
+            max_workers=self.fact_load_workers,
+            empty=[],
+            on_error="empty",
+        )
+        return FactBatch(by_id=by_id, errors=errors)
+
+    def portfolio_dataset_ids(self, *, in_force_only: bool = True) -> list[str]:
+        """Dataset ids in the portfolio universe (default: in-force BOUND only)."""
+        ids: list[str] = []
+        seen: set[str] = set()
+        for cedent in self.list_cedents():
+            for chain in cedent.chains:
+                for prog in chain.programmes:
+                    if in_force_only and not prog.is_in_force():
+                        continue
+                    if prog.dataset_id not in seen:
+                        seen.add(prog.dataset_id)
+                        ids.append(prog.dataset_id)
+        return ids
 
     @abstractmethod
     def get_portfolio_facts(self) -> list[ExposureFactNormalized]:
-        """All facts across every programme whose EDM is loaded in the portfolio (v1)."""
+        """Facts for share-metric denominators — must match portfolio_dataset_ids()."""
 
     @abstractmethod
-    def get_ied_industry(self) -> list[IEDIndustryRow]:
-        """RMS IED industry-TIV rows. May have intentional geography gaps."""
-
-    # ───── Geometry availability ─────
+    def get_ied_industry(self) -> list[IEDIndustryRow]: ...
 
     @abstractmethod
-    def get_geometry_availability(self) -> set[str]:
-        """Set of `geographyId` values renderable on the map.
+    def get_geometry_availability(self) -> set[str]: ...
 
-        Production frontends render via Mapbox vector tilesets that cover every
-        US state + county; this set is consulted to flag fact rows that
-        reference geographies the tileset doesn't have (synthetic or non-canonical
-        ids → `WARN_MAP_GEOMETRY_MISSING`).
-        """
+
+@runtime_checkable
+class ProviderOps(Protocol):
+    """Optional multi-EDM ops surface (cache / warmup / SQL registry)."""
+
+    @property
+    def fact_cache(self): ...
+
+    def warmup(
+        self,
+        dataset_ids: Sequence[str] | None = None,
+        *,
+        in_force_only: bool = True,
+    ) -> dict[str, int]: ...
+
+
+@runtime_checkable
+class ProviderWithRegistry(Protocol):
+    @property
+    def connection_registry(self): ...

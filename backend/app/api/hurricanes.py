@@ -158,7 +158,11 @@ def _compute_impact_payload(
 ) -> dict:
     """Shared impact computation — used by both the JSON and xlsx endpoints."""
     # Import here to avoid a circular dep with exposures router at module load.
-    from .exposures import _apply_peril_filter, _resolve_view, _require_exactly_one_target
+    from .exposures import _apply_peril_filter
+    from ..services.view_resolve import (
+        resolve_view as _resolve_view,
+        require_at_most_one_target as _require_exactly_one_target,
+    )
 
     _require_exactly_one_target(payload)
     try:

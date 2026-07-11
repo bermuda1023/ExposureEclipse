@@ -7,8 +7,10 @@
 > it is marked **(confirm)** and tracked in `OPEN_QUESTIONS.md`.
 >
 > Note: the proforma is an **Excel** workbook whose cuts are produced by named
-> `CALC.Get_*` functions. The *columns and vocabularies* below are the contract; the eventual
-> SQL routine produces equivalent tables (naming TBD).
+> `CALC.Get_*` functions. The *columns and vocabularies* below are the contract; SQL
+> equivalents are read by `providers/sqlserver.py` via `providers/sql_row_map.py`
+> (preferred view: `ee_exposure_facts`, else `{edm}__EVOLUTION`). Multi-EDM wiring:
+> [`MULTI_EDM.md`](./MULTI_EDM.md).
 
 ## Workbook context
 

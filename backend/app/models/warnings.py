@@ -48,6 +48,12 @@ WARNING_DEFAULT_MESSAGES: dict[WarningCode, str] = {
     WarningCode.WARN_EXPORT_TOO_LARGE: (
         "Export exceeds the size limit; refine filters or aggregation."
     ),
+    WarningCode.WARN_EDM_LOAD_FAILED: (
+        "One or more EDM fact loads failed; results may understate exposure."
+    ),
+    WarningCode.WARN_EDM_MOCK_FALLBACK: (
+        "One or more EDMs fell back to mock fixture data instead of SQL."
+    ),
 }
 
 _WARNING_SEVERITY: dict[WarningCode, WarningSeverity] = {
@@ -64,6 +70,8 @@ _WARNING_SEVERITY: dict[WarningCode, WarningSeverity] = {
     WarningCode.WARN_MAP_GEOMETRY_MISSING: WarningSeverity.INFO,
     WarningCode.WARN_FILTERS_RETURN_NO_ROWS: WarningSeverity.INFO,
     WarningCode.WARN_EXPORT_TOO_LARGE: WarningSeverity.WARN,
+    WarningCode.WARN_EDM_LOAD_FAILED: WarningSeverity.WARN,
+    WarningCode.WARN_EDM_MOCK_FALLBACK: WarningSeverity.WARN,
 }
 
 

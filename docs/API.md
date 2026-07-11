@@ -4,6 +4,9 @@ All endpoints under `/api`. JSON request/response (camelCase) except
 `/exports/excel` and `/hurricanes/{id}/impact/export` which stream `.xlsx`.
 Enum values from `docs/CONTRACTS.md`. Errors use a standard envelope.
 
+> System context: [`FOR_INTERNAL_DEVELOPERS.md`](./FOR_INTERNAL_DEVELOPERS.md) ·
+> multi-EDM runbook: [`MULTI_EDM.md`](./MULTI_EDM.md).
+
 ## Standard error envelope
 
 ```json
@@ -26,9 +29,28 @@ IED, failed ERT job, county fallback) are NOT HTTP errors — they ride in
 
 | Verb | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | liveness probe |
+| GET | `/api/health` | liveness probe + `dataProvider` + fact-cache summary when available |
 | GET | `/api/docs` | FastAPI Swagger UI (dev only — useful for poking endpoints) |
 | GET | `/api/openapi.json` | OpenAPI 3 schema |
+
+`GET /api/health` example fields:
+
+```json
+{
+  "status": "ok",
+  "service": "exposure-eclipse-backend",
+  "version": "0.1.0",
+  "dataProvider": "mock",
+  "factCacheMaxDatasets": 256,
+  "factLoadMaxWorkers": 16,
+  "factCache": {
+    "datasetsCached": 3,
+    "rowsCached": 12000,
+    "hits": 10,
+    "misses": 3
+  }
+}
+```
 
 ## Cedent tree
 
@@ -435,6 +457,34 @@ per row.
 `/import` accepts CSVs from the upstream RMS treaty registry. Header names
 tolerate both `FS display` (with space) and `fs_display` (snake) variants.
 
+## Admin — multi-EDM cache & connections
+
+| Verb | Path | Purpose |
+|---|---|---|
+| GET | `/api/admin/connections` | registered SQL hosts + fact-cache stats |
+| GET | `/api/admin/connections?probe=true` | same + live `SELECT 1` per host |
+| GET | `/api/admin/cache` | fact-cache hit/miss/eviction stats + cached ids |
+| POST | `/api/admin/cache/warmup` | parallel preload of EDM facts into process cache |
+| DELETE | `/api/admin/cache` | invalidate entire cache |
+| DELETE | `/api/admin/cache?datasetId=ds-…` | invalidate one EDM |
+
+### Warmup body
+
+```json
+{
+  "datasetIds": null,
+  "inForceOnly": true
+}
+```
+
+- Omit `datasetIds` (or `null`) → warm programmes from the catalog.
+- `inForceOnly: true` → only BOUND programmes in force today.
+- Response: `{ "loaded": { "ds-…": rowCount }, "totalDatasets": N, "totalRows": M }`.
+
+Under `DATA_PROVIDER=mock`, connections list is empty but cache endpoints
+still work (JSON facts). Under `hybrid`/`sqlserver`, servers come from
+`SQLSERVER_SERVERS_FILE` / `SQLSERVER_SERVERS_JSON`. See `docs/MULTI_EDM.md`.
+
 ## Endpoint summary
 
 | Verb | Path |
@@ -466,3 +516,7 @@ tolerate both `FS display` (with space) and `fs_display` (snake) variants.
 | PUT | `/api/admin/programmes/{fsDisplayId}/edm-link` |
 | POST | `/api/admin/programmes/edm-links` |
 | POST | `/api/admin/programmes/import` |
+| GET | `/api/admin/connections` |
+| GET | `/api/admin/cache` |
+| POST | `/api/admin/cache/warmup` |
+| DELETE | `/api/admin/cache` |

@@ -3,6 +3,9 @@
 The navigation entity. Replaces the flat `DatasetRegistry` rows of the
 pre-cedent design.
 
+> Engineer onboarding: [`FOR_INTERNAL_DEVELOPERS.md`](./FOR_INTERNAL_DEVELOPERS.md) ·
+> multi-EDM load path: [`MULTI_EDM.md`](./MULTI_EDM.md).
+
 ```
 Cedent  (Farmers Group)        region: "Nationwide"
 ├── Office BDA                  ← display tier only; resolves to chainIds[]
@@ -81,8 +84,8 @@ metadata.
 
 | Field | Type | Notes |
 |---|---|---|
-| `serverName` | string | |
-| `edmDatabaseName` | string | |
+| `serverName` | string | Logical host key (e.g. `BERMUDA-SQL01`). Resolved via connection registry. |
+| `edmDatabaseName` | string | Database name on that host (one EDM ≈ one DB). |
 | `currency` | string | ISO 4217 |
 | `ertStatus` | ErtStatus | `ERT_READY` \| `ERT_PARTIAL` \| `ERT_NOT_FOUND` \| `ERT_ERROR` |
 | `availableGranularity` | AggregationLevel[] | subset of COUNTRY/STATE/COUNTY/CRESTA |
@@ -92,12 +95,27 @@ metadata.
 The SQL data-source pointer that used to live on `DatasetRegistry`. Frontend
 never imports this directly — it rides inside a Programme.
 
+**Multi-EDM:** hundreds of programmes ⇒ hundreds of `edmDatabaseName` values,
+typically on a handful of `serverName` hosts. Facts are loaded **per
+`datasetId`** (lazy + cached + parallel for multi-deal scopes). See
+`docs/MULTI_EDM.md`.
+
 ## ExposureFactNormalized (the row calc operates on)
 
 The conceptual analytical row the backend exposes from ERT outputs. All
-calculations operate on this shape so providers are swappable. Stored as JSON
-per dataset_id under `mockdata/exposure_facts/<datasetId>.json` for the mock
-provider.
+calculations operate on this shape so providers are swappable.
+
+**Sources (same shape):**
+
+| Provider mode | Fact source |
+|---|---|
+| `mock` | `mockdata/exposure_facts/<datasetId>.json` |
+| `hybrid` | SQL when `serverName` is registered, else mock JSON |
+| `sqlserver` | SQL only (`ee_exposure_facts` or evolution table pattern) |
+
+These are **pre-aggregated cuts** (country/state/county × peril × dimensions),
+not location-level RMS rows. That assumption is load-bearing for multi-EDM
+portfolio performance.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -127,9 +145,14 @@ provider.
 
 ```
 Cedent 1──N ProgrammeChain ──N Programme ──1 EDMRef
+                                  │              │
+                                  │              ├── serverName ──→ ConnectionRegistry → SQL host
+                                  │              └── edmDatabaseName ──→ one EDM database
                                   │
-                                  └──── datasetId ──→ exposure_facts/<id>.json
-                                                              (ExposureFactNormalized[])
+                                  └──── datasetId ──→ FactCache key
+                                          ├── mock: exposure_facts/<id>.json
+                                          └── sql:  ee_exposure_facts | {edm}__EVOLUTION
+                                                    (ExposureFactNormalized[])
 
 IEDIndustryExposure (mockdata/ied_industry.csv)
   └── joined to facts by geographyId (+ optional occupancy segment) for market share

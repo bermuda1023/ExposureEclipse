@@ -21,6 +21,9 @@ dev = [
     "ruff>=0.7",
     "black>=24.10",
 ]
+sql = [
+    "pyodbc>=5.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
