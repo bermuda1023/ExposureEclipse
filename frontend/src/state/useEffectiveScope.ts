@@ -10,6 +10,8 @@
  *   1. explicit programme / chain / cedent  → that one target
  *   2. office tier                          → all chainIds in that office
  *   3. scope filter chips (office / region / underwriter) → matching chainIds
+ *      (chips matching ZERO chains ⇒ `isEmpty` — consumers render an empty
+ *      view instead of silently falling back to the full portfolio)
  *   4. nothing                              → empty target set ⇒ portfolio mode
  */
 
@@ -31,6 +33,13 @@ export interface EffectiveScope {
   hasExplicit: boolean;
   /** True iff one of the scope filter chips is currently active. */
   hasScopeFilter: boolean;
+  /**
+   * True iff scope-filter chips are active but match ZERO chains. The wire has
+   * no empty-chain sentinel (`chainIds: []` means "portfolio" to the backend),
+   * so consumers MUST skip their request and render an explicitly-empty view
+   * — otherwise "Filtered scope" would silently show the entire portfolio.
+   */
+  isEmpty: boolean;
 }
 
 export function useEffectiveScope(): EffectiveScope {
@@ -74,6 +83,7 @@ export function useEffectiveScope(): EffectiveScope {
       scopeOffices.length + scopeRegions.length + scopeUnderwriters.length > 0;
 
     let chainIds: string[] | undefined;
+    let isEmpty = false;
     if (programmeId || chainId || cedentId) {
       chainIds = undefined;
     } else if (officeChainIds.length > 0) {
@@ -82,6 +92,10 @@ export function useEffectiveScope(): EffectiveScope {
       chainIds = scopeChainIds;
     } else {
       chainIds = undefined;
+      // Chips active but nothing matches → explicitly-empty scope, NOT the
+      // portfolio fallback. Only once cedents have loaded — while they're
+      // still in flight a zero match just means "don't know yet".
+      isEmpty = hasScopeFilter && Boolean(cedents);
     }
 
     return {
@@ -91,6 +105,7 @@ export function useEffectiveScope(): EffectiveScope {
       chainIds,
       hasExplicit,
       hasScopeFilter,
+      isEmpty,
     };
   }, [
     cedentId,

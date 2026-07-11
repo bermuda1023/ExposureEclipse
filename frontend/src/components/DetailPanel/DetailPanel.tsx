@@ -9,10 +9,11 @@
  */
 
 import { useMemo } from "react";
-import { useCedents, useDetailData } from "../../api/hooks";
+import { useDetailData } from "../../api/hooks";
 import { useFiltersStore } from "../../state/filters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
+import { useEffectiveScope } from "../../state/useEffectiveScope";
 import { formatCount, formatMoneyCompact, formatMoneyFull, formatPercent } from "../../lib/format";
 import { WarningsPanel } from "../layout/WarningsPanel";
 import type { BreakdownRow, DetailRequest } from "../../api/types";
@@ -32,10 +33,10 @@ export function DetailPanel() {
 }
 
 function CountyDetail() {
-  const cedentId = useSelectionStore((s) => s.cedentId);
-  const officeKey = useSelectionStore((s) => s.officeKey);
-  const chainId = useSelectionStore((s) => s.chainId);
-  const programmeId = useSelectionStore((s) => s.programmeId);
+  // Scope comes from useEffectiveScope() — the SAME resolution the map, pivot,
+  // and export use — so the detail card always agrees with them: portfolio
+  // mode (no explicit target) renders, and scope-filter chips are honoured.
+  const scope = useEffectiveScope();
   const comparisonProgrammeId = useSelectionStore((s) => s.comparisonProgrammeId);
   const aggregationLevel = useViewStore((s) => s.aggregationLevel);
   const metric = useViewStore((s) => s.metric);
@@ -43,23 +44,14 @@ function CountyDetail() {
   const selectedGeographyId = useViewStore((s) => s.selectedGeographyId);
   const setSelected = useViewStore((s) => s.setSelectedGeographyId);
   const filters = useFiltersStore();
-  const cedentsQuery = useCedents();
-
-  const officeChainIds = useMemo<string[]>(() => {
-    if (!officeKey || !cedentsQuery.data) return [];
-    const cedent = cedentsQuery.data.cedents.find((c) => c.cedentId === officeKey.cedentId);
-    if (!cedent) return [];
-    return cedent.chains.filter((ch) => ch.office === officeKey.office).map((ch) => ch.chainId);
-  }, [officeKey, cedentsQuery.data]);
 
   const request = useMemo<DetailRequest | null>(() => {
-    if (!selectedGeographyId) return null;
-    if (!cedentId && !chainId && !programmeId && officeChainIds.length === 0) return null;
+    if (!selectedGeographyId || scope.isEmpty) return null;
     return {
-      cedentId,
-      chainId,
-      chainIds: officeChainIds.length > 0 ? officeChainIds : undefined,
-      programmeId,
+      cedentId: scope.cedentId,
+      chainId: scope.chainId,
+      chainIds: scope.chainIds,
+      programmeId: scope.programmeId,
       aggregationLevel,
       metric,
       geographyId: selectedGeographyId,
@@ -77,10 +69,11 @@ function CountyDetail() {
     };
   }, [
     selectedGeographyId,
-    cedentId,
-    chainId,
-    programmeId,
-    officeChainIds,
+    scope.cedentId,
+    scope.chainId,
+    scope.programmeId,
+    scope.chainIds,
+    scope.isEmpty,
     comparisonProgrammeId,
     aggregationLevel,
     metric,
@@ -100,6 +93,14 @@ function CountyDetail() {
     return (
       <div style={{ color: "#666", fontSize: "0.78rem" }}>
         Click a geography on the map to load detail.
+      </div>
+    );
+  }
+
+  if (scope.isEmpty) {
+    return (
+      <div style={{ color: "#666", fontSize: "0.78rem" }}>
+        No programmes match the current scope filters.
       </div>
     );
   }

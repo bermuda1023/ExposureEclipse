@@ -76,24 +76,24 @@ class AssetsResponse(CamelModel):
 
 class AssumptionOverrideIn(CamelModel):
     asset_id: str
-    annualised_return: float | None = None
-    annualised_vol: float | None = None
-    correlation_cap: float | None = None
+    annualised_return: float | None = Field(None, ge=-1.0, le=5.0, allow_inf_nan=False)
+    annualised_vol: float | None = Field(None, ge=0.0, le=5.0, allow_inf_nan=False)
+    correlation_cap: float | None = Field(None, ge=-1.0, le=1.0, allow_inf_nan=False)
 
 
 class MaxWeightIn(CamelModel):
     asset_id: str
-    max_weight: float          # 0..1
+    max_weight: float = Field(..., ge=0.0, le=1.0, allow_inf_nan=False)
 
 
 class MinInvestmentOverrideIn(CamelModel):
     asset_id: str
-    min_investment: float      # dollars; 0 = no minimum
+    min_investment: float = Field(..., ge=0.0, le=1e12, allow_inf_nan=False)  # dollars; 0 = no minimum
 
 
 class CurrentInvestmentIn(CamelModel):
     asset_id: str
-    amount: float              # dollars currently held in this fund
+    amount: float = Field(..., ge=0.0, le=1e12, allow_inf_nan=False)  # dollars currently held in this fund
 
 
 class PerAssetBenchmarkIn(CamelModel):
@@ -103,7 +103,10 @@ class PerAssetBenchmarkIn(CamelModel):
 
 class OptimizeRequest(CamelModel):
     asset_ids: list[str] = Field(..., description="Subset of catalog IDs")
-    new_capital: float = Field(1_000_000, ge=0, description="New $ to deploy on top of current holdings")
+    new_capital: float = Field(
+        1_000_000, ge=0, le=1e12, allow_inf_nan=False,
+        description="New $ to deploy on top of current holdings",
+    )
     current_investments: list[CurrentInvestmentIn] = Field(default_factory=list)
     no_sell: bool = Field(False, description="If True, current holdings are hard floors (can only add)")
     allocate_new_capital_only: bool = Field(
@@ -111,19 +114,25 @@ class OptimizeRequest(CamelModel):
         description="If True (default), only NEW capital is optimized; current holdings stay put. "
         "If False, optimizer rebalances the full book (current+new).",
     )
-    net_of_fees: bool = Field(True, description="Haircut expected returns by parsed mgmt fee")
+    net_of_fees: bool = Field(
+        True,
+        description="Haircut expected returns by parsed mgmt fee — applies only "
+        "to assets tagged returnsGrossOfFees (fixture series are already net)",
+    )
     history_window_start: str | None = Field(None, description="YYYY-MM inclusive; None = full history")
     benchmark_asset_id: str = Field("spy", description="Portfolio-level IR benchmark")
     per_asset_benchmarks: list[PerAssetBenchmarkIn] = Field(
         default_factory=list,
         description="Optional per-asset benchmark override for the asset stats table. Portfolio-level IR still uses benchmark_asset_id.",
     )
-    risk_free_rate: float = 0.04
+    risk_free_rate: float = Field(0.04, ge=-0.10, le=0.50, allow_inf_nan=False)
     respect_min_investment: bool = True
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
     max_weights: list[MaxWeightIn] = Field(default_factory=list)
     min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
-    samples: int = Field(30_000, ge=1_000, le=100_000)
+    # Cap chosen so a worst-case request stays ~1-2s of CPU on one core —
+    # these endpoints are sync, unauthenticated, and pure Python.
+    samples: int = Field(10_000, ge=1_000, le=10_000)
 
 
 class PortfolioOut(CamelModel):
@@ -205,8 +214,8 @@ class CustomPortfolioRequest(CamelModel):
     """Live-slider endpoint — user supplies weights, we return full stats
     including a portfolio equity curve."""
     weights: dict[str, float]
-    risk_free_rate: float = 0.04
-    total_capital: float = 1_000_000
+    risk_free_rate: float = Field(0.04, ge=-0.10, le=0.50, allow_inf_nan=False)
+    total_capital: float = Field(1_000_000, ge=0.0, le=1e12, allow_inf_nan=False)
     respect_min_investment: bool = True
     history_window_start: str | None = None
     benchmark_asset_id: str = "spy"
@@ -241,6 +250,25 @@ def _load_catalog() -> dict:
 
 def _asset_by_id(catalog: dict) -> dict[str, dict]:
     return {a["id"]: a for a in catalog["assets"]}
+
+
+def _fee_drag_for(idx: dict[str, dict], asset_id: str, net_of_fees: bool) -> float:
+    """Annual mgmt-fee drag applied to the MVO μ for one asset.
+
+    The fixture series are already net of fees (investor-letter returns;
+    see scripts/build_fund_returns.py), so subtracting the parsed fee from
+    them again double-counts it. Drag therefore applies ONLY to assets
+    explicitly tagged ``"returnsGrossOfFees": true`` in fund_returns.json.
+    Path metrics (CAGR / drawdown / path Sharpe) never apply drag, so
+    gross-tagged assets' path stats remain gross — flag that in the UI
+    before adding any gross series.
+    """
+    if not net_of_fees:
+        return 0.0
+    asset = idx[asset_id]
+    if not asset.get("returnsGrossOfFees", False):
+        return 0.0
+    return parse_mgmt_fee_drag(asset.get("fees"))
 
 
 # ─────────────────────── endpoints ───────────────────────
@@ -302,13 +330,11 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         series_by_id = {a: full_series[a].since(req.history_window_start) for a in req.asset_ids}
     else:
         series_by_id = full_series
-    def _fee(a: str) -> float:
-        if not getattr(req, "net_of_fees", True):
-            return 0.0
-        return parse_mgmt_fee_drag(idx[a].get("fees"))
-
     empirical = {
-        a: compute_asset_stats(series_by_id[a], fee_drag=_fee(a)) for a in req.asset_ids
+        a: compute_asset_stats(
+            series_by_id[a], fee_drag=_fee_drag_for(idx, a, req.net_of_fees)
+        )
+        for a in req.asset_ids
     }
     effective_window_months = max(
         (len(series_by_id[a].returns) for a in req.asset_ids), default=0
@@ -571,13 +597,11 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
         series_by_id = {a: full_series[a].since(req.history_window_start) for a in asset_ids}
     else:
         series_by_id = full_series
-    def _fee_c(a: str) -> float:
-        if not getattr(req, "net_of_fees", True):
-            return 0.0
-        return parse_mgmt_fee_drag(idx[a].get("fees"))
-
     empirical = {
-        a: compute_asset_stats(series_by_id[a], fee_drag=_fee_c(a)) for a in asset_ids
+        a: compute_asset_stats(
+            series_by_id[a], fee_drag=_fee_drag_for(idx, a, req.net_of_fees)
+        )
+        for a in asset_ids
     }
     ov_by_id: dict[str, AssumptionOverride] = {}
     for o in req.overrides:
@@ -782,6 +806,15 @@ def rolling_stats(req: RollingStatsRequest) -> RollingStatsResponse:
 
     fund_months = sorted(fund_series.returns)
     n_months = len(fund_months)
+    if n_months == 0:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "No return history in the requested window.",
+                "details": {"assetId": req.asset_id, "historyWindowStart": req.history_window_start},
+            },
+        )
 
     # Data adequacy
     if n_months < 24:
@@ -1085,12 +1118,17 @@ class RobustnessRequest(CamelModel):
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
     max_weights: list[MaxWeightIn] = Field(default_factory=list)
     min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
-    new_capital: float = Field(1_000_000, ge=0, description="New $ to deploy (added to current holdings)")
+    new_capital: float = Field(
+        1_000_000, ge=0, le=1e12, allow_inf_nan=False,
+        description="New $ to deploy (added to current holdings)",
+    )
     # Deprecated alias — if clients still send totalCapital as "new" dollars
-    total_capital: float | None = Field(None, description="Deprecated: use newCapital")
+    total_capital: float | None = Field(None, ge=0.0, le=1e12, allow_inf_nan=False, description="Deprecated: use newCapital")
     allocate_new_capital_only: bool = True
     net_of_fees: bool = True
-    samples_per_scenario: int = Field(8_000, ge=1_000, le=30_000)
+    # 24 scenarios x this many samples runs on every /robustness call — keep
+    # the ceiling low enough that one request can't pin a core for a minute.
+    samples_per_scenario: int = Field(3_000, ge=1_000, le=3_000)
 
 
 class RobustnessRow(CamelModel):
@@ -1203,13 +1241,10 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
                 # Build series + stats for this window
                 full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
                 series_by_id = {a: (full_series[a].since(w_start) if w_start else full_series[a]) for a in req.asset_ids}
-                def _fee_r(a: str) -> float:
-                    if not getattr(req, "net_of_fees", True):
-                        return 0.0
-                    return parse_mgmt_fee_drag(idx[a].get("fees"))
-
                 empirical = {
-                    a: compute_asset_stats(series_by_id[a], fee_drag=_fee_r(a))
+                    a: compute_asset_stats(
+                        series_by_id[a], fee_drag=_fee_drag_for(idx, a, req.net_of_fees)
+                    )
                     for a in req.asset_ids
                 }
                 stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}

@@ -119,27 +119,32 @@ class SqlServerExposureDataProvider(JsonCatalogProvider):
         if any(c in safe for c in (";", "--", "/*", "*/")):
             raise ValueError(f"Refusing unsafe table name: {safe!r}")
 
-        conn = self._registry.connect(server_name, database_name)
+        pooled = self._registry.pooled_connection(server_name, database_name)
         raw_rows: list[dict] | None = None
         source_table = safe
-        for candidate in ("ee_exposure_facts", safe):
-            cur = conn.cursor()
-            try:
-                cur.execute(f"SELECT * FROM [{candidate}]")
-                raw_rows = rows_from_cursor(cur)
-                source_table = candidate
-                cur.close()
-                break
-            except Exception:
+        # pyodbc connections are not safe for concurrent cursor use — hold the
+        # per-(server, db) lock for the whole read (parallel loads against
+        # OTHER databases/hosts proceed unblocked).
+        with pooled.lock:
+            conn = pooled.conn
+            for candidate in ("ee_exposure_facts", safe):
+                cur = conn.cursor()
                 try:
+                    cur.execute(f"SELECT * FROM [{candidate}]")
+                    raw_rows = rows_from_cursor(cur)
+                    source_table = candidate
                     cur.close()
+                    break
                 except Exception:
-                    pass
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                continue
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    continue
         if raw_rows is None:
             raise RuntimeError(
                 f"No readable fact table on {server_name}/{database_name} "

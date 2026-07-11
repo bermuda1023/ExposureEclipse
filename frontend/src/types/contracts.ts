@@ -56,6 +56,16 @@ export const ErtStatus = {
 } as const;
 export type ErtStatus = (typeof ErtStatus)[keyof typeof ErtStatus];
 
+/* ─────────── §3b — Programme status ─────────── */
+export const ProgrammeStatus = {
+  BOUND: "BOUND",
+  QUOTED: "QUOTED",
+  DECLINED: "DECLINED",
+  NTU: "NTU",
+  EXPIRED: "EXPIRED",
+} as const;
+export type ProgrammeStatus = (typeof ProgrammeStatus)[keyof typeof ProgrammeStatus];
+
 /* ─────────── §4 — Dataset group combination methods ─────────── */
 export const CombinationMethod = {
   MAX_ACROSS_PERILS_AT_VIEW_GRAIN: "MAX_ACROSS_PERILS_AT_VIEW_GRAIN", // default (CLAUDE.md rule 3)
@@ -150,6 +160,7 @@ export interface Warning {
 /* ─────────── §11 — Error codes ─────────── */
 export const ErrorCode = {
   VALIDATION_ERROR: "VALIDATION_ERROR",
+  UNAUTHORIZED: "UNAUTHORIZED",
   DATASET_NOT_FOUND: "DATASET_NOT_FOUND",
   DATASET_GROUP_NOT_FOUND: "DATASET_GROUP_NOT_FOUND",
   CURRENCY_MISMATCH: "CURRENCY_MISMATCH",

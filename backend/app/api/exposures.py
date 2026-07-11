@@ -168,6 +168,35 @@ def _county_fallback_if_needed(
     return county_rows + fallback_rows, bool(fallback_rows)
 
 
+def _tiv_at_grain_combined(
+    facts: Sequence[ExposureFactNormalized],
+    grain: tuple[str, ...],
+) -> dict[tuple, float]:
+    """TIV per grain key honouring CLAUDE.md rule 3 (never sum across perils).
+
+    Used for the portfolio denominators and the prior-year (YoY) aggregations,
+    which span multi-peril fact sets: combine under
+    ``MAX_ACROSS_PERILS_AT_VIEW_GRAIN`` when >1 distinct peril is present,
+    plain sum otherwise (identical for single-peril data). Keeps denominators
+    on the same combination method as the deal-side numerators.
+    """
+    if len({f.peril for f in facts}) > 1:
+        return combine_at_grain(
+            facts, grain, CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
+        )
+    return aggregate_tiv(facts, grain)
+
+
+def _loc_at_grain_combined(
+    facts: Sequence[ExposureFactNormalized],
+    grain: tuple[str, ...],
+) -> dict[tuple, int]:
+    """Location count matching :func:`_tiv_at_grain_combined` semantics."""
+    if len({f.peril for f in facts}) > 1:
+        return location_count_at_max_peril(facts, grain)
+    return aggregate_location_count(facts, grain)
+
+
 def _attach_geometry_warnings(
     features: Sequence[MapFeature],
     available: set[str],
@@ -295,7 +324,7 @@ def exposures_map(
     # ─── Portfolio denominators (geo-only) ───
     portfolio_facts = provider.get_portfolio_facts()
     portfolio_at_level, _ = _county_fallback_if_needed(portfolio_facts, level)
-    portfolio_tiv_by_geo = aggregate_tiv(portfolio_at_level, grain)
+    portfolio_tiv_by_geo = _tiv_at_grain_combined(portfolio_at_level, grain)
     total_portfolio_tiv = sum(portfolio_tiv_by_geo.values())
     total_deal_tiv = sum(deal_tiv_by_geo.values())
 
@@ -323,8 +352,8 @@ def exposures_map(
         )
         prior_at_level, _ = _county_fallback_if_needed(prior_raw, level)
         prior_filtered = apply_filters(prior_at_level, payload.filters)
-        prior_tiv_by_geo = aggregate_tiv(prior_filtered, grain)
-        prior_loc_by_geo = aggregate_location_count(prior_filtered, grain)
+        prior_tiv_by_geo = _tiv_at_grain_combined(prior_filtered, grain)
+        prior_loc_by_geo = _loc_at_grain_combined(prior_filtered, grain)
         prior_total_deal_tiv = sum(prior_tiv_by_geo.values())
     else:
         top_warnings.append(make_warning(WarningCode.WARN_PRIOR_DATASET_NOT_SELECTED))
@@ -526,7 +555,7 @@ def exposures_detail(
 
     portfolio_facts = provider.get_portfolio_facts()
     portfolio_at_level, _ = _county_fallback_if_needed(portfolio_facts, level)
-    portfolio_tiv_by_geo = aggregate_tiv(portfolio_at_level, grain)
+    portfolio_tiv_by_geo = _tiv_at_grain_combined(portfolio_at_level, grain)
     portfolio_geo_tiv = portfolio_tiv_by_geo.get((geo_id,), 0.0)
     total_portfolio_tiv = sum(portfolio_tiv_by_geo.values())
 
@@ -567,7 +596,7 @@ def exposures_detail(
         )
         prior_at_level, _ = _county_fallback_if_needed(prior_raw, level)
         prior_filtered = apply_filters(prior_at_level, payload.filters)
-        prior_tiv_by_geo = aggregate_tiv(prior_filtered, grain)
+        prior_tiv_by_geo = _tiv_at_grain_combined(prior_filtered, grain)
         prior_geo_tiv = prior_tiv_by_geo.get((geo_id,))
         yoy_value, yoy_st = yoy_change(deal_tiv if deal_tiv != 0 else None, prior_geo_tiv)
     else:

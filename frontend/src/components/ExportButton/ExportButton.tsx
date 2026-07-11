@@ -69,13 +69,17 @@ export function ExportButton() {
             setBusy(false);
           }
         }}
-        disabled={busy}
+        // Zero-match scope filters: exporting would silently produce the FULL
+        // portfolio workbook (no empty-chain sentinel on the wire), so block.
+        disabled={busy || scope.isEmpty}
         title={
-          scope.hasExplicit
-            ? "Export the current selection to Excel"
-            : scope.hasScopeFilter
-              ? "Export the filtered scope to Excel"
-              : "Export the in-force portfolio to Excel"
+          scope.isEmpty
+            ? "No programmes match the current scope filters."
+            : scope.hasExplicit
+              ? "Export the current selection to Excel"
+              : scope.hasScopeFilter
+                ? "Export the filtered scope to Excel"
+                : "Export the in-force portfolio to Excel"
         }
       >
         {busy ? "Building workbook…" : "Export to Excel"}

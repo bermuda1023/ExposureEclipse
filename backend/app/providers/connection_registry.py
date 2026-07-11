@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# EDM database names are plain identifiers; anything else could smuggle extra
+# ODBC attributes into the connection string (ODBC injection).
+_SAFE_DATABASE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 @dataclass(frozen=True)
@@ -41,7 +46,23 @@ class ServerConnectionConfig:
     extra_odbc: str | None = None
 
     def odbc_connect_string(self, database: str) -> str:
-        """Build an ODBC connection string for ``database`` on this server."""
+        """Build an ODBC connection string for ``database`` on this server.
+
+        Raises ``ValueError`` when ``database`` isn't a plain identifier or
+        when ``extra_odbc`` carries characters that could terminate/escape an
+        ODBC attribute (``;`` / ``}``) — never interpolate untrusted input.
+        """
+        if not _SAFE_DATABASE_RE.match(database or ""):
+            raise ValueError(
+                f"Refusing unsafe database name {database!r} "
+                "(expected ^[A-Za-z0-9_.-]+$)."
+            )
+        extra = (self.extra_odbc or "").rstrip(";")
+        if extra and (";" in extra or "}" in extra):
+            raise ValueError(
+                "Refusing extra_odbc containing ';' or '}' — supply a single "
+                f"KEY=VALUE attribute (got {self.extra_odbc!r})."
+            )
         parts = [
             f"DRIVER={{{self.driver}}}",
             f"SERVER={self.host},{self.port}",
@@ -55,18 +76,23 @@ class ServerConnectionConfig:
         parts.append(
             f"TrustServerCertificate={'yes' if self.trust_server_certificate else 'no'}"
         )
-        if self.extra_odbc:
-            parts.append(self.extra_odbc.rstrip(";"))
+        if extra:
+            parts.append(extra)
         return ";".join(parts) + ";"
 
 
 @dataclass
 class _PooledConnection:
-    """Minimal per-server connection holder (one live conn, recreated on error)."""
+    """Minimal per-(server, db) connection holder (one live conn, recreated on
+    error). ``conn`` is ``None`` until the first connect succeeds (the holder
+    doubles as the placeholder reserved under the registry lock so connecting
+    to a slow host never serializes other hosts). ``lock`` MUST be held for
+    any use of ``conn`` — pyodbc connections are not safe for concurrent
+    cursor use."""
 
     server_name: str
     database: str
-    conn: Any
+    conn: Any = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -166,10 +192,15 @@ class ConnectionRegistry:
 
     # ── connections ───────────────────────────────────────────────
 
-    def connect(self, server_name: str, database: str) -> Any:
-        """Return an open DB-API connection for ``server_name`` / ``database``.
+    def pooled_connection(self, server_name: str, database: str) -> _PooledConnection:
+        """Return the live pooled holder for ``server_name`` / ``database``.
 
         Requires ``pyodbc``. Reuses one connection per (server, database).
+        Callers MUST hold ``pooled.lock`` around any cursor use.
+
+        Concurrency: the registry-wide lock only reserves/creates the holder
+        (cheap); liveness checks + ``pyodbc.connect`` run under the holder's
+        own lock, so one slow host never serializes loads against the others.
         """
         try:
             import pyodbc  # type: ignore[import-untyped]
@@ -185,27 +216,43 @@ class ConnectionRegistry:
                 f"Server '{server_name}' is not in the connection registry. "
                 f"Known: {self.server_names()}"
             )
+        # Validate identifiers (and build the conn string) before touching pools.
+        conn_str = cfg.odbc_connect_string(database)
 
         key = (server_name, database)
         with self._lock:
             pooled = self._pools.get(key)
-            if pooled is not None:
+            if pooled is None:
+                pooled = _PooledConnection(server_name=server_name, database=database)
+                self._pools[key] = pooled
+
+        with pooled.lock:
+            if pooled.conn is not None:
                 try:
                     # cheap liveness check
                     cur = pooled.conn.cursor()
                     cur.execute("SELECT 1")
                     cur.close()
-                    return pooled.conn
+                    return pooled
                 except Exception:
-                    self._close_pool_unlocked(key)
+                    try:
+                        pooled.conn.close()
+                    except Exception:  # pragma: no cover
+                        pass
+                    pooled.conn = None
 
-            conn_str = cfg.odbc_connect_string(database)
             conn = pyodbc.connect(conn_str, timeout=15)
             conn.timeout = 60
-            self._pools[key] = _PooledConnection(
-                server_name=server_name, database=database, conn=conn
-            )
-            return conn
+            pooled.conn = conn
+        return pooled
+
+    def connect(self, server_name: str, database: str) -> Any:
+        """Back-compat: return the raw DB-API connection.
+
+        Prefer :meth:`pooled_connection` + ``with pooled.lock:`` — the raw
+        connection has no concurrency guard of its own.
+        """
+        return self.pooled_connection(server_name, database).conn
 
     def close_all(self) -> None:
         with self._lock:
@@ -214,7 +261,7 @@ class ConnectionRegistry:
 
     def _close_pool_unlocked(self, key: tuple[str, str]) -> None:
         pooled = self._pools.pop(key, None)
-        if pooled is None:
+        if pooled is None or pooled.conn is None:
             return
         try:
             pooled.conn.close()
@@ -226,10 +273,11 @@ class ConnectionRegistry:
         if server_name not in self._servers:
             return False, f"Server '{server_name}' not registered"
         try:
-            conn = self.connect(server_name, database)
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.close()
+            pooled = self.pooled_connection(server_name, database)
+            with pooled.lock:
+                cur = pooled.conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
             return True, "ok"
         except Exception as exc:
             return False, f"{type(exc).__name__}: {exc}"

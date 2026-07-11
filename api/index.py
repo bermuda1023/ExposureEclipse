@@ -24,10 +24,13 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 os.environ.setdefault("MOCK_DATA_DIR", str(REPO_ROOT / "mockdata"))
 
 # CORS only needs to allow the Vercel domain itself; both share an origin so
-# this is mostly a safety net for preview deploys.
+# this is mostly a safety net for preview deploys. Preview hosts vary per
+# deploy, so they go through the regex path (exact-match allow_origins can't
+# express a wildcard).
 os.environ.setdefault(
     "CORS_ALLOW_ORIGINS",
-    "http://localhost:5173,http://localhost:4173,https://*.vercel.app",
+    "http://localhost:5173,http://localhost:4173",
 )
+os.environ.setdefault("CORS_ALLOW_ORIGIN_REGEX", r"https://.*\.vercel\.app")
 
 from app.main import app  # noqa: E402  (must come after sys.path setup)

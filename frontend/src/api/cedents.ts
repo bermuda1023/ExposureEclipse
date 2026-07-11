@@ -9,6 +9,7 @@ import type {
   CurrencyCode,
   ErtStatus,
   Peril,
+  ProgrammeStatus,
 } from "../types/contracts";
 
 export interface EDMRef {
@@ -21,7 +22,9 @@ export interface EDMRef {
   exposureDataCutoffDate?: string | null;
 }
 
-export type ProgrammeStatus = "BOUND" | "QUOTED" | "DECLINED" | "NTU" | "EXPIRED";
+// Canonical home is types/contracts.ts (CONTRACTS.md §3b); re-exported here
+// for existing importers of the wire types.
+export type { ProgrammeStatus };
 
 export interface Programme {
   programmeId: string;

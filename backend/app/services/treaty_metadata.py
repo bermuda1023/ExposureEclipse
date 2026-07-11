@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,12 +82,50 @@ def _mockdata_dir() -> Path:
     return p
 
 
+def _overlay_dir() -> Path:
+    """Writable fallback when the mockdata dir is read-only (Vercel bundles
+    ``mockdata/`` into the serverless function image). Admin writes land here
+    and are read back on load — per-instance only; see docs/DEPLOY.md
+    §Serverless caveats."""
+    return Path(tempfile.gettempdir()) / "exposure_eclipse_admin"
+
+
+def _read_path(filename: str) -> Path:
+    """Prefer the overlay copy when one exists (it holds the latest write)."""
+    overlay = _overlay_dir() / filename
+    if overlay.exists():
+        return overlay
+    return _mockdata_dir() / filename
+
+
+def _write_json_text(filename: str, text: str) -> Path:
+    """Write to mockdata when writable, else to the tmp overlay dir.
+
+    A successful primary write also removes any stale overlay copy so reads
+    (overlay-first) can't resurrect an older version.
+    """
+    primary = _mockdata_dir() / filename
+    overlay = _overlay_dir() / filename
+    try:
+        primary.write_text(text, encoding="utf-8")
+    except OSError:
+        overlay.parent.mkdir(parents=True, exist_ok=True)
+        overlay.write_text(text, encoding="utf-8")
+        return overlay
+    if overlay.exists():
+        try:
+            overlay.unlink()
+        except OSError:  # pragma: no cover — best-effort cleanup
+            pass
+    return primary
+
+
 def _treaty_path() -> Path:
-    return _mockdata_dir() / "treaty_metadata.json"
+    return _read_path("treaty_metadata.json")
 
 
 def _linkage_path() -> Path:
-    return _mockdata_dir() / "edm_linkage.json"
+    return _read_path("edm_linkage.json")
 
 
 # ─────────────────────────── load / save ───────────────────────────
@@ -151,8 +190,8 @@ def save_linkage(links: dict[str, EDMLink]) -> None:
         for fs_id, l in links.items()
         if l.server_name or l.edm_database_name
     }
-    _linkage_path().write_text(
-        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    _write_json_text(
+        "edm_linkage.json", json.dumps(payload, indent=2, sort_keys=True)
     )
 
 
@@ -183,7 +222,7 @@ def save_treaty_rows(rows: list[TreatyRow]) -> None:
         }
         for r in rows
     ]
-    _treaty_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _write_json_text("treaty_metadata.json", json.dumps(payload, indent=2))
 
 
 # ─────────────────────────── auto-suggest ───────────────────────────

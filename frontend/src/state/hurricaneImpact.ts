@@ -48,7 +48,16 @@ export const useHurricaneImpactStore = create<HurricaneImpactState>((set) => ({
       selectionPayload,
       focusedGeoid: null,
     }),
-  setData: (data) => set({ data, isLoading: false, error: null }),
+  // Stale-response guard: HurricaneLayer / LiveStormPanel fire raw
+  // fetch→setData chains, so an earlier storm's response can resolve AFTER
+  // the user has clicked a different storm. The impact payload carries its
+  // stormId — drop anything that doesn't match the currently-active storm.
+  setData: (data) =>
+    set((s) =>
+      data.stormId === s.activeStormId
+        ? { data, isLoading: false, error: null }
+        : s,
+    ),
   setError: (msg) => set({ error: msg, isLoading: false }),
   pushToDetail: () => set({ pushedToDetail: true }),
   popFromDetail: () => set({ pushedToDetail: false }),

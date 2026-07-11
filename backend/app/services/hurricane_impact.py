@@ -661,21 +661,52 @@ def join_tiv(
 
     Also produces a per-programme breakdown (``by_programme``) so the right-rail
     detail view can expand each county and show which deals contributed.
+
+    TIV combines under max-across-perils per county (CLAUDE.md rule 3): per
+    geography, each peril's TIV is summed and the maximum across perils wins;
+    location count comes from the winning peril. The per-programme breakdown
+    applies the same rule within each dataset, so a multi-peril programme's
+    WS/EQ/CS rows never stack.
     """
-    by_geo: dict[str, tuple[float, int]] = {}
-    # Two-level index: geo -> dataset_id -> (tiv, loc)
-    by_geo_prog: dict[str, dict[str, tuple[float, int]]] = {}
+    # geo -> peril -> [tiv_sum, loc_sum]
+    by_geo_peril: dict[str, dict[str, list[float]]] = {}
+    # geo -> dataset_id -> peril -> [tiv_sum, loc_sum]
+    by_geo_prog_peril: dict[str, dict[str, dict[str, list[float]]]] = {}
     for f in facts:
         gid = getattr(f, "geography_id", None)
         agg = getattr(f, "aggregation", None)
         if gid is None or agg != "COUNTY":
             continue
-        cur_tiv, cur_loc = by_geo.get(gid, (0.0, 0))
-        by_geo[gid] = (cur_tiv + (f.tiv or 0.0), cur_loc + (f.location_count or 0))
+        peril = str(getattr(f, "peril", "(none)"))
+        cell = by_geo_peril.setdefault(gid, {}).setdefault(peril, [0.0, 0])
+        cell[0] += float(f.tiv or 0.0)
+        cell[1] += int(f.location_count or 0)
         ds_id = getattr(f, "dataset_id", "(unknown)")
-        prog_map = by_geo_prog.setdefault(gid, {})
-        cur_p_tiv, cur_p_loc = prog_map.get(ds_id, (0.0, 0))
-        prog_map[ds_id] = (cur_p_tiv + (f.tiv or 0.0), cur_p_loc + (f.location_count or 0))
+        p_cell = (
+            by_geo_prog_peril.setdefault(gid, {})
+            .setdefault(ds_id, {})
+            .setdefault(peril, [0.0, 0])
+        )
+        p_cell[0] += float(f.tiv or 0.0)
+        p_cell[1] += int(f.location_count or 0)
+
+    def _max_across_perils(per_peril: dict[str, list[float]]) -> tuple[float, int]:
+        winning = max(per_peril, key=lambda p: per_peril[p][0])
+        return per_peril[winning][0], int(per_peril[winning][1])
+
+    by_geo: dict[str, tuple[float, int]] = {
+        gid: _max_across_perils(per_peril)
+        for gid, per_peril in by_geo_peril.items()
+        if per_peril
+    }
+    by_geo_prog: dict[str, dict[str, tuple[float, int]]] = {
+        gid: {
+            ds: _max_across_perils(per_peril)
+            for ds, per_peril in prog_map.items()
+            if per_peril
+        }
+        for gid, prog_map in by_geo_prog_peril.items()
+    }
 
     # NOTE: damage_ratio + projected_loss are intentionally NOT computed
     # server-side. The user supplies their own mean + SD per Saffir-Simpson

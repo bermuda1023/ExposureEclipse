@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from ..config import get_settings
 from ..models.common import CamelModel
+from ..models.enums import ErrorCode
 from ..providers import ExposureDataProvider, get_provider
 from ..services.treaty_metadata import (
     EDMLink,
@@ -20,6 +23,27 @@ from ..services.treaty_metadata import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def require_admin_token(
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> None:
+    """Shared-token gate for the mutating admin routes.
+
+    ``ADMIN_TOKEN`` unset (the local-dev default) keeps the routes open;
+    when set, callers must send the matching ``X-Admin-Token`` header.
+    """
+    expected = get_settings().admin_token
+    if not expected:
+        return
+    if x_admin_token is None or not secrets.compare_digest(x_admin_token, expected):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": ErrorCode.UNAUTHORIZED.value,
+                "message": "Missing or invalid X-Admin-Token header.",
+            },
+        )
 
 
 # ─────────────────────────── wire types ───────────────────────────
@@ -141,7 +165,11 @@ def list_programmes(
     )
 
 
-@router.put("/programmes/{fs_display_id}/edm-link", response_model=TreatyViewOut)
+@router.put(
+    "/programmes/{fs_display_id}/edm-link",
+    response_model=TreatyViewOut,
+    dependencies=[Depends(require_admin_token)],
+)
 def update_link(
     fs_display_id: str,
     payload: EDMLinkInput,
@@ -172,7 +200,11 @@ def update_link(
     return _view_to_out(match)
 
 
-@router.post("/programmes/edm-links", response_model=ProgrammesListResponse)
+@router.post(
+    "/programmes/edm-links",
+    response_model=ProgrammesListResponse,
+    dependencies=[Depends(require_admin_token)],
+)
 def bulk_save_links(
     payload: BulkLinkInput,
     provider: ExposureDataProvider = Depends(get_provider),
@@ -191,7 +223,11 @@ def bulk_save_links(
     return list_programmes(provider=provider)
 
 
-@router.post("/programmes/import", response_model=ImportResponse)
+@router.post(
+    "/programmes/import",
+    response_model=ImportResponse,
+    dependencies=[Depends(require_admin_token)],
+)
 async def import_csv(
     request: Request,
     provider: ExposureDataProvider = Depends(get_provider),
@@ -346,7 +382,11 @@ def get_cache_stats(
     return _cache_stats_from_provider(provider)
 
 
-@router.post("/cache/warmup", response_model=WarmupResponse)
+@router.post(
+    "/cache/warmup",
+    response_model=WarmupResponse,
+    dependencies=[Depends(require_admin_token)],
+)
 def warmup_cache(
     payload: WarmupRequest | None = None,
     provider: ExposureDataProvider = Depends(get_provider),
@@ -374,7 +414,7 @@ def warmup_cache(
     )
 
 
-@router.delete("/cache")
+@router.delete("/cache", dependencies=[Depends(require_admin_token)])
 def clear_cache(
     dataset_id: str | None = None,
     provider: ExposureDataProvider = Depends(get_provider),

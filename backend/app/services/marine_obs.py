@@ -14,6 +14,7 @@ when overlaid alongside a hurricane's forecast cone.
 from __future__ import annotations
 
 import json
+import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,6 +25,12 @@ NDBC_LATEST_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
 NWS_STATIONS_URL = "https://api.weather.gov/stations"
 NWS_USER_AGENT = "exposure-eclipse/1.0 (contact: support@example.invalid)"
 FETCH_TIMEOUT_S = 30
+# Observations must not be pinned for the process lifetime — refetch per bucket.
+CACHE_BUCKET_SECONDS = 600
+
+
+def _cache_bucket() -> int:
+    return int(time.time() // CACHE_BUCKET_SECONDS)
 
 
 @dataclass(slots=True, frozen=True)
@@ -81,9 +88,10 @@ def _parse_ndbc_float(s: str) -> float | None:
     return v
 
 
-@lru_cache(maxsize=1)
-def _ndbc_all() -> list[BuoyObservation]:
-    """Parse the NDBC latest_obs.txt once per cold-start. ~900 stations."""
+@lru_cache(maxsize=2)
+def _ndbc_all_bucketed(bucket: int) -> list[BuoyObservation]:
+    """Parse the NDBC latest_obs.txt once per ~10-min bucket. ~900 stations."""
+    del bucket
     req = urllib.request.Request(NDBC_LATEST_URL, headers={"User-Agent": "eclipse/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
@@ -134,6 +142,10 @@ def _ndbc_all() -> list[BuoyObservation]:
     return out
 
 
+def _ndbc_all() -> list[BuoyObservation]:
+    return _ndbc_all_bucketed(_cache_bucket())
+
+
 def buoys_in_bbox(
     west: float, south: float, east: float, north: float
 ) -> list[BuoyObservation]:
@@ -165,14 +177,16 @@ def _nws_get(path: str, params: dict | None = None) -> dict | None:
         return None
 
 
-@lru_cache(maxsize=1)
-def _nws_all_stations() -> list[dict]:
+@lru_cache(maxsize=2)
+def _nws_all_stations_bucketed(bucket: int) -> list[dict]:
     """All NWS observation stations (paginated until exhausted, capped).
 
     NWS's /stations endpoint returns metadata + GeoJSON Point geometry per
     station. We pull up to ~4,000 stations (limit=500 per page × 8 pages)
-    which covers CONUS comfortably. Cached once per cold start.
+    which covers CONUS comfortably. Cached per ~10-min bucket so a failed
+    or partial pull isn't pinned for the process lifetime.
     """
+    del bucket
     out: list[dict] = []
     cursor = None
     for _ in range(8):
@@ -190,6 +204,10 @@ def _nws_all_stations() -> list[dict]:
         else:
             break
     return out
+
+
+def _nws_all_stations() -> list[dict]:
+    return _nws_all_stations_bucketed(_cache_bucket())
 
 
 def _fetch_latest_obs(sid: str, name: str, lat: float, lon: float) -> LandObservation | None:

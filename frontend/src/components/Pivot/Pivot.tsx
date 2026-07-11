@@ -75,6 +75,9 @@ export function Pivot() {
   // Pivot fires for any scope the map fires for, including portfolio mode.
   const request = useMemo<PivotRequest | null>(() => {
     if (measures.length === 0) return null;
+    // Scope chips matching zero chains → explicitly-empty view (the backend
+    // would treat a target-less request as the full portfolio).
+    if (scope.isEmpty) return null;
     return {
       cedentId: scope.cedentId,
       chainId: scope.chainId,
@@ -100,6 +103,7 @@ export function Pivot() {
     scope.chainId,
     scope.programmeId,
     scope.chainIds,
+    scope.isEmpty,
     comparisonProgrammeId,
     perils,
     rows,
@@ -163,7 +167,12 @@ export function Pivot() {
         View grain (CONTRACTS.md §13) = <code>{[...rows, ...columns].join(" × ")}</code> · max-
         across-perils for groups is computed at this grain.
       </p>
-      {!request && (
+      {scope.isEmpty && (
+        <p style={{ color: "#666", fontSize: "0.85rem" }}>
+          No programmes match the current scope filters.
+        </p>
+      )}
+      {!request && !scope.isEmpty && (
         <p style={{ color: "#666", fontSize: "0.85rem" }}>
           Pick at least one measure.
         </p>

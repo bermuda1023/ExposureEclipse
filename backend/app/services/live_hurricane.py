@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 import urllib.request
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -39,6 +40,8 @@ from .ibtracs import Storm, TrackPoint, fetch_storms, lookup_r64_quads_nm
 
 CURRENT_STORMS_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
 FETCH_TIMEOUT_S = 30
+# Live data must not be pinned for the process lifetime — refetch every bucket.
+CACHE_BUCKET_SECONDS = 600
 
 # Curated replay candidates — recent notable Atlantic hurricanes with
 # rich IBTrACS coverage (full Rmax + R64 quadrants). Order = display order.
@@ -168,14 +171,20 @@ class ForecastTrack:
 # ─────────────────────────── live NHC fetch ───────────────────────────
 
 
-@lru_cache(maxsize=1)
-def _fetch_current_storms_raw() -> dict:
+@lru_cache(maxsize=2)
+def _fetch_current_storms_raw_bucketed(bucket: int) -> dict:
+    """``bucket`` only keys the cache — ~10-min expiry without extra deps."""
+    del bucket
     req = urllib.request.Request(
         CURRENT_STORMS_URL,
         headers={"User-Agent": "exposure-eclipse-live/1.0"},
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _fetch_current_storms_raw() -> dict:
+    return _fetch_current_storms_raw_bucketed(int(time.time() // CACHE_BUCKET_SECONDS))
 
 
 def _coerce_float(v) -> float | None:
