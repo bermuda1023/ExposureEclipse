@@ -114,7 +114,11 @@ class OptimizeRequest(CamelModel):
         description="If True (default), only NEW capital is optimized; current holdings stay put. "
         "If False, optimizer rebalances the full book (current+new).",
     )
-    net_of_fees: bool = Field(True, description="Haircut expected returns by parsed mgmt fee")
+    net_of_fees: bool = Field(
+        True,
+        description="Haircut expected returns by parsed mgmt fee — applies only "
+        "to assets tagged returnsGrossOfFees (fixture series are already net)",
+    )
     history_window_start: str | None = Field(None, description="YYYY-MM inclusive; None = full history")
     benchmark_asset_id: str = Field("spy", description="Portfolio-level IR benchmark")
     per_asset_benchmarks: list[PerAssetBenchmarkIn] = Field(
@@ -248,6 +252,25 @@ def _asset_by_id(catalog: dict) -> dict[str, dict]:
     return {a["id"]: a for a in catalog["assets"]}
 
 
+def _fee_drag_for(idx: dict[str, dict], asset_id: str, net_of_fees: bool) -> float:
+    """Annual mgmt-fee drag applied to the MVO μ for one asset.
+
+    The fixture series are already net of fees (investor-letter returns;
+    see scripts/build_fund_returns.py), so subtracting the parsed fee from
+    them again double-counts it. Drag therefore applies ONLY to assets
+    explicitly tagged ``"returnsGrossOfFees": true`` in fund_returns.json.
+    Path metrics (CAGR / drawdown / path Sharpe) never apply drag, so
+    gross-tagged assets' path stats remain gross — flag that in the UI
+    before adding any gross series.
+    """
+    if not net_of_fees:
+        return 0.0
+    asset = idx[asset_id]
+    if not asset.get("returnsGrossOfFees", False):
+        return 0.0
+    return parse_mgmt_fee_drag(asset.get("fees"))
+
+
 # ─────────────────────── endpoints ───────────────────────
 
 
@@ -307,13 +330,11 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         series_by_id = {a: full_series[a].since(req.history_window_start) for a in req.asset_ids}
     else:
         series_by_id = full_series
-    def _fee(a: str) -> float:
-        if not getattr(req, "net_of_fees", True):
-            return 0.0
-        return parse_mgmt_fee_drag(idx[a].get("fees"))
-
     empirical = {
-        a: compute_asset_stats(series_by_id[a], fee_drag=_fee(a)) for a in req.asset_ids
+        a: compute_asset_stats(
+            series_by_id[a], fee_drag=_fee_drag_for(idx, a, req.net_of_fees)
+        )
+        for a in req.asset_ids
     }
     effective_window_months = max(
         (len(series_by_id[a].returns) for a in req.asset_ids), default=0
@@ -576,13 +597,11 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
         series_by_id = {a: full_series[a].since(req.history_window_start) for a in asset_ids}
     else:
         series_by_id = full_series
-    def _fee_c(a: str) -> float:
-        if not getattr(req, "net_of_fees", True):
-            return 0.0
-        return parse_mgmt_fee_drag(idx[a].get("fees"))
-
     empirical = {
-        a: compute_asset_stats(series_by_id[a], fee_drag=_fee_c(a)) for a in asset_ids
+        a: compute_asset_stats(
+            series_by_id[a], fee_drag=_fee_drag_for(idx, a, req.net_of_fees)
+        )
+        for a in asset_ids
     }
     ov_by_id: dict[str, AssumptionOverride] = {}
     for o in req.overrides:
@@ -1222,13 +1241,10 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
                 # Build series + stats for this window
                 full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
                 series_by_id = {a: (full_series[a].since(w_start) if w_start else full_series[a]) for a in req.asset_ids}
-                def _fee_r(a: str) -> float:
-                    if not getattr(req, "net_of_fees", True):
-                        return 0.0
-                    return parse_mgmt_fee_drag(idx[a].get("fees"))
-
                 empirical = {
-                    a: compute_asset_stats(series_by_id[a], fee_drag=_fee_r(a))
+                    a: compute_asset_stats(
+                        series_by_id[a], fee_drag=_fee_drag_for(idx, a, req.net_of_fees)
+                    )
                     for a in req.asset_ids
                 }
                 stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
