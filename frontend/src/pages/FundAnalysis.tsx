@@ -2013,7 +2013,7 @@ function InteractiveBuilder({
                 ⚠ {live.portfolio.violatesMinInvestment.length} allocation(s) below ticket-size minimum
               </div>
             )}
-            <CustomEquityChart response={live} spySeries={result.assetSeries.find((s) => s.assetId === "spy")} />
+            <CustomEquityChart response={live} />
           </>
         )}
         {pending && !live && <div style={S.hint}>Scoring…</div>}
@@ -2022,16 +2022,38 @@ function InteractiveBuilder({
   );
 }
 
-function CustomEquityChart({
-  response,
-  spySeries,
-}: {
-  response: CustomPortfolioResponse;
-  spySeries: AssetSeries | undefined;
-}) {
+/** "Nice" ticks for a log-scale axis: 1–2–5 mantissas per decade, refined
+ *  if the visible range is too narrow to yield ≥4 ticks; linear fallback
+ *  for very tight ranges (e.g. a 2-year window hovering around $1). */
+function niceLogTicks(lo: number, hi: number): number[] {
+  const mantissaSets = [
+    [1, 2, 5],
+    [1, 1.5, 2, 3, 5, 7],
+    [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8],
+  ];
+  const kLo = Math.floor(Math.log10(lo));
+  const kHi = Math.ceil(Math.log10(hi));
+  for (const ms of mantissaSets) {
+    const ticks: number[] = [];
+    for (let k = kLo; k <= kHi; k++)
+      for (const m of ms) {
+        const v = m * 10 ** k;
+        if (v >= lo && v <= hi) ticks.push(v);
+      }
+    if (ticks.length >= 4) return ticks;
+  }
+  const out: number[] = [];
+  for (let i = 0; i <= 4; i++) out.push(Number((lo + ((hi - lo) * i) / 4).toPrecision(3)));
+  return out;
+}
+
+const fmtEqTick = (v: number) =>
+  "$" + (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1).replace(/\.0$/, "") : v.toFixed(2).replace(/0$/, "").replace(/\.$/, ""));
+
+function CustomEquityChart({ response }: { response: CustomPortfolioResponse }) {
   const W = 640;
   const eqH = 220;
-  const ddH = 100;
+  const ddH = 110;
   const P = { top: 12, right: 24, bottom: 26, left: 64 };
   const iw = W - P.left - P.right;
   const totalH = P.top + eqH + 22 + ddH + P.bottom;
@@ -2049,28 +2071,20 @@ function CustomEquityChart({
   const xMin = xs[0]!;
   const xMax = xs[xs.length - 1]!;
 
-  // Build SPY series aligned to the portfolio's month range
-  const spy: { month: string; eq: number }[] = [];
-  if (spySeries) {
-    const startIdx = spySeries.months.findIndex((m) => m >= months[0]!);
-    if (startIdx >= 0) {
-      const startEq = spySeries.equity[startIdx]!;
-      for (let i = startIdx; i < spySeries.months.length; i++) {
-        if (spySeries.months[i]! > months[months.length - 1]!) break;
-        spy.push({ month: spySeries.months[i]!, eq: spySeries.equity[i]! / startEq });
-      }
-    }
-  }
+  // Benchmark aligned to the portfolio window, rebased at portfolio start (from backend).
+  const spy = response.benchMonths.map((m, i) => ({ month: m, eq: response.benchEquity[i]!, dd: response.benchDrawdown[i]! }));
+  const benchIdxByMonth = new Map(spy.map((p, i) => [p.month, i]));
 
   const maxEq = Math.max(...response.equity, ...spy.map((s) => s.eq), 1);
   const minEq = Math.min(...response.equity, ...spy.map((s) => s.eq), 1);
-  const logMin = Math.log(Math.max(0.5, minEq));
-  const logMax = Math.log(maxEq * 1.05);
+  // No floor clamp — a portfolio that halves must stay on-scale.
+  const logMin = Math.log(minEq * 0.97);
+  const logMax = Math.log(maxEq * 1.06);
 
   const x = (m: string) => P.left + ((parseMonth(m) - xMin) / (xMax - xMin || 1)) * iw;
   const eqY = (v: number) => P.top + eqH - ((Math.log(v) - logMin) / (logMax - logMin || 1)) * eqH;
 
-  const worstDD = Math.min(...response.drawdown, -0.05);
+  const worstDD = Math.min(...response.drawdown, ...spy.map((s) => s.dd), -0.05) * 1.08;
   const ddTop = P.top + eqH + 22;
   const ddYY = (v: number) => ddTop + ((v - 0) / (worstDD - 0 || -1)) * ddH;
 
@@ -2078,9 +2092,10 @@ function CustomEquityChart({
   const yearStep = Math.max(1, Math.floor((xMax - xMin) / 6));
   const xTicks: string[] = [];
   for (let yr = Math.ceil(xMin); yr <= Math.floor(xMax); yr += yearStep) xTicks.push(`${yr}-01`);
-  const eqTicks = [0.5, 1, 2, 5, 10, 20, 50, 100].filter((v) => v >= Math.exp(logMin) * 0.9 && v <= maxEq * 1.2);
+  const eqTicks = niceLogTicks(Math.exp(logMin), Math.exp(logMax));
+  const ddStep = [0.02, 0.05, 0.1, 0.15, 0.2, 0.25].find((s) => Math.abs(worstDD) / s <= 5.5) ?? 0.25;
   const ddTicks: number[] = [];
-  for (let v = 0; v > worstDD - 0.05; v -= worstDD < -0.3 ? 0.1 : 0.05) ddTicks.push(v);
+  for (let v = 0; v >= worstDD; v -= ddStep) ddTicks.push(Number(v.toFixed(4)));
 
   const portfolioD = months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${eqY(response.equity[i]!)}`).join(" ");
   const spyD = spy.length > 0
@@ -2089,6 +2104,9 @@ function CustomEquityChart({
   const ddD = months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${ddYY(response.drawdown[i]!)}`).join(" ");
   const ddArea = months.map((m, i) => `L${x(m)},${ddYY(response.drawdown[i]!)}`).join(" ");
   const ddAreaFull = `M${x(months[0]!)},${ddYY(0)} ${ddArea} L${x(months[months.length - 1]!)},${ddYY(0)} Z`;
+  const benchDdD = spy.length > 0
+    ? spy.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.month)},${ddYY(p.dd)}`).join(" ")
+    : "";
 
   // Hover interaction
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -2117,13 +2135,19 @@ function CustomEquityChart({
         {spy.length > 0 && (
           <span style={{ ...S.chartLegendItem, color: "#94a3b8" }}>
             <span style={{ ...S.chartLegendSwatch, background: "#94a3b8", height: 2 }} />
-            S&P 500 (from portfolio start)
+            {response.benchName || "S&P 500"} (from portfolio start)
           </span>
         )}
         <span style={{ ...S.chartLegendItem, color: "#dc2626" }}>
           <span style={{ ...S.chartLegendSwatch, background: "#dc2626", opacity: 0.4 }} />
-          Drawdown
+          Portfolio drawdown
         </span>
+        {spy.length > 0 && (
+          <span style={{ ...S.chartLegendItem, color: "#94a3b8" }}>
+            <span style={{ ...S.chartLegendSwatch, background: "#94a3b8", height: 2 }} />
+            Index drawdown
+          </span>
+        )}
       </div>
       <svg
         width={W}
@@ -2141,7 +2165,7 @@ function CustomEquityChart({
           <g key={`eqy${v}`}>
             <line x1={P.left} y1={eqY(v)} x2={P.left + iw} y2={eqY(v)} stroke="#e2e8f0" strokeWidth={1} />
             <text x={P.left - 6} y={eqY(v) + 3} textAnchor="end" fontSize={10} fill="#64748b">
-              ${v}
+              {fmtEqTick(v)}
             </text>
           </g>
         ))}
@@ -2161,10 +2185,9 @@ function CustomEquityChart({
             <line x1={x(months[hover]!)} y1={P.top} x2={x(months[hover]!)} y2={P.top + eqH + 22 + ddH} stroke="#334155" strokeWidth={1} strokeDasharray="4,4" opacity={0.5} />
             <circle cx={x(months[hover]!)} cy={eqY(response.equity[hover]!)} r={4} fill="#1e40af" stroke="#fff" strokeWidth={2} />
             {spy.length > 0 && (() => {
-              const sMonth = months[hover]!;
-              const sIdx = spy.findIndex((p) => p.month === sMonth);
-              if (sIdx < 0) return null;
-              return <circle cx={x(sMonth)} cy={eqY(spy[sIdx]!.eq)} r={3.5} fill="#94a3b8" stroke="#fff" strokeWidth={1.5} />;
+              const sIdx = benchIdxByMonth.get(months[hover]!);
+              if (sIdx === undefined) return null;
+              return <circle cx={x(months[hover]!)} cy={eqY(spy[sIdx]!.eq)} r={3.5} fill="#94a3b8" stroke="#fff" strokeWidth={1.5} />;
             })()}
           </>
         )}
@@ -2193,9 +2216,17 @@ function CustomEquityChart({
           </g>
         ))}
         <path d={ddAreaFull} fill="#dc2626" opacity={0.15} />
+        {benchDdD && <path d={benchDdD} stroke="#94a3b8" strokeWidth={1.4} fill="none" opacity={0.9} />}
         <path d={ddD} stroke="#dc2626" strokeWidth={1.6} fill="none" />
         {hover !== null && (
-          <circle cx={x(months[hover]!)} cy={ddYY(response.drawdown[hover]!)} r={3.5} fill="#dc2626" stroke="#fff" strokeWidth={1.5} />
+          <>
+            <circle cx={x(months[hover]!)} cy={ddYY(response.drawdown[hover]!)} r={3.5} fill="#dc2626" stroke="#fff" strokeWidth={1.5} />
+            {(() => {
+              const sIdx = benchIdxByMonth.get(months[hover]!);
+              if (sIdx === undefined) return null;
+              return <circle cx={x(months[hover]!)} cy={ddYY(spy[sIdx]!.dd)} r={3} fill="#94a3b8" stroke="#fff" strokeWidth={1.5} />;
+            })()}
+          </>
         )}
       </svg>
 
@@ -2204,14 +2235,29 @@ function CustomEquityChart({
         <div style={S.chartTooltip}>
           <b>{months[hover]}</b>
           <span> · portfolio {CURRENCY(response.equity[hover]!)}</span>
+          <span style={{ color: "#dc2626" }}> (DD {PCT(response.drawdown[hover]!)})</span>
           {(() => {
-            const sMonth = months[hover]!;
-            const sIdx = spy.findIndex((p) => p.month === sMonth);
-            return sIdx >= 0 ? <span> · SPY {CURRENCY(spy[sIdx]!.eq)}</span> : null;
+            const sIdx = benchIdxByMonth.get(months[hover]!);
+            return sIdx !== undefined ? (
+              <span style={{ color: "#64748b" }}>
+                {" "}· index {CURRENCY(spy[sIdx]!.eq)} (DD {PCT(spy[sIdx]!.dd)})
+              </span>
+            ) : null;
           })()}
-          <span style={{ color: "#dc2626" }}> · DD {PCT(response.drawdown[hover]!)}</span>
         </div>
       )}
+
+      {/* Window + max-DD caption — makes explicit what period the stats cover */}
+      <div style={{ ...S.hint, marginTop: 4 }}>
+        Window: {months[0]} → {months[months.length - 1]} ({months.length} mo = overlapping history of the
+        selected funds). Max DD in window: portfolio{" "}
+        <b style={{ color: "#dc2626" }}>{PCT(Math.min(...response.drawdown))}</b>
+        {spy.length > 0 && (
+          <>
+            {" "}· {response.benchName || "index"} <b style={{ color: "#64748b" }}>{PCT(response.benchMaxDrawdown)}</b>
+          </>
+        )}
+      </div>
     </div>
   );
 }

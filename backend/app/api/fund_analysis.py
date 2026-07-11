@@ -220,6 +220,13 @@ class CustomPortfolioResponse(CamelModel):
     equity_months: list[str]
     equity: list[float]
     drawdown: list[float]
+    # Benchmark over the SAME window, rebased to 1.0 at the portfolio start,
+    # so both drawdown curves are measured from the same starting point.
+    bench_months: list[str] = Field(default_factory=list)
+    bench_equity: list[float] = Field(default_factory=list)
+    bench_drawdown: list[float] = Field(default_factory=list)
+    bench_max_drawdown: float = 0.0
+    bench_name: str = ""
 
 
 # ─────────────────────── data cache ───────────────────────
@@ -596,7 +603,6 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     monthly = portfolio_monthly_series(weights, series_by_id)
     monthly_rets = [r for _, r in monthly]
     sortino = sortino_from_monthly(monthly_rets, mar_annual=req.risk_free_rate) if monthly_rets else 0.0
-    mdd = max_drawdown_from_monthly(monthly_rets) if monthly_rets else 0.0
     from ..services.portfolio_math import _cagr, realized_vol_from_monthly
 
     if len(monthly_rets) >= 12:
@@ -616,15 +622,6 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
         bench = bench.since(req.history_window_start)
     ir, te = information_ratio_and_te(monthly, bench) if monthly else (0.0, 0.0)
 
-    equity_months = [m for m, _ in monthly]
-    equity = cumulative_curve(monthly_rets)
-    dd = drawdown_series(monthly_rets)
-    # Downsample for wire
-    stride = max(1, len(equity_months) // 200)
-    keep = list(range(0, len(equity_months), stride))
-    if keep and keep[-1] != len(equity_months) - 1:
-        keep.append(len(equity_months) - 1)
-
     min_inv_override = {m.asset_id: m.min_investment for m in req.min_investment_overrides}
     violations: list[str] = []
     if req.respect_min_investment:
@@ -639,21 +636,27 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
         monthly = portfolio_monthly_series(weights, series_by_id)
         monthly_rets = [r for _, r in monthly]
         if len(monthly_rets) >= 12:
-            from ..services.portfolio_math import _cagr, realized_vol_from_monthly
-
             ret = _cagr(monthly_rets)
             vol = realized_vol_from_monthly(monthly_rets)
             sharpe = (ret - req.risk_free_rate) / vol if vol > 0 else 0.0
             sortino = sortino_from_monthly(monthly_rets, mar_annual=req.risk_free_rate)
-            mdd = max_drawdown_from_monthly(monthly_rets)
             ir, te = information_ratio_and_te(monthly, bench) if monthly else (0.0, 0.0)
-            equity_months = [m for m, _ in monthly]
-            equity = cumulative_curve(monthly_rets)
-            dd = drawdown_series(monthly_rets)
-            stride = max(1, len(equity_months) // 200)
-            keep = list(range(0, len(equity_months), stride))
-            if keep and keep[-1] != len(equity_months) - 1:
-                keep.append(len(equity_months) - 1)
+
+    # Curves built from FINAL weights at full resolution (monthly data tops
+    # out ~450 points). The old ~200-point downsample could skip the true
+    # trough month, so the plotted dip disagreed with the Max DD stat. The
+    # stat is the min of the exact curve we plot — they match by construction.
+    equity_months = [m for m, _ in monthly]
+    equity = cumulative_curve(monthly_rets)
+    dd = drawdown_series(monthly_rets)
+    mdd = min(dd) if dd else 0.0
+
+    # Benchmark over the same window, rebased at the portfolio start, so
+    # both drawdown curves are measured from the same starting point.
+    bench_months = [m for m in equity_months if m in bench.returns]
+    bench_rets = [bench.returns[m] for m in bench_months]
+    bench_equity = cumulative_curve(bench_rets)
+    bench_dd = drawdown_series(bench_rets)
 
     return CustomPortfolioResponse(
         portfolio=PortfolioOut(
@@ -668,9 +671,14 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
             max_drawdown=round(mdd, 6),
             violates_min_investment=violations,
         ),
-        equity_months=[equity_months[i] for i in keep],
-        equity=[round(equity[i], 6) for i in keep],
-        drawdown=[round(dd[i], 6) for i in keep],
+        equity_months=equity_months,
+        equity=[round(v, 6) for v in equity],
+        drawdown=[round(v, 6) for v in dd],
+        bench_months=bench_months,
+        bench_equity=[round(v, 6) for v in bench_equity],
+        bench_drawdown=[round(v, 6) for v in bench_dd],
+        bench_max_drawdown=round(min(bench_dd) if bench_dd else 0.0, 6),
+        bench_name=idx[bench_id].get("name", "S&P 500"),
     )
 
 

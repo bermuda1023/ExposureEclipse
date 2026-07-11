@@ -114,6 +114,11 @@ export interface CustomPortfolioResponse {
   equityMonths: string[];
   equity: number[];
   drawdown: number[];
+  benchMonths: string[];
+  benchEquity: number[];
+  benchDrawdown: number[];
+  benchMaxDrawdown: number;
+  benchName: string;
 }
 
 export interface AssetStat {
