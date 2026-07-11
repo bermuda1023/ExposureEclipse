@@ -1,25 +1,17 @@
 """Portfolio math for the fund-analysis page — pure Python (no numpy).
 
-Implements:
-- Empirical annualised stats (mean, std) from a monthly return series.
-- Pearson correlation matrix over the *overlapping* period of each pair
-  (so a fund with a short track record can still contribute — its stats
-  vs. a longer-history fund are computed on their common months).
-- Mean-variance efficient frontier via random Dirichlet sampling +
-  refinement pass. Constraints supported:
-    * long-only (weights ≥ 0)
-    * weights sum to 1
-    * per-asset lower bound `min_weight` (drives the minimum-investment
-      constraint from the UI: `min_weight = min_investment / capital`)
-- Analytical portfolios:
-    * min-variance
-    * max-Sharpe (tangency) portfolio at a given risk-free rate
-
-Assumption overrides — for assets with a short track record (e.g. the
-Primary Commodity Fund's 18-month history) callers can pass
-`assumption_overrides` with a per-asset `{annualised_return, annualised_vol,
-correlation_cap}` and the solver blends those into the empirical estimates.
-That's the "adjustable priors" surface the user asked for on Primary.
+Design rules (personal multi-fund use)
+─────────────────────────────────────
+* **μ for MVO / Sharpe** = arithmetic expected annual return (E[r]×12),
+  optionally net of fee drag. CAGR stays on AssetStat for display only.
+* **Covariance** = pairwise ρ over overlap, **shrunk toward a prior** when
+  overlap is short; never treat n&lt;3 as ρ=0 (that overstates diversification).
+* **Path metrics** (Sortino, max DD, IR, realized Sharpe) use the **common
+  monthly intersection** of assets with weight &gt; 0 — same universe.
+* **Min investment**: soft participation floors + hard post-pass enforcement
+  (zero out sub-ticket weights and renormalize so winners are feasible).
+* **New-cash mode**: existing holdings fixed; sample only free-weight on
+  new capital (true “where does new money go?”).
 """
 
 from __future__ import annotations
@@ -36,13 +28,11 @@ from typing import Sequence
 @dataclass
 class ReturnSeries:
     """One asset's monthly return series, indexed by 'YYYY-MM' string."""
+
     asset_id: str
-    returns: dict[str, float]     # month → decimal return
+    returns: dict[str, float]  # month → decimal return
 
     def since(self, start_month: str) -> "ReturnSeries":
-        """Return a new series filtered to months >= start_month (inclusive).
-        Used by the history-window control on the frontend — lets users see
-        e.g. only post-2021 stats for a fund whose full history spans 2006."""
         return ReturnSeries(
             asset_id=self.asset_id,
             returns={m: r for m, r in self.returns.items() if m >= start_month},
@@ -55,24 +45,28 @@ class AssetStat:
     n_months: int
     monthly_mean: float
     monthly_std: float
-    annualised_return: float      # (1 + monthly_mean)^12 - 1
-    annualised_vol: float         # monthly_std * sqrt(12)
+    annualised_return: float  # CAGR (display / factsheet)
+    expected_return: float  # arithmetic annual E[r] — used in MVO
+    annualised_vol: float  # monthly_std * sqrt(12)
     min_month: str
     max_month: str
+    fee_drag: float = 0.0  # annual fee haircut already applied to expected_return
 
 
 @dataclass
 class AssumptionOverride:
-    """User-supplied override for an asset's stats. `None` = use empirical."""
-    annualised_return: float | None = None
+    """User-supplied override. `None` = use empirical."""
+
+    annualised_return: float | None = None  # treated as expected CAGR-like input for μ
     annualised_vol: float | None = None
-    correlation_cap: float | None = None   # |ρ| capped at this vs any other asset
+    correlation_cap: float | None = None
 
 
 @dataclass
 class PortfolioPoint:
     weights: dict[str, float]
-    annualised_return: float
+    annualised_return: float  # path CAGR when available, else μ blend
+    expected_return: float  # arithmetic portfolio μ used in MVO
     annualised_vol: float
     sharpe: float
     sortino: float = 0.0
@@ -80,9 +74,16 @@ class PortfolioPoint:
     tracking_error: float = 0.0
     max_drawdown: float = 0.0
     violates_min_investment: list[str] = field(default_factory=list)
+    realized_return: float | None = None  # path CAGR when computed
+    realized_vol: float | None = None
 
 
 # ─────────────────────── stats ───────────────────────
+
+# Correlation: shrink empirical ρ toward this prior when overlap is thin.
+CORR_PRIOR = 0.35
+CORR_FULL_N = 36  # full weight on empirical at this many overlapping months
+CORR_MIN_N = 3
 
 
 def _monthly_stats(returns: Sequence[float]) -> tuple[float, float]:
@@ -97,11 +98,6 @@ def _monthly_stats(returns: Sequence[float]) -> tuple[float, float]:
 
 
 def _cagr(returns: Sequence[float]) -> float:
-    """Compound annual growth rate — the industry-standard "annualised
-    return" quoted on fund factsheets. Differs from arithmetic-mean-based
-    annualisation whenever volatility > 0 (Jensen's inequality / volatility
-    drag). Matches the numbers on the Bireme / Upslope / Cedar Creek / CAS
-    / Alluvial letters."""
     n = len(returns)
     if n == 0:
         return 0.0
@@ -113,26 +109,26 @@ def _cagr(returns: Sequence[float]) -> float:
     return cumulative ** (12 / n) - 1
 
 
-def compute_asset_stats(series: ReturnSeries) -> AssetStat:
+def compute_asset_stats(series: ReturnSeries, fee_drag: float = 0.0) -> AssetStat:
     if not series.returns:
-        return AssetStat(series.asset_id, 0, 0.0, 0.0, 0.0, 0.0, "", "")
+        return AssetStat(series.asset_id, 0, 0.0, 0.0, 0.0, 0.0, 0.0, "", "", fee_drag)
     months = sorted(series.returns)
     vals = [series.returns[m] for m in months]
     m_mean, m_std = _monthly_stats(vals)
-    # CAGR (geometric) — the industry standard. Volatility drag on CAS
-    # Sosin is ~10 pts vs arithmetic (34% arith → 24.6% CAGR), so this
-    # matters a lot for high-vol funds.
-    annualised_return = _cagr(vals)
-    annualised_vol = m_std * math.sqrt(12)
+    cagr = _cagr(vals)
+    # Arithmetic annual expected return (MVO μ); haircut by fee drag.
+    expected = m_mean * 12.0 - fee_drag
     return AssetStat(
         asset_id=series.asset_id,
         n_months=len(vals),
         monthly_mean=m_mean,
         monthly_std=m_std,
-        annualised_return=annualised_return,
-        annualised_vol=annualised_vol,
+        annualised_return=cagr,
+        expected_return=expected,
+        annualised_vol=m_std * math.sqrt(12),
         min_month=months[0],
         max_month=months[-1],
+        fee_drag=fee_drag,
     )
 
 
@@ -140,56 +136,79 @@ def _apply_overrides(
     stat: AssetStat,
     override: AssumptionOverride | None,
 ) -> AssetStat:
-    """Return a new AssetStat with overrides applied where provided.
-    User-supplied `annualised_return` is treated as CAGR (industry
-    convention). Monthly mean is back-solved as the CAGR-equivalent
-    monthly compounding rate."""
+    """Apply user μ/σ overrides. User return is interpreted as **expected
+    annual return** (arithmetic-style input for MVO), not pure CAGR."""
     if override is None:
         return stat
-    ann_ret = override.annualised_return if override.annualised_return is not None else stat.annualised_return
-    ann_vol = override.annualised_vol if override.annualised_vol is not None else stat.annualised_vol
-    monthly_mean = (1.0 + ann_ret) ** (1 / 12) - 1.0
-    monthly_std = ann_vol / math.sqrt(12) if ann_vol > 0 else 0.0
+    # Prefer explicit override as expected μ; also store as annualised_return
+    # for UI display of "assumed return".
+    if override.annualised_return is not None:
+        ann_ret = override.annualised_return
+        expected = override.annualised_return  # already net if user says so
+        monthly_mean = expected / 12.0
+    else:
+        ann_ret = stat.annualised_return
+        expected = stat.expected_return
+        monthly_mean = stat.monthly_mean
+    if override.annualised_vol is not None:
+        ann_vol = override.annualised_vol
+        monthly_std = ann_vol / math.sqrt(12) if ann_vol > 0 else 0.0
+    else:
+        ann_vol = stat.annualised_vol
+        monthly_std = stat.monthly_std
     return AssetStat(
         asset_id=stat.asset_id,
         n_months=stat.n_months,
         monthly_mean=monthly_mean,
         monthly_std=monthly_std,
         annualised_return=ann_ret,
+        expected_return=expected,
         annualised_vol=ann_vol,
         min_month=stat.min_month,
         max_month=stat.max_month,
+        fee_drag=stat.fee_drag,
     )
 
 
-def pairwise_correlation(a: ReturnSeries, b: ReturnSeries) -> tuple[float, int]:
-    """Pearson correlation over the overlap of a and b. Returns (rho, n)."""
+def pairwise_correlation(
+    a: ReturnSeries,
+    b: ReturnSeries,
+    *,
+    prior: float = CORR_PRIOR,
+    full_n: int = CORR_FULL_N,
+) -> tuple[float, int]:
+    """Pearson ρ over overlap, shrunk toward ``prior`` when n is small.
+
+    Never returns 0.0 solely because n is tiny — that falsely signals
+    free diversification. n&lt;CORR_MIN_N → pure prior.
+    """
     common = sorted(set(a.returns) & set(b.returns))
-    if len(common) < 3:
-        return 0.0, len(common)
+    n = len(common)
+    if n < CORR_MIN_N:
+        return prior, n
     xs = [a.returns[m] for m in common]
     ys = [b.returns[m] for m in common]
-    mx = sum(xs) / len(xs)
-    my = sum(ys) / len(ys)
-    cov = sum((xs[i] - mx) * (ys[i] - my) for i in range(len(common)))
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    cov = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
     vx = sum((x - mx) ** 2 for x in xs)
     vy = sum((y - my) ** 2 for y in ys)
     denom = math.sqrt(vx * vy)
     if denom == 0:
-        return 0.0, len(common)
-    return cov / denom, len(common)
+        return prior, n
+    r_emp = cov / denom
+    # Linear shrink: weight on empirical rises to 1 at full_n months.
+    w = min(1.0, n / float(full_n))
+    r = w * r_emp + (1.0 - w) * prior
+    return max(-1.0, min(1.0, r)), n
 
 
 def correlation_matrix(
     series_by_id: dict[str, ReturnSeries],
     overrides: dict[str, AssumptionOverride] | None = None,
+    *,
+    prior: float = CORR_PRIOR,
 ) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, int]]]:
-    """Full correlation matrix + per-pair overlap counts.
-
-    If `overrides[a].correlation_cap` is set, |ρ| between a and any other
-    asset is capped at that value (sign preserved). Applied symmetrically
-    — if either side of a pair has a cap, the tighter one wins.
-    """
     ids = list(series_by_id)
     rho: dict[str, dict[str, float]] = {i: {} for i in ids}
     nn: dict[str, dict[str, int]] = {i: {} for i in ids}
@@ -198,11 +217,11 @@ def correlation_matrix(
         for j in ids:
             if i == j:
                 rho[i][j] = 1.0
-                nn[i][j] = series_by_id[i].returns.__len__()
+                nn[i][j] = len(series_by_id[i].returns)
                 continue
             if j in rho[i]:
                 continue
-            r, n = pairwise_correlation(series_by_id[i], series_by_id[j])
+            r, n = pairwise_correlation(series_by_id[i], series_by_id[j], prior=prior)
             cap = None
             for side in (i, j):
                 c = overrides.get(side)
@@ -220,7 +239,18 @@ def correlation_matrix(
 # ─────────────────────── portfolio math ───────────────────────
 
 
+def portfolio_expected_return(weights: dict[str, float], stats: dict[str, AssetStat]) -> float:
+    """Arithmetic portfolio μ = Σ w_i μ_i (MVO numerator)."""
+    return sum(weights[a] * stats[a].expected_return for a in weights)
+
+
 def portfolio_return(weights: dict[str, float], stats: dict[str, AssetStat]) -> float:
+    """Back-compat alias → expected (arithmetic) return for MVO."""
+    return portfolio_expected_return(weights, stats)
+
+
+def portfolio_display_cagr_blend(weights: dict[str, float], stats: dict[str, AssetStat]) -> float:
+    """Weighted average of CAGRs — display only, not used for Sharpe ranking."""
     return sum(weights[a] * stats[a].annualised_return for a in weights)
 
 
@@ -228,10 +258,7 @@ def portfolio_monthly_series(
     weights: dict[str, float],
     series_by_id: dict[str, ReturnSeries],
 ) -> list[tuple[str, float]]:
-    """Build the portfolio's monthly-return series over the union of months
-    that ALL selected (weight > 0) assets share. Returns [(month, ret), ...]
-    sorted by month. Used for portfolio Sortino, drawdown, and the growth-of-$1
-    chart on the frontend."""
+    """Portfolio monthly returns on the **intersection** of active assets."""
     active = [a for a, w in weights.items() if w > 1e-6]
     if not active:
         return []
@@ -247,22 +274,18 @@ def portfolio_monthly_series(
 
 
 MIN_MONTHS_FOR_TAIL_METRICS = 12
-SORTINO_MAX = 15.0  # cap on Sortino — any higher is spurious for annualised data
+SORTINO_MAX = 15.0
+IR_MAX = 15.0
 
 
 def sortino_from_monthly(returns: list[float], mar_annual: float = 0.0) -> float:
-    """Annualised Sortino using CAGR in the numerator (matches factsheet
-    convention) and monthly downside deviation vs the target in the
-    denominator. Returns 0.0 if the sample is <12 months or has fewer
-    than 2 downside months — either case makes the ratio meaningless.
-    Result is capped at SORTINO_MAX to prevent spurious huge values
-    when a short lucky sample almost avoids drawdowns."""
     if len(returns) < MIN_MONTHS_FOR_TAIL_METRICS:
         return 0.0
     mar_m = (1 + mar_annual) ** (1 / 12) - 1
     downside_vals = [(r - mar_m) ** 2 for r in returns if r < mar_m]
     if len(downside_vals) < 2:
         return 0.0
+    # Full-sample downside deviation (classic Sortino): zeros on up months.
     dd = math.sqrt(sum(downside_vals) / len(returns))
     if dd == 0:
         return 0.0
@@ -273,9 +296,6 @@ def sortino_from_monthly(returns: list[float], mar_annual: float = 0.0) -> float
 
 
 def max_drawdown_from_monthly(returns: list[float]) -> float:
-    """Max drawdown over the compounded equity curve. Returns a NEGATIVE
-    number (e.g. -0.32 = 32% peak-to-trough drawdown). Returns 0 if the
-    sample is too short to be meaningful."""
     if len(returns) < MIN_MONTHS_FOR_TAIL_METRICS:
         return 0.0
     equity = 1.0
@@ -290,7 +310,6 @@ def max_drawdown_from_monthly(returns: list[float]) -> float:
 
 
 def cumulative_curve(returns: list[float]) -> list[float]:
-    """Compounded equity curve starting at 1.0."""
     out = []
     equity = 1.0
     for r in returns:
@@ -300,7 +319,6 @@ def cumulative_curve(returns: list[float]) -> list[float]:
 
 
 def drawdown_series(returns: list[float]) -> list[float]:
-    """Per-month drawdown from running peak."""
     out = []
     equity = 1.0
     peak = 1.0
@@ -311,23 +329,18 @@ def drawdown_series(returns: list[float]) -> list[float]:
     return out
 
 
-IR_MAX = 15.0  # cap on IR — annualised values above this are spurious
+def realized_vol_from_monthly(returns: list[float]) -> float:
+    if len(returns) < 2:
+        return 0.0
+    m = sum(returns) / len(returns)
+    var = sum((r - m) ** 2 for r in returns) / (len(returns) - 1)
+    return math.sqrt(var) * math.sqrt(12)
 
 
 def information_ratio_and_te(
     monthly_returns: list[tuple[str, float]],
     benchmark: ReturnSeries,
 ) -> tuple[float, float]:
-    """Annualised IR + tracking error vs a benchmark ReturnSeries.
-
-    IR = mean_active_monthly / std_active_monthly * sqrt(12)
-    TE = std_active_monthly * sqrt(12)
-
-    Active return per month = portfolio_ret - benchmark_ret for months
-    where both are defined. Requires ≥12 aligned months to be meaningful.
-    IR is capped at ±IR_MAX to prevent spurious huge values when a
-    short lucky sample almost perfectly tracks the benchmark.
-    """
     if not monthly_returns:
         return 0.0, 0.0
     active: list[float] = []
@@ -338,8 +351,6 @@ def information_ratio_and_te(
     if n < 12:
         return 0.0, 0.0
     mean_active = sum(active) / n
-    if n < 2:
-        return 0.0, 0.0
     var = sum((a - mean_active) ** 2 for a in active) / (n - 1)
     te_monthly = math.sqrt(var)
     if te_monthly == 0:
@@ -353,7 +364,6 @@ def asset_information_ratio(
     asset: ReturnSeries,
     benchmark: ReturnSeries,
 ) -> tuple[float, float]:
-    """Convenience: IR + TE for a single asset series vs a benchmark."""
     common = sorted(set(asset.returns) & set(benchmark.returns))
     if len(common) < 12:
         return 0.0, 0.0
@@ -366,12 +376,17 @@ def portfolio_vol(
     stats: dict[str, AssetStat],
     rho: dict[str, dict[str, float]],
 ) -> float:
-    """σ_p = sqrt( Σ_i Σ_j w_i w_j σ_i σ_j ρ_ij )"""
     ids = list(weights)
     var = 0.0
     for i in ids:
         for j in ids:
-            var += weights[i] * weights[j] * stats[i].annualised_vol * stats[j].annualised_vol * rho[i][j]
+            var += (
+                weights[i]
+                * weights[j]
+                * stats[i].annualised_vol
+                * stats[j].annualised_vol
+                * rho[i][j]
+            )
     return math.sqrt(max(0.0, var))
 
 
@@ -379,6 +394,72 @@ def _sample_dirichlet(n: int, alpha: float, rng: random.Random) -> list[float]:
     xs = [rng.gammavariate(alpha, 1.0) for _ in range(n)]
     s = sum(xs) or 1.0
     return [x / s for x in xs]
+
+
+def enforce_min_investments(
+    weights: dict[str, float],
+    total_capital: float,
+    min_investment: dict[str, float],
+) -> tuple[dict[str, float], list[str]]:
+    """Hard ticket rule: if 0 &lt; $alloc &lt; min, drop fund and renormalize.
+
+    Returns (feasible_weights, dropped_ids). Dropped means "can't hold at
+    ticket size given capital" — not left as a soft violation flag.
+    """
+    if total_capital <= 0:
+        return weights, []
+    w = dict(weights)
+    dropped: list[str] = []
+    changed = True
+    # Iterate because renormalization can push another line under min.
+    for _ in range(len(w) + 2):
+        if not changed:
+            break
+        changed = False
+        for a, wt in list(w.items()):
+            mi = min_investment.get(a, 0.0)
+            if mi <= 0 or wt <= 1e-9:
+                continue
+            if wt * total_capital + 0.5 < mi:
+                w[a] = 0.0
+                dropped.append(a)
+                changed = True
+        s = sum(w.values())
+        if s <= 0:
+            return {a: 0.0 for a in weights}, dropped
+        if changed:
+            w = {a: v / s for a, v in w.items()}
+    return w, dropped
+
+
+def project_max_weights(
+    weights: dict[str, float],
+    max_weights: dict[str, float],
+) -> dict[str, float] | None:
+    """Iteratively clip weights to max and redistribute excess. None if infeasible."""
+    if not max_weights:
+        return weights
+    w = dict(weights)
+    for _ in range(20):
+        over = {a: w[a] - max_weights[a] for a in w if w[a] > max_weights.get(a, 1.0) + 1e-12}
+        if not over:
+            return w
+        excess = sum(over.values())
+        for a in over:
+            w[a] = max_weights[a]
+        free = [a for a in w if a not in over and w[a] < max_weights.get(a, 1.0) - 1e-12]
+        if not free:
+            return None
+        room = {a: max_weights.get(a, 1.0) - w[a] for a in free}
+        room_sum = sum(room.values())
+        if room_sum <= 1e-12:
+            return None
+        for a in free:
+            w[a] += excess * (room[a] / room_sum)
+    s = sum(w.values())
+    if s <= 0:
+        return None
+    return {a: v / s for a, v in w.items()}
 
 
 def compute_frontier(
@@ -390,135 +471,194 @@ def compute_frontier(
     min_weights: dict[str, float] | None = None,
     hard_min_weights: dict[str, float] | None = None,
     max_weights: dict[str, float] | None = None,
+    min_investment_dollars: dict[str, float] | None = None,
+    total_capital: float = 0.0,
+    free_weight: float = 1.0,
+    fixed_weights: dict[str, float] | None = None,
     samples: int = 40_000,
     seed: int = 42,
-) -> tuple[list[PortfolioPoint], PortfolioPoint, PortfolioPoint, PortfolioPoint | None, PortfolioPoint, PortfolioPoint | None]:
-    """Trace the efficient frontier by Dirichlet sampling. Returns
-    (frontier_hull, max_sharpe, min_variance, max_sortino, min_drawdown,
-    max_information_ratio).
+) -> tuple[
+    list[PortfolioPoint],
+    PortfolioPoint,
+    PortfolioPoint,
+    PortfolioPoint | None,
+    PortfolioPoint,
+    PortfolioPoint | None,
+]:
+    """Trace efficient frontier via Dirichlet sampling.
 
-    `min_weights[asset_id]` (optional) applies a per-asset **soft** lower
-    bound — the floor only kicks in if the participation-subset draw
-    happens to include that asset. Right for min-investment constraints
-    where a fund can be skipped entirely ("if you invest, invest ≥ X").
-
-    `hard_min_weights[asset_id]` (optional) applies a **hard** lower
-    bound — assets in this dict are ALWAYS included in every sample and
-    their floor is always applied. Right for no-sell / existing-position
-    floors, where the asset must remain in the portfolio at ≥ its
-    current weight.
-
-    `max_weights[asset_id]` (optional) hard-caps each asset at that
-    weight; violating samples are skipped.
-
-    When `series_by_id` is supplied we also compute per-sample Sortino
-    and max drawdown (from the joint monthly series) and return the
-    max-Sortino + min-drawdown points.
+    ``fixed_weights`` + ``free_weight``: new-cash mode. Sample only the free
+    sleeve (sum free_weight), then final w = fixed + free_sample.
     """
     ids = list(stats)
     n = len(ids)
+    empty = PortfolioPoint({}, 0.0, 0.0, 0.0, 0.0)
     if n == 0:
-        empty = PortfolioPoint({}, 0.0, 0.0, 0.0)
         return [], empty, empty, None, empty, None
+
+    fixed_weights = fixed_weights or {}
+    min_weights = min_weights or {}
+    hard_min_weights = hard_min_weights or {}
+    max_weights = max_weights or {}
+    min_investment_dollars = min_investment_dollars or {}
+
+    hard_floor_sum = sum(hard_min_weights.values())
+    if hard_floor_sum > 1.0 + 1e-9:
+        scale = 1.0 / hard_floor_sum
+        hard_min_weights = {a: w * scale for a, w in hard_min_weights.items()}
+
     if n == 1:
         one = ids[0]
+        w = {one: 1.0}
+        mu = portfolio_expected_return(w, stats)
+        vol = stats[one].annualised_vol
+        sharpe = (mu - risk_free_rate) / vol if vol > 0 else 0.0
         p = PortfolioPoint(
-            weights={one: 1.0},
+            weights=w,
             annualised_return=stats[one].annualised_return,
-            annualised_vol=stats[one].annualised_vol,
-            sharpe=(stats[one].annualised_return - risk_free_rate) / stats[one].annualised_vol if stats[one].annualised_vol > 0 else 0.0,
+            expected_return=mu,
+            annualised_vol=vol,
+            sharpe=sharpe,
         )
         return [p], p, p, p, p, p
 
     rng = random.Random(seed)
-    min_weights = min_weights or {}
-    hard_min_weights = hard_min_weights or {}
-    max_weights = max_weights or {}
-    # Hard floors must sum to ≤ 1, otherwise the problem is infeasible.
-    hard_floor_sum = sum(hard_min_weights.values())
-    if hard_floor_sum > 1.0:
-        # Rescale so the sum is exactly 1 — the caller has over-specified;
-        # this gives them the closest feasible portfolio at their floors.
-        scale = 1.0 / hard_floor_sum
-        hard_min_weights = {a: w * scale for a, w in hard_min_weights.items()}
     points: list[PortfolioPoint] = []
-
-    # Mix Dirichlet with concentration levels to cover both the diffuse
-    # (equal-ish weight) and concentrated (single-asset-heavy) parts of
-    # the simplex.
     alpha_choices = [0.2, 0.5, 1.0, 2.0, 5.0]
+
+    # Assets we can put free capital into (not locked 100% fixed).
+    free_ids = [i for i in ids if free_weight > 1e-12]
 
     for k in range(samples):
         alpha = alpha_choices[k % len(alpha_choices)]
-        # Choose which assets participate (each independently with prob 0.65).
-        # Assets with hard floors ALWAYS participate — they must remain
-        # in the portfolio at ≥ their hard floor. This is what the no-sell
-        # / existing-position constraint requires.
-        chosen = [i for i in ids if i in hard_min_weights or rng.random() < 0.65]
-        if not chosen:
-            chosen = ids
-        raw = _sample_dirichlet(len(chosen), alpha, rng)
-        weights = {i: 0.0 for i in ids}
-        for c, w in zip(chosen, raw):
-            weights[c] = w
 
-        # Per-asset floor = max(soft floor if participating, hard floor
-        # always). Hard floors are guaranteed applied because every hard-
-        # floor asset is now always in `chosen`.
-        floors: dict[str, float] = {}
-        for a in ids:
-            f = 0.0
-            if weights[a] > 0:
-                f = max(f, min_weights.get(a, 0.0))
-            f = max(f, hard_min_weights.get(a, 0.0))
-            floors[a] = f
-
-        floor_total = sum(floors.values())
-        if floor_total > 1.0:
-            continue
-        headroom = 1.0 - floor_total
-        non_floor_sum = sum(max(0.0, weights[a] - floors[a]) for a in ids)
-        if non_floor_sum <= 0:
-            # Everyone's at their floor already; just renormalise floors
-            s = sum(floors.values()) or 1.0
-            weights = {a: floors[a] / s for a in ids}
+        # Sample free sleeve
+        if free_weight <= 1e-12:
+            weights = {i: fixed_weights.get(i, 0.0) for i in ids}
+            sfix = sum(weights.values()) or 1.0
+            weights = {i: weights[i] / sfix for i in ids}
         else:
+            chosen = [
+                i
+                for i in free_ids
+                if i in hard_min_weights or rng.random() < 0.65
+            ]
+            if not chosen:
+                chosen = list(free_ids)
+            raw = _sample_dirichlet(len(chosen), alpha, rng)
+            free_w = {i: 0.0 for i in ids}
+            for c, wv in zip(chosen, raw):
+                free_w[c] = wv * free_weight
+
+            # Soft floors apply only to free sleeve participation
+            floors: dict[str, float] = {}
             for a in ids:
-                base = floors[a]
-                excess = max(0.0, weights[a] - base) / non_floor_sum * headroom
-                weights[a] = base + excess
+                f = hard_min_weights.get(a, 0.0)
+                if free_w[a] > 0:
+                    # Soft min is absolute portfolio weight
+                    f = max(f, min_weights.get(a, 0.0))
+                # Fixed holdings are part of floor for new-cash mode
+                f = max(f, fixed_weights.get(a, 0.0))
+                floors[a] = f
 
-        # Hard max-weight cap: reject if any active asset breaches
-        if max_weights:
-            over = any(weights[a] > max_weights.get(a, 1.0) + 1e-9 for a in ids)
-            if over:
+            floor_total = sum(floors.values())
+            if floor_total > 1.0 + 1e-9:
                 continue
+            headroom = 1.0 - floor_total
+            # Combine fixed + free sample as starting point
+            base_w = {a: fixed_weights.get(a, 0.0) + free_w[a] for a in ids}
+            sbase = sum(base_w.values()) or 1.0
+            base_w = {a: base_w[a] / sbase for a in ids}
 
-        ret = portfolio_return(weights, stats)
-        vol = portfolio_vol(weights, stats, rho)
-        sharpe = (ret - risk_free_rate) / vol if vol > 0 else 0.0
+            non_floor_sum = sum(max(0.0, base_w[a] - floors[a]) for a in ids)
+            if non_floor_sum <= 0:
+                s = sum(floors.values()) or 1.0
+                weights = {a: floors[a] / s for a in ids}
+            else:
+                weights = {}
+                for a in ids:
+                    base = floors[a]
+                    excess = max(0.0, base_w[a] - base) / non_floor_sum * headroom
+                    weights[a] = base + excess
+
+        # Project max weights
+        projected = project_max_weights(weights, max_weights)
+        if projected is None:
+            continue
+        weights = projected
+
+        # Hard ticket sizes
+        if total_capital > 0 and min_investment_dollars:
+            weights, _dropped = enforce_min_investments(
+                weights, total_capital, min_investment_dollars
+            )
+            if sum(weights.values()) <= 0:
+                continue
+            # Re-apply hard mins after ticket drop if needed
+            for a, f in hard_min_weights.items():
+                if weights.get(a, 0.0) + 1e-9 < f:
+                    # Infeasible after ticket enforcement
+                    weights = None  # type: ignore[assignment]
+                    break
+            if weights is None:
+                continue
+            s = sum(weights.values())
+            weights = {a: v / s for a, v in weights.items()}
+
+        mu = portfolio_expected_return(weights, stats)
+        vol_analytical = portfolio_vol(weights, stats, rho)
+
         sortino = 0.0
         mdd = 0.0
         ir = 0.0
         te = 0.0
+        realized_cagr = None
+        realized_vol = None
+        # Prefer path-based Sharpe when we have enough common history —
+        # same universe as Sortino / DD / IR.
         if series_by_id is not None:
             monthly_series = portfolio_monthly_series(weights, series_by_id)
             monthly_rets = [r for _, r in monthly_series]
-            if monthly_rets:
+            if len(monthly_rets) >= MIN_MONTHS_FOR_TAIL_METRICS:
                 sortino = sortino_from_monthly(monthly_rets, mar_annual=risk_free_rate)
                 mdd = max_drawdown_from_monthly(monthly_rets)
+                realized_cagr = _cagr(monthly_rets)
+                realized_vol = realized_vol_from_monthly(monthly_rets)
                 if benchmark_series is not None:
                     ir, te = information_ratio_and_te(monthly_series, benchmark_series)
-        points.append(PortfolioPoint(weights, ret, vol, sharpe, sortino, ir, te, mdd))
+
+        if realized_vol is not None and realized_vol > 0 and realized_cagr is not None:
+            # Path Sharpe uses realized CAGR vs path vol (aligned universe).
+            sharpe = (realized_cagr - risk_free_rate) / realized_vol
+            ann_ret_display = realized_cagr
+            vol = realized_vol
+        else:
+            sharpe = (mu - risk_free_rate) / vol_analytical if vol_analytical > 0 else 0.0
+            ann_ret_display = portfolio_display_cagr_blend(weights, stats)
+            vol = vol_analytical
+
+        points.append(
+            PortfolioPoint(
+                weights=weights,
+                annualised_return=ann_ret_display,
+                expected_return=mu,
+                annualised_vol=vol,
+                sharpe=sharpe,
+                sortino=sortino,
+                information_ratio=ir,
+                tracking_error=te,
+                max_drawdown=mdd,
+                realized_return=realized_cagr,
+                realized_vol=realized_vol,
+            )
+        )
 
     if not points:
-        empty = PortfolioPoint({i: 0.0 for i in ids}, 0.0, 0.0, 0.0)
+        empty = PortfolioPoint({i: 0.0 for i in ids}, 0.0, 0.0, 0.0, 0.0)
         return [], empty, empty, None, empty, None
 
-    # Extract the efficient frontier (upper envelope over vol bins).
     points.sort(key=lambda p: p.annualised_vol)
     frontier: list[PortfolioPoint] = []
-    # Bin by vol, keep max-return per bin
     vol_max = max(p.annualised_vol for p in points)
     n_bins = 100
     bin_size = vol_max / n_bins if vol_max > 0 else 1.0
@@ -528,7 +668,6 @@ def compute_frontier(
         cur = best_per_bin.get(bkt)
         if cur is None or p.annualised_return > cur.annualised_return:
             best_per_bin[bkt] = p
-    # Keep points that are Pareto-improving as vol rises
     best_ret_so_far = -1e18
     for bkt in sorted(best_per_bin):
         p = best_per_bin[bkt]
@@ -543,18 +682,40 @@ def compute_frontier(
     min_dd = min_var
     if series_by_id is not None:
         max_sortino = max(points, key=lambda p: p.sortino)
-        min_dd = max(points, key=lambda p: p.max_drawdown)  # least negative
+        min_dd = max(points, key=lambda p: p.max_drawdown)
     if benchmark_series is not None:
         max_ir = max(points, key=lambda p: p.information_ratio)
     return frontier, max_sharpe, min_var, max_sortino, min_dd, max_ir
 
 
-# ─────────────────────── loader ───────────────────────
-
-
 def series_from_asset_json(asset: dict) -> ReturnSeries:
-    """Build ReturnSeries from one JSON asset entry."""
     return ReturnSeries(
         asset_id=asset["id"],
         returns={r["month"]: r["ret"] for r in asset["returns"]},
     )
+
+
+def parse_mgmt_fee_drag(fees: str | None) -> float:
+    """Best-effort parse of annual mgmt fee from strings like '2% mgmt / 20% perf'.
+
+    Perf fees are path-dependent — not modeled. Mgmt fee is applied as a
+    constant annual haircut to expected return.
+    """
+    if not fees:
+        return 0.0
+    import re
+
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*mgmt", fees, re.I)
+    if m:
+        return float(m.group(1)) / 100.0
+    m = re.search(r"expense ratio.*?(\d+(?:\.\d+)?)\s*%", fees, re.I)
+    if m:
+        return float(m.group(1)) / 100.0
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*expense", fees, re.I)
+    if m:
+        return float(m.group(1)) / 100.0
+    # "0.09% expense ratio"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%", fees)
+    if m and "expense" in fees.lower():
+        return float(m.group(1)) / 100.0
+    return 0.0

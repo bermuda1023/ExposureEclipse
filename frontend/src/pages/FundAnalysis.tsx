@@ -134,6 +134,9 @@ export function FundAnalysis() {
   const [newCapital, setNewCapital] = useState<number>(1_000_000);
   const [currentInvestments, setCurrentInvestments] = useState<Record<string, number>>({});
   const [noSell, setNoSell] = useState<boolean>(false);
+  // Default: only allocate NEW capital; leave current holdings fixed (personal use).
+  const [allocateNewOnly, setAllocateNewOnly] = useState<boolean>(true);
+  const [netOfFees, setNetOfFees] = useState<boolean>(true);
   const [historyWindow, setHistoryWindow] = useState<string | null>(null);   // null = all
   const [customWindowMonth, setCustomWindowMonth] = useState<string>("2019-01");
   const [benchmarkAssetId, setBenchmarkAssetId] = useState<string>("spy");
@@ -170,6 +173,8 @@ export function FundAnalysis() {
         .map(([assetId, amount]) => ({ assetId, amount })),
       respectMinInvestment: respectMin,
       noSell,
+      allocateNewCapitalOnly: allocateNewOnly,
+      netOfFees,
       overrides: Object.values(overrides).filter((o) => selected.has(o.assetId)),
       maxWeights: Object.entries(maxWeights)
         .filter(([id]) => selected.has(id))
@@ -177,7 +182,7 @@ export function FundAnalysis() {
       minInvestmentOverrides: Object.entries(minInvOverrides)
         .filter(([id]) => selected.has(id))
         .map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
-      totalCapital: newCapital,
+      newCapital,
       samplesPerScenario: 6000,
     });
   };
@@ -190,6 +195,8 @@ export function FundAnalysis() {
         .filter(([id, amt]) => selected.has(id) && amt > 0)
         .map(([assetId, amount]) => ({ assetId, amount })),
       noSell,
+      allocateNewCapitalOnly: allocateNewOnly,
+      netOfFees,
       historyWindowStart,
       benchmarkAssetId,
       perAssetBenchmarks: Object.entries(perAssetBenchmarks)
@@ -392,12 +399,40 @@ export function FundAnalysis() {
           </label>
 
           <label style={S.labelRow}>
-            <input type="checkbox" checked={noSell} onChange={(e) => setNoSell(e.target.checked)} />
-            Don't reduce existing positions (add-only)
+            <input
+              type="checkbox"
+              checked={allocateNewOnly}
+              onChange={(e) => setAllocateNewOnly(e.target.checked)}
+            />
+            Allocate new capital only (keep current holdings fixed)
           </label>
           <p style={S.hint}>
-            If on, current holdings are floors — the optimizer can add capital to any fund but
-            can't propose selling any current position.
+            Default on for personal use: optimizer only deploys <em>new</em> dollars; existing
+            balances stay put. Turn off to rebalance the full book (current + new).
+          </p>
+
+          <label style={S.labelRow}>
+            <input
+              type="checkbox"
+              checked={noSell}
+              onChange={(e) => setNoSell(e.target.checked)}
+              disabled={allocateNewOnly}
+            />
+            Don't reduce existing positions (add-only floors)
+          </label>
+          <p style={S.hint}>
+            {allocateNewOnly
+              ? "Implied when “new capital only” is on."
+              : "If on, current holdings are floors — can add but not sell."}
+          </p>
+
+          <label style={S.labelRow}>
+            <input type="checkbox" checked={netOfFees} onChange={(e) => setNetOfFees(e.target.checked)} />
+            Net of management fees (haircut expected returns)
+          </label>
+          <p style={S.hint}>
+            Applies the listed mgmt fee as an annual drag on expected return. Perf fees are not
+            modeled (path-dependent).
           </p>
 
           <label style={S.label}>
@@ -1877,6 +1912,8 @@ function InteractiveBuilder({
         totalCapital: capital,
         respectMinInvestment: respectMin,
         historyWindowStart,
+        benchmarkAssetId: result.benchmarkAssetId,
+        netOfFees: true,
         overrides: Object.values(overrides),
         minInvestmentOverrides: Object.entries(minInvOverrides).map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       })
@@ -1884,7 +1921,7 @@ function InteractiveBuilder({
         .finally(() => setPending(false));
     }, 200);
     return () => clearTimeout(t);
-  }, [weights, riskFreeRate, capital, respectMin, overrides, minInvOverrides, historyWindowStart]);
+  }, [weights, riskFreeRate, capital, respectMin, overrides, minInvOverrides, historyWindowStart, result.benchmarkAssetId]);
 
   const seedFrom = (preset: PortfolioPoint) => {
     const w: Record<string, number> = {};

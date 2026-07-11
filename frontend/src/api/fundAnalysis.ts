@@ -60,6 +60,10 @@ export interface OptimizeRequest {
   newCapital: number;
   currentInvestments: CurrentInvestmentIn[];
   noSell: boolean;
+  /** Default true: only deploy new capital; keep current holdings fixed. */
+  allocateNewCapitalOnly: boolean;
+  /** Default true: haircut expected returns by mgmt fee. */
+  netOfFees: boolean;
   historyWindowStart: string | null;
   benchmarkAssetId: string;
   perAssetBenchmarks: PerAssetBenchmarkIn[];
@@ -74,6 +78,7 @@ export interface OptimizeRequest {
 export interface PortfolioPoint {
   weights: Record<string, number>;
   annualisedReturn: number;
+  expectedReturn?: number;
   annualisedVol: number;
   sharpe: number;
   sortino: number;
@@ -98,6 +103,8 @@ export interface CustomPortfolioRequest {
   totalCapital: number;
   respectMinInvestment: boolean;
   historyWindowStart: string | null;
+  benchmarkAssetId?: string;
+  netOfFees?: boolean;
   overrides: AssumptionOverrideIn[];
   minInvestmentOverrides: MinInvestmentOverrideIn[];
 }
@@ -183,10 +190,13 @@ export interface RobustnessRequest {
   currentInvestments: CurrentInvestmentIn[];
   respectMinInvestment: boolean;
   noSell: boolean;
+  allocateNewCapitalOnly?: boolean;
+  netOfFees?: boolean;
   overrides: AssumptionOverrideIn[];
   maxWeights: MaxWeightIn[];
   minInvestmentOverrides: MinInvestmentOverrideIn[];
-  totalCapital: number;
+  /** New dollars to deploy (added to current holdings). */
+  newCapital: number;
   samplesPerScenario: number;
 }
 

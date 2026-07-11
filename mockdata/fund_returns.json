@@ -1,6 +1,6 @@
 {
   "asOf": "2026-06-30",
-  "note": "Fund monthly returns transcribed verbatim from investor-letter PDFs; SPY / AGG monthly returns are generated deterministically from well-known annual total-return anchors with realistic monthly volatility (see build_fund_returns.py).",
+  "note": "Fund monthly returns transcribed from investor-letter PDFs. Reference indices (SPY, AGG, HFRX, R2K, RMC, MDY, MSCI World) use real historical monthly total-return series (see build_fund_returns.py). Optimizer uses arithmetic expected returns net of mgmt-fee drag by default; path metrics (Sortino/IR/DD) use common-month intersection of holdings.",
   "assets": [
     {
       "id": "gator",
