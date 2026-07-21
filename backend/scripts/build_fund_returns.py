@@ -588,8 +588,7 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Long/short equity, defensive-tilted",
                 "manager": "George Livadas",
-                # PDF doesn't state a $ minimum. Default 250k.
-                "minInvestment": 250_000,
+                "minInvestment": 200_000,
                 "aumMillions": None,
                 "fees": "1.25% mgmt / 15% perf (typical LP)",
                 "lockup": "1yr, monthly redemption thereafter",
@@ -648,7 +647,7 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Long-only global equity, contrarian value (Orbis SICAV)",
                 "manager": "Orbis Investment Management",
-                "minInvestment": 250_000,
+                "minInvestment": 50_000,
                 "aumMillions": None,
                 "fees": "Investor Class fee structure",
                 "lockup": "Contact GP",
@@ -662,7 +661,7 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Multi-asset global balanced (equity + fixed income + other)",
                 "manager": "Orbis Investment Management",
-                "minInvestment": 250_000,
+                "minInvestment": 50_000,
                 "aumMillions": None,
                 "fees": "ICF fee structure",
                 "lockup": "Contact GP",
@@ -676,9 +675,7 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Long-only global equity, contrarian value",
                 "manager": "Contrarius Capital Management",
-                # PDF-based ticket size not provided; using \$250k default like
-                # the other funds where the PDF doesn't state.
-                "minInvestment": 250_000,
+                "minInvestment": 50_000,
                 "aumMillions": None,
                 "fees": "Contact GP (typical UCITS long-only fund fee schedule)",
                 "lockup": "Contact GP",
