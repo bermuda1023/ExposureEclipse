@@ -277,10 +277,13 @@ def live_storm_bundle(
             status_code=404,
             detail={
                 "code": "DATASET_NOT_FOUND",
-                "message": f"Storm '{atcf_id}' not found in IBTrACS replay set.",
+                "message": (
+                    f"Storm '{atcf_id}' not found in the live NHC feed or the "
+                    "replay set."
+                ),
             },
         )
-    observed_storm, forecasts = result
+    observed_storm, forecasts, is_live = result
 
     observed_fixes = [
         ObservedFix(
@@ -400,7 +403,7 @@ def live_storm_bundle(
         pressure_mb=observed_storm.track[-1].pressure_mb,
         lat=observed_storm.track[-1].lat,
         lon=observed_storm.track[-1].lon,
-        is_live=False,
+        is_live=is_live,
         label=f"{observed_storm.name} ({observed_storm.year})",
     )
 

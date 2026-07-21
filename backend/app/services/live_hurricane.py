@@ -24,6 +24,7 @@ import json
 import math
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 from .hurdat2 import category_for_wind
@@ -40,16 +41,12 @@ from .ibtracs import Storm, TrackPoint, fetch_storms, lookup_r64_quads_nm
 CURRENT_STORMS_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
 FETCH_TIMEOUT_S = 30
 
-# Curated replay candidates — recent notable Atlantic hurricanes with
-# rich IBTrACS coverage (full Rmax + R64 quadrants). Order = display order.
+# Curated replay candidates — one recent recognizable Atlantic hurricane with
+# rich IBTrACS coverage (full Rmax + R64 quadrants). Kept as a single demo
+# case so the "replay" picker shows one option when the basin is quiet.
 REPLAY_CANDIDATES: tuple[tuple[str, str, int], ...] = (
     # (atcf_id, display_name, year)
-    ("AL092022", "Ian",     2022),
-    ("AL112017", "Irma",    2017),
-    ("AL142018", "Michael", 2018),
-    ("AL092004", "Ivan",    2004),
-    ("AL122005", "Katrina", 2005),
-    ("AL052019", "Dorian",  2019),
+    ("AL092022", "Ian", 2022),
 )
 
 
@@ -192,6 +189,17 @@ def _coerce_int(v) -> int | None:
         return None
 
 
+def _year_from_atcf(atcf_id: str) -> int:
+    """NHC ATCF IDs encode the season year in the trailing four digits
+    (e.g. ``AL022026`` → 2026). Falls back to 0 if the id is malformed."""
+    if len(atcf_id) < 4:
+        return 0
+    try:
+        return int(atcf_id[-4:])
+    except ValueError:
+        return 0
+
+
 def fetch_active_summaries() -> list[LiveStormSummary]:
     """Return the live list from NHC; empty list when nothing's active."""
     try:
@@ -210,7 +218,9 @@ def fetch_active_summaries() -> list[LiveStormSummary]:
         pressure = _coerce_int(s.get("pressure"))
         lat = _coerce_float(s.get("latitudeNumeric") or s.get("latitude"))
         lon = _coerce_float(s.get("longitudeNumeric") or s.get("longitude"))
-        year = _coerce_int((s.get("issuedTime") or "")[:4]) or 0
+        # Season year lives in the ATCF id itself; NHC's CurrentStorms.json
+        # does not expose a stable top-level year field.
+        year = _year_from_atcf(storm_id)
         cat = category_for_wind(intensity)
         cat_label = f"Cat {cat}" if cat >= 1 else "TS" if intensity >= 34 else "TD"
         out.append(
@@ -228,6 +238,49 @@ def fetch_active_summaries() -> list[LiveStormSummary]:
             )
         )
     return out
+
+
+def _get_live_entry(atcf_id: str) -> dict | None:
+    """Look up the raw CurrentStorms.json entry for one live NHC storm."""
+    try:
+        data = _fetch_current_storms_raw()
+    except Exception:  # noqa: BLE001
+        return None
+    target = atcf_id.upper()
+    for s in data.get("activeStorms", []) or []:
+        sid = (s.get("id") or s.get("binNumber") or "").upper()
+        if sid == target:
+            return s
+    return None
+
+
+def _project_point(
+    lat: float, lon: float, bearing_deg: float, distance_nm: float,
+) -> tuple[float, float]:
+    """Flat-earth projection from (lat, lon) along ``bearing_deg`` (measured
+    clockwise from true north, i.e. NHC's ``movementDir``). Good enough over
+    forecast distances (< ~1500 nm) for a demo cone."""
+    d_deg = distance_nm / 60.0  # 1° latitude ≈ 60 nm
+    b_rad = math.radians(bearing_deg)
+    d_lat = d_deg * math.cos(b_rad)
+    d_lon = d_deg * math.sin(b_rad) / max(math.cos(math.radians(lat)), 0.01)
+    return lat + d_lat, lon + d_lon
+
+
+def _shift_iso_hours(iso_str: str, hours: int) -> str:
+    """Shift an ISO-8601 datetime by ``hours`` (may be negative). Returns the
+    input unchanged if it can't be parsed — the field is display-only."""
+    if not iso_str:
+        return ""
+    try:
+        s = iso_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        shifted = dt + timedelta(hours=hours)
+        return shifted.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return iso_str
 
 
 # ─────────────────────────── replay (IBTrACS-driven) ───────────────────────────
@@ -273,20 +326,145 @@ def _get_replay_storm(atcf_id: str) -> Storm | None:
 # ─────────────────────────── storm + forecast assembly ───────────────────────────
 
 
+# NHC's forecast-track KMZ/shapefile has the true cone points, but pyshp is a
+# dev-only dep (see CLAUDE.md: no pandas/pyshp in prod). We project a
+# straight-line track from the current advisory's motion vector at the standard
+# NHC lead-time anchors. Good enough for the demo cone; when NHC's real
+# GeoJSON feed lands we can swap this out.
+FORECAST_HOUR_ANCHORS: tuple[int, ...] = (0, 12, 24, 36, 48, 72, 96, 120)
+
+
+def _live_storm_and_forecasts(
+    entry: dict,
+) -> tuple[Storm, list[ForecastTrack]] | None:
+    """Build (observed_storm, [current_advisory]) from a live NHC
+    CurrentStorms.json entry. Observed track = current fix plus two
+    back-projected trailing fixes (visual only); forecast track = motion-vector
+    projection at the standard NHC lead-time anchors."""
+    storm_id = (entry.get("id") or entry.get("binNumber") or "").upper()
+    if not storm_id:
+        return None
+    lat = _coerce_float(entry.get("latitudeNumeric") or entry.get("latitude"))
+    lon = _coerce_float(entry.get("longitudeNumeric") or entry.get("longitude"))
+    if lat is None or lon is None:
+        return None
+    intensity = _coerce_int(entry.get("intensity")) or 30
+    pressure = _coerce_int(entry.get("pressure"))
+    move_dir = _coerce_float(entry.get("movementDir"))
+    move_speed = _coerce_float(entry.get("movementSpeed"))
+    classification = (
+        entry.get("classification")
+        or entry.get("intensityClassification")
+        or "TC"
+    )
+    name = entry.get("name") or "UNNAMED"
+    last_update = entry.get("lastUpdate") or ""
+    year = _year_from_atcf(storm_id)
+
+    observed: list[TrackPoint] = []
+    # Back-projected trailing points — purely visual, so the map shows a
+    # short past track instead of a lone dot. Only meaningful when a motion
+    # vector is available.
+    if move_dir is not None and move_speed is not None and move_speed > 0:
+        for hours_back in (12, 6):
+            back_lat, back_lon = _project_point(
+                lat, lon, move_dir + 180.0, move_speed * hours_back,
+            )
+            observed.append(
+                TrackPoint(
+                    datetime_utc=_shift_iso_hours(last_update, -hours_back),
+                    record_id="",
+                    status=classification,
+                    lat=back_lat,
+                    lon=back_lon,
+                    wind_kt=intensity,
+                    pressure_mb=pressure,
+                )
+            )
+    observed.append(
+        TrackPoint(
+            datetime_utc=last_update,
+            record_id="",
+            status=classification,
+            lat=lat,
+            lon=lon,
+            wind_kt=intensity,
+            pressure_mb=pressure,
+        )
+    )
+
+    live_storm = Storm(
+        storm_id=storm_id,
+        name=name,
+        year=year,
+        track=observed,
+    )
+
+    forecast_points: list[ForecastPoint] = []
+    if move_dir is not None and move_speed is not None and move_speed > 0:
+        for h in FORECAST_HOUR_ANCHORS:
+            f_lat, f_lon = _project_point(lat, lon, move_dir, move_speed * h)
+            forecast_points.append(
+                ForecastPoint(
+                    lat=f_lat,
+                    lon=f_lon,
+                    wind_kt=intensity,
+                    hours_out=h,
+                    valid_time=_shift_iso_hours(last_update, h),
+                )
+            )
+    else:
+        # Stationary or unknown motion — one point at T+0 so the frontend has
+        # something to render.
+        forecast_points.append(
+            ForecastPoint(
+                lat=lat,
+                lon=lon,
+                wind_kt=intensity,
+                hours_out=0,
+                valid_time=last_update,
+            )
+        )
+
+    advisories = [
+        ForecastTrack(
+            advisory_number=1,
+            issued_at=last_update,
+            points=forecast_points,
+            # Marked False: the fix is the NHC current advisory, projected
+            # along the reported motion vector. Not a historical ghost line.
+            synthetic=False,
+        )
+    ]
+    return live_storm, advisories
+
+
 def storm_and_forecasts(
     atcf_id: str,
     *,
     as_of_index: int | None = None,
     n_prior_advisories: int = 5,
-) -> tuple[Storm, list[ForecastTrack]] | None:
-    """Return (observed_storm_so_far, [latest_forecast, prior_forecasts...]).
+) -> tuple[Storm, list[ForecastTrack], bool] | None:
+    """Return (observed_storm_so_far, [latest_forecast, prior_forecasts...],
+    is_live).
 
-    For replay storms only (live forecast scraping is out of scope for v1).
-    ``as_of_index`` chooses which track point is "now" — defaults to two-thirds
-    of the way through the hurricane phase so the forecast tail is meaningful.
-    Earlier "advisories" are synthesized by truncating the track at earlier
-    points and laterally perturbing the forecast tail.
+    Live path (``is_live=True``): a storm currently in NHC's CurrentStorms
+    feed. Observed track = current fix; forecast = motion-vector projection at
+    the standard NHC lead-time anchors.
+
+    Replay path (``is_live=False``): a retired storm from IBTrACS.
+    ``as_of_index`` chooses which track point is "now" — defaults to
+    two-thirds of the way through the hurricane phase so the forecast tail is
+    meaningful. Earlier "advisories" are synthesized by truncating the track
+    at earlier points and laterally perturbing the forecast tail.
     """
+    live_entry = _get_live_entry(atcf_id)
+    if live_entry is not None:
+        live_result = _live_storm_and_forecasts(live_entry)
+        if live_result is not None:
+            live_storm, live_advisories = live_result
+            return live_storm, live_advisories, True
+
     storm = _get_replay_storm(atcf_id)
     if storm is None:
         return None
@@ -367,4 +545,4 @@ def storm_and_forecasts(
         )
 
     # Latest advisory = first one (back=0). Reverse so callers see latest-first.
-    return observed, advisories
+    return observed, advisories, False
