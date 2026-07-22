@@ -28,15 +28,17 @@ import {
 
 const LAYER_ID = "wind-particles";
 
-// Tuning knobs. Values are chosen so a typical storm bbox shows fluid
-// motion without being distracting. Particle count is the biggest lever
-// on perceived smoothness; too many and the fade-trail effect looks
-// smeared, too few and the field looks sparse.
-const PARTICLE_RES = 128;                // → 128×128 = 16384 particles
-const FADE_OPACITY = 0.9;                // 1.0 = no fade, <1 = trails fade out
-const SPEED_FACTOR = 12.0;               // controls particle drift speed
-const DROP_RATE = 0.003;                 // baseline particle respawn rate
+// Tuning knobs. Values chosen so a typical storm bbox shows fluid motion
+// without obscuring the underlying heatmap. Was 16384 particles at fade
+// 0.9 which stacked up until the map went dark on a Bertha-size bbox —
+// even with fast fade, 16k dots × point-size 1.5 covered a huge chunk of
+// the visible pixels every frame.
+const PARTICLE_RES = 64;                 // → 64×64 = 4096 particles
+const FADE_OPACITY = 0.82;               // faster decay so trails stay wispy
+const SPEED_FACTOR = 10.0;               // particle drift speed
+const DROP_RATE = 0.004;                 // baseline particle respawn rate
 const DROP_RATE_BUMP = 0.01;             // extra respawn in low-wind cells
+const POINT_SIZE = 1.0;                  // pixel size for each particle
 
 // SSHWS-inspired color ramp — matches the fill palette so animated
 // particles read as the same visual language as the underlying heatmap.
@@ -371,6 +373,12 @@ export function WindParticleLayer({ map }: Props) {
           const framebuffer = gl.createFramebuffer()!;
           const colorRampTexture = buildColorRampTexture(gl);
 
+          // Clear screen textures to transparent — createTexture(null)
+          // leaves undefined content on most drivers, which shows up as
+          // random garbage bleeding through the trails.
+          clearTexture(gl, framebuffer, screenTextureA);
+          clearTexture(gl, framebuffer, screenTextureB);
+
           state = {
             gl, updateProgram, drawProgram, screenProgram,
             quadBuffer, particleIndexBuffer,
@@ -400,7 +408,10 @@ export function WindParticleLayer({ map }: Props) {
         if (!state || cancelled) return;
         const s = state;
 
-        // Reallocate screen textures if the canvas size changed.
+        // Reallocate screen textures if the canvas size changed. Also
+        // clear the new ones to transparent so the fade pass has a clean
+        // starting state (createTexture with null leaves memory undefined
+        // on most drivers).
         const canvas = gl.canvas as HTMLCanvasElement;
         if (canvas.width !== s.screenWidth || canvas.height !== s.screenHeight) {
           gl.deleteTexture(s.screenTextureA);
@@ -411,12 +422,22 @@ export function WindParticleLayer({ map }: Props) {
           s.screenTextureB = createTexture(
             gl, canvas.width, canvas.height, null, gl.NEAREST,
           );
+          clearTexture(gl, s.framebuffer, s.screenTextureA);
+          clearTexture(gl, s.framebuffer, s.screenTextureB);
           s.screenWidth = canvas.width;
           s.screenHeight = canvas.height;
         }
 
+        // Mapbox leaves BLEND, DEPTH, STENCIL, etc. in unspecified states
+        // when it hands off to a custom layer. Without explicit BLEND
+        // control the fade pass ends up mixing the old screen with the
+        // faded screen instead of *overwriting* it — trails then never
+        // decay and the whole overlay turns opaque within seconds. Reset
+        // GL state explicitly at the top of every frame.
+        gl.disable(gl.BLEND);
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.STENCIL_TEST);
+        gl.disable(gl.CULL_FACE);
 
         // ─── Pass 1: draw the previous screen texture into the current
         //     screen texture, faded by u_opacity — this gives us trails.
@@ -515,6 +536,20 @@ function drawScreenPass(
   gl.drawArrays(gl.TRIANGLES, 0, 6);
 }
 
+function clearTexture(
+  gl: WebGLRenderingContext,
+  framebuffer: WebGLFramebuffer,
+  texture: WebGLTexture,
+) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0,
+  );
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
 function drawParticles(
   gl: WebGLRenderingContext, s: LayerState, matrix: number[],
 ) {
@@ -548,6 +583,9 @@ function drawParticles(
   );
   gl.uniformMatrix4fv(
     gl.getUniformLocation(s.drawProgram, "u_matrix"), false, matrix,
+  );
+  gl.uniform1f(
+    gl.getUniformLocation(s.drawProgram, "u_point_size"), POINT_SIZE,
   );
 
   gl.drawArrays(gl.POINTS, 0, s.particleCount);

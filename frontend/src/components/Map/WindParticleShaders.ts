@@ -118,6 +118,7 @@ uniform float u_particles_res;
 
 uniform vec4 u_bbox;         // west, south, east, north
 uniform mat4 u_matrix;       // mapbox projection matrix (mercator → clip)
+uniform float u_point_size;
 
 varying vec2 v_particle_pos;
 
@@ -150,7 +151,7 @@ void main() {
     );
     vec2 merc = lngLatToMercator(lngLat);
     gl_Position = u_matrix * vec4(merc, 0.0, 1.0);
-    gl_PointSize = 1.5;
+    gl_PointSize = u_point_size;
 }
 `;
 
