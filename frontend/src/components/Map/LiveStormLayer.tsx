@@ -1228,13 +1228,32 @@ export function LiveStormLayer({ map }: Props) {
       rows.push(
         `<hr style="border:0;border-top:1px solid #e2e8f0;margin:6px 0"/>`,
       );
+      // In model modes (GFS / ECMWF) the popup's top number already comes
+      // from that model at the exact cell — the point-forecast fetch is
+      // only needed to show the OTHER model for comparison. Filter what
+      // we render so we don't repeat the mode's own value redundantly.
+      const wantModels: Array<"gfs" | "ecmwf"> = (() => {
+        if (mode === "gfs") return ["ecmwf"];
+        if (mode === "ecmwf") return ["gfs"];
+        return ["gfs", "ecmwf"];
+      })();
+      const modelsToShow = (forecast?.forecasts ?? []).filter((m) =>
+        wantModels.includes(m.model as "gfs" | "ecmwf"),
+      );
+
       if (!loaded) {
-        rows.push(`<div style="color:#64748b">Fetching GFS + ECMWF…</div>`);
-      } else if (forecast && forecast.forecasts.length > 0) {
+        rows.push(`<div style="color:#64748b">Fetching model forecasts…</div>`);
+      } else if (modelsToShow.length > 0) {
+        const heading =
+          mode === "gfs"
+            ? "Compare with ECMWF (10m)"
+            : mode === "ecmwf"
+            ? "Compare with GFS (10m)"
+            : "Model forecast (10m)";
         rows.push(
-          `<div style="font-weight:700;color:#0f172a;margin-bottom:2px">Model forecast (10m)</div>`,
+          `<div style="font-weight:700;color:#0f172a;margin-bottom:2px">${heading}</div>`,
         );
-        for (const m of forecast.forecasts) {
+        for (const m of modelsToShow) {
           const badge =
             m.model === "gfs"
               ? `<span style="background:#1e3a8a;color:white;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">GFS</span>`
@@ -1250,7 +1269,7 @@ export function LiveStormLayer({ map }: Props) {
         // number represents actual obs. In model / diff modes the comparison
         // is a tautology.
         if (mode === "observed") {
-          const speeds = forecast.forecasts.map((m) => m.windKt);
+          const speeds = modelsToShow.map((m) => m.windKt);
           const modelMean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
           const gap = Math.abs(obs.windKt - modelMean);
           const note =
@@ -1264,8 +1283,18 @@ export function LiveStormLayer({ map }: Props) {
           );
         }
       } else {
+        // Only show a "couldn't fetch" note if the current mode NEEDS a
+        // separate model fetch to be complete. In gfs / ecmwf modes the
+        // cell value is already the model forecast, so a failed
+        // comparison fetch shouldn't imply "no data".
+        const contextual =
+          mode === "gfs"
+            ? "Couldn't fetch ECMWF for comparison."
+            : mode === "ecmwf"
+            ? "Couldn't fetch GFS for comparison."
+            : "Model forecasts couldn't load right now — try again in a moment.";
         rows.push(
-          `<div style="color:#a16207">Model data unavailable</div>`,
+          `<div style="color:#a16207;font-size:10px">${contextual}</div>`,
         );
       }
       return rows.join("");

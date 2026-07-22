@@ -85,7 +85,7 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   // OFF now — they get busy fast and users mostly want them on-demand.
   showBuoys: false,
   showLand: false,
-  showSst: true,
+  showSst: false,
   showWindField: false,
   showForecastCone: true,
   showSurge: false,
