@@ -37,10 +37,14 @@ interface LiveStormState {
   showWindMap: boolean;       // interpolated surface-wind heatmap
 
   // Mode of the wind-map layer: obs / model / diff. On mode change we lazy
-  // -fetch the required model grid(s) once per storm.
+  // -fetch the required model grid(s) once per storm. Status is exposed so
+  // the panel can distinguish "loading" from "no data available at this
+  // bbox" (Open-Meteo's ECMWF variants return nulls over the mid-Pacific).
   windMapMode: WindMapMode;
   gfsGrid: WindModelGrid | null;
   ecmwfGrid: WindModelGrid | null;
+  gfsGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  ecmwfGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
 
   // "Show which stations contributed to this cell" drill-down. When set, the
   // map highlights these obs and dims all others.
@@ -54,6 +58,8 @@ interface LiveStormState {
   setWindMapMode: (mode: WindMapMode) => void;
   setGfsGrid: (g: WindModelGrid | null) => void;
   setEcmwfGrid: (g: WindModelGrid | null) => void;
+  setGfsGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
+  setEcmwfGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
   setHighlightObs: (obs: WindObs[] | null) => void;
 }
 
@@ -85,6 +91,8 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   windMapMode: "observed" as WindMapMode,
   gfsGrid: null,
   ecmwfGrid: null,
+  gfsGridStatus: "idle" as const,
+  ecmwfGridStatus: "idle" as const,
   highlightObs: null,
 
   start: (stormId) =>
@@ -96,6 +104,8 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
       // Clear model grids on storm switch — bbox differs.
       gfsGrid: null,
       ecmwfGrid: null,
+      gfsGridStatus: "idle",
+      ecmwfGridStatus: "idle",
       highlightObs: null,
       windMapMode: "observed",
     }),
@@ -103,12 +113,16 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   setError: (msg) => set({ error: msg, isLoading: false }),
   clear: () => set({
     activeStormId: null, data: null, isLoading: false, error: null,
-    gfsGrid: null, ecmwfGrid: null, highlightObs: null,
+    gfsGrid: null, ecmwfGrid: null,
+    gfsGridStatus: "idle", ecmwfGridStatus: "idle",
+    highlightObs: null,
     windMapMode: "observed",
   }),
   setToggle: (key, value) => set({ [key]: value } as Partial<LiveStormState>),
   setWindMapMode: (mode) => set({ windMapMode: mode }),
   setGfsGrid: (g) => set({ gfsGrid: g }),
   setEcmwfGrid: (g) => set({ ecmwfGrid: g }),
+  setGfsGridStatus: (s) => set({ gfsGridStatus: s }),
+  setEcmwfGridStatus: (s) => set({ ecmwfGridStatus: s }),
   setHighlightObs: (obs) => set({ highlightObs: obs }),
 }));

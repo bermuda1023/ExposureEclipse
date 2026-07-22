@@ -86,15 +86,27 @@ export function LiveStormPanel() {
       || mode === "diff-gfs-vs-ecmwf";
     if (!store.data) return;
     const bbox = store.data.bbox;
-    if (needGfs && !store.gfsGrid) {
+    if (needGfs && !store.gfsGrid && store.gfsGridStatus !== "loading") {
+      useLiveStormStore.getState().setGfsGridStatus("loading");
       fetchWindModelGrid(bbox, "gfs")
-        .then((g) => useLiveStormStore.getState().setGfsGrid(g))
-        .catch(() => {/* leave null; layer draws obs as fallback */});
+        .then((g) => {
+          useLiveStormStore.getState().setGfsGrid(g);
+          useLiveStormStore.getState().setGfsGridStatus(
+            g.cells.length > 0 ? "ok" : "empty",
+          );
+        })
+        .catch(() => useLiveStormStore.getState().setGfsGridStatus("error"));
     }
-    if (needEcmwf && !store.ecmwfGrid) {
+    if (needEcmwf && !store.ecmwfGrid && store.ecmwfGridStatus !== "loading") {
+      useLiveStormStore.getState().setEcmwfGridStatus("loading");
       fetchWindModelGrid(bbox, "ecmwf")
-        .then((g) => useLiveStormStore.getState().setEcmwfGrid(g))
-        .catch(() => {/* leave null */});
+        .then((g) => {
+          useLiveStormStore.getState().setEcmwfGrid(g);
+          useLiveStormStore.getState().setEcmwfGridStatus(
+            g.cells.length > 0 ? "ok" : "empty",
+          );
+        })
+        .catch(() => useLiveStormStore.getState().setEcmwfGridStatus("error"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.windMapMode, store.data, store.gfsGrid, store.ecmwfGrid]);
@@ -344,6 +356,50 @@ function WindMapModeSelector({
     ["diff-obs-vs-ecmwf", "Obs−ECMWF", "Observed minus ECMWF (kt)"],
     ["diff-gfs-vs-ecmwf", "GFS−ECMWF", "GFS minus ECMWF (kt)"],
   ];
+
+  // Which model(s) does each mode require?
+  const needsGfs = (m: WindMapMode) =>
+    m === "gfs" || m === "diff-obs-vs-gfs" || m === "diff-gfs-vs-ecmwf";
+  const needsEcmwf = (m: WindMapMode) =>
+    m === "ecmwf" || m === "diff-obs-vs-ecmwf" || m === "diff-gfs-vs-ecmwf";
+
+  const obsEmpty = !!store.data && store.data.windMap.length === 0;
+
+  // One-line status describing why the active mode has nothing to show.
+  const statusForMode = (mode: WindMapMode): string | null => {
+    if (mode === "observed") {
+      if (obsEmpty) return "No surface obs in this bbox (open-ocean storm).";
+      return null;
+    }
+    if (needsGfs(mode)) {
+      if (store.gfsGridStatus === "loading") return "GFS loading…";
+      if (store.gfsGridStatus === "empty") return "GFS returned no data.";
+      if (store.gfsGridStatus === "error") return "GFS request failed.";
+    }
+    if (needsEcmwf(mode)) {
+      if (store.ecmwfGridStatus === "loading") return "ECMWF loading…";
+      if (store.ecmwfGridStatus === "empty")
+        return "ECMWF unavailable in this region (Pacific / open ocean).";
+      if (store.ecmwfGridStatus === "error") return "ECMWF request failed.";
+    }
+    return null;
+  };
+
+  // Small badge in the corner of each mode button showing its data state.
+  const modeBadge = (mode: WindMapMode): string => {
+    if (mode === "observed") return obsEmpty ? "∅" : "";
+    const g = store.gfsGridStatus;
+    const e = store.ecmwfGridStatus;
+    const badge = (s: typeof g) =>
+      s === "loading" ? "…" : s === "empty" ? "∅" : s === "error" ? "!" : "";
+    if (needsGfs(mode) && needsEcmwf(mode)) return badge(g) || badge(e);
+    if (needsGfs(mode)) return badge(g);
+    if (needsEcmwf(mode)) return badge(e);
+    return "";
+  };
+
+  const activeStatus = statusForMode(store.windMapMode);
+
   return (
     <div
       style={{
@@ -371,6 +427,7 @@ function WindMapModeSelector({
       </div>
       {modes.map(([mode, label, hint]) => {
         const active = store.windMapMode === mode;
+        const badge = modeBadge(mode);
         return (
           <button
             key={mode}
@@ -388,12 +445,47 @@ function WindMapModeSelector({
               background: active ? "#fef2f2" : "transparent",
               color: active ? "#7f1d1d" : "var(--ink-600)",
               fontWeight: active ? 700 : 400,
+              position: "relative",
             }}
           >
             {label}
+            {badge && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: -3,
+                  right: -3,
+                  fontSize: "0.6rem",
+                  color:
+                    badge === "…"
+                      ? "#2563eb"
+                      : badge === "!"
+                      ? "#dc2626"
+                      : "#a16207",
+                }}
+              >
+                {badge}
+              </span>
+            )}
           </button>
         );
       })}
+      {activeStatus && (
+        <div
+          style={{
+            gridColumn: "span 3",
+            marginTop: 4,
+            padding: "4px 6px",
+            fontSize: "0.62rem",
+            background: "#fef3c7",
+            border: "1px solid #fbbf24",
+            borderRadius: 3,
+            color: "#78350f",
+          }}
+        >
+          {activeStatus}
+        </div>
+      )}
     </div>
   );
 }
