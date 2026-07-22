@@ -21,6 +21,7 @@ import { useFiltersStore } from "../../state/filters";
 import { useScopeFiltersStore } from "../../state/scopeFilters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
+import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { useEffectiveScope } from "../../state/useEffectiveScope";
 // Mapbox GL JS is ~1.8 MB minified — lazy-load so it stays off the critical path.
 const MapView = lazy(() =>
@@ -46,10 +47,15 @@ export function Shell() {
   const metric = useViewStore((s) => s.metric);
   const yoyMode = useViewStore((s) => s.yoyMode);
   const perils = useViewStore((s) => s.perils);
+  const selectedGeographyId = useViewStore((s) => s.selectedGeographyId);
+  const impactPushedToDetail = useHurricaneImpactStore((s) => s.pushedToDetail);
   const filters = useFiltersStore();
   const [pivotOpen, setPivotOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
+  // Detail rail defaults closed — the map is the dominant workspace. It
+  // pops back open (or notifies via a badge) only when the detail panel
+  // has actual content beyond the always-present Warnings block.
+  const [rightOpen, setRightOpen] = useState(false);
 
   // Effective scope (selection ∪ scope-filter ∪ portfolio fallback) is
   // resolved by useEffectiveScope so every consumer (map, pivot, export,
@@ -99,6 +105,13 @@ export function Shell() {
   const featureWarnings = mapQuery.data?.features.flatMap((f) => f.warnings) ?? [];
   const allWarnings = [...(mapQuery.data?.warnings ?? []), ...featureWarnings];
   const hasSelection = true; // portfolio mode is always a valid view
+
+  // Anything the user actively navigated to (a clicked geography or a
+  // pushed hurricane-impact view) counts as detail content worth peeking
+  // at. Warnings are ambient and don't trigger the hint on their own —
+  // otherwise the badge would be on nearly always.
+  const hasDetailContent =
+    impactPushedToDetail || selectedGeographyId != null;
 
   const layoutKey = `ee-cols-${leftOpen ? "L" : "x"}-${rightOpen ? "R" : "x"}`;
 
@@ -271,7 +284,12 @@ export function Shell() {
         </PanelGroup>
 
         {!rightOpen && (
-          <CollapsedSidebar side="right" onOpen={() => setRightOpen(true)} label="Detail" />
+          <CollapsedSidebar
+            side="right"
+            onOpen={() => setRightOpen(true)}
+            label="Detail"
+            notify={hasDetailContent}
+          />
         )}
       </div>
     </div>
@@ -424,10 +442,15 @@ function CollapsedSidebar({
   side,
   onOpen,
   label,
+  notify,
 }: {
   side: "left" | "right";
   onOpen: () => void;
   label: string;
+  /** When true, show a small red "!" hint on the tab. Used by the
+   *  right-side Detail rail to signal that content is available without
+   *  forcing the panel open. */
+  notify?: boolean;
 }) {
   return (
     <div
@@ -438,11 +461,16 @@ function CollapsedSidebar({
         borderRight: side === "left" ? "1px solid var(--ink-200)" : undefined,
         display: "grid",
         placeItems: "center",
+        position: "relative",
       }}
     >
       <button
         onClick={onOpen}
-        title={`Show ${label}`}
+        title={
+          notify
+            ? `Show ${label} (has content)`
+            : `Show ${label}`
+        }
         aria-label={`Show ${label}`}
         style={{
           all: "unset",
@@ -461,6 +489,30 @@ function CollapsedSidebar({
         {side === "left" ? "▶ " : "◀ "}
         {label}
       </button>
+      {notify && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 6,
+            left: 6,
+            width: 12,
+            height: 12,
+            borderRadius: "50%",
+            background: "#dc2626",
+            color: "white",
+            fontSize: "0.6rem",
+            fontWeight: 700,
+            display: "grid",
+            placeItems: "center",
+            lineHeight: 1,
+            pointerEvents: "none",
+          }}
+          title="Detail has content"
+        >
+          !
+        </span>
+      )}
     </div>
   );
 }
