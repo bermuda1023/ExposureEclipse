@@ -86,27 +86,42 @@ export function LiveStormPanel() {
       || mode === "diff-gfs-vs-ecmwf";
     if (!store.data) return;
     const bbox = store.data.bbox;
+    // One automatic retry after a short delay covers Open-Meteo transient
+    // failures (rate-limit bursts, cold DNS resolution). If the retry also
+    // comes back empty then the model genuinely has no coverage for this
+    // bbox — the user gets the "returned no data" note without more retries
+    // fighting a persistent issue.
+    async function fetchWithRetry(
+      model: "gfs" | "ecmwf",
+    ) {
+      const state = useLiveStormStore.getState();
+      const setStatus = model === "gfs"
+        ? state.setGfsGridStatus
+        : state.setEcmwfGridStatus;
+      const setGrid = model === "gfs" ? state.setGfsGrid : state.setEcmwfGrid;
+      setStatus("loading");
+      const attempt = async () => fetchWindModelGrid(bbox, model);
+      try {
+        let g = await attempt();
+        if (g.cells.length === 0) {
+          // 1.5 s delay is long enough to clear Open-Meteo's burst rate
+          // limit but short enough that the user doesn't notice a slow
+          // panel.
+          await new Promise((r) => setTimeout(r, 1500));
+          g = await attempt();
+        }
+        setGrid(g);
+        setStatus(g.cells.length > 0 ? "ok" : "empty");
+      } catch {
+        setStatus("error");
+      }
+    }
+
     if (needGfs && !store.gfsGrid && store.gfsGridStatus !== "loading") {
-      useLiveStormStore.getState().setGfsGridStatus("loading");
-      fetchWindModelGrid(bbox, "gfs")
-        .then((g) => {
-          useLiveStormStore.getState().setGfsGrid(g);
-          useLiveStormStore.getState().setGfsGridStatus(
-            g.cells.length > 0 ? "ok" : "empty",
-          );
-        })
-        .catch(() => useLiveStormStore.getState().setGfsGridStatus("error"));
+      void fetchWithRetry("gfs");
     }
     if (needEcmwf && !store.ecmwfGrid && store.ecmwfGridStatus !== "loading") {
-      useLiveStormStore.getState().setEcmwfGridStatus("loading");
-      fetchWindModelGrid(bbox, "ecmwf")
-        .then((g) => {
-          useLiveStormStore.getState().setEcmwfGrid(g);
-          useLiveStormStore.getState().setEcmwfGridStatus(
-            g.cells.length > 0 ? "ok" : "empty",
-          );
-        })
-        .catch(() => useLiveStormStore.getState().setEcmwfGridStatus("error"));
+      void fetchWithRetry("ecmwf");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.windMapMode, store.data, store.gfsGrid, store.ecmwfGrid]);
@@ -476,9 +491,46 @@ function WindMapModeSelector({
             border: "1px solid #fbbf24",
             borderRadius: 3,
             color: "#78350f",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 6,
           }}
         >
-          {activeStatus}
+          <span>{activeStatus}</span>
+          {(store.gfsGridStatus === "empty" || store.gfsGridStatus === "error"
+            || store.ecmwfGridStatus === "empty" || store.ecmwfGridStatus === "error") && (
+            <button
+              type="button"
+              onClick={() => {
+                // Reset both grids so the panel's fetch effect re-runs and
+                // Open-Meteo gets a fresh chance. Cheap to redo — cached
+                // per-bbox on the backend when it succeeded.
+                const s = useLiveStormStore.getState();
+                if (s.gfsGridStatus !== "loading") {
+                  s.setGfsGrid(null);
+                  s.setGfsGridStatus("idle");
+                }
+                if (s.ecmwfGridStatus !== "loading") {
+                  s.setEcmwfGrid(null);
+                  s.setEcmwfGridStatus("idle");
+                }
+              }}
+              title="Retry model fetch"
+              style={{
+                all: "unset",
+                cursor: "pointer",
+                fontSize: "0.7rem",
+                padding: "1px 6px",
+                border: "1px solid #b45309",
+                borderRadius: 2,
+                color: "#78350f",
+                fontWeight: 600,
+              }}
+            >
+              ↻ retry
+            </button>
+          )}
         </div>
       )}
     </div>

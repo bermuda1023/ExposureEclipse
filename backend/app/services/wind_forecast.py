@@ -248,14 +248,20 @@ def _extract_bulk_frames(
 
     Coordinates emit at the *requested* lat/lon (not Open-Meteo's returned
     lat/lon — that would snap to the model's native grid and break cell
-    -alignment with the observed grid on the frontend)."""
-    coords: list[WindCoord] = []
-    frames_per_hour: dict[int, tuple[list[float], list[float | None], str]] = {
-        h: ([0.0] * len(requested_coords), [None] * len(requested_coords), "")
-        for h in _FORECAST_HOURS
-    }
+    -alignment with the observed grid on the frontend).
 
-    for cell_idx, (req, item) in enumerate(zip(requested_coords, items)):
+    Build arrays incrementally alongside the coords list so they stay
+    parallel even when individual cells return no data (or the whole chunk
+    is empty from a rate-limit fail). Previous approach pre-allocated
+    len(requested_coords) zeros but only appended coords for items that
+    returned data — a failing chunk desynchronized arrays across chunk
+    boundaries and produced garbled cell values in the merged grid."""
+    coords: list[WindCoord] = []
+    frame_kts: dict[int, list[float]] = {h: [] for h in _FORECAST_HOURS}
+    frame_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
+    frame_vt: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
+
+    for req, item in zip(requested_coords, items):
         req_lat, req_lon = req
         coords.append(WindCoord(
             lat=round(float(req_lat), 3),
@@ -266,35 +272,35 @@ def _extract_bulk_frames(
         times = hourly.get("time") or []
         speeds = hourly.get("wind_speed_10m") or []
         dirs = hourly.get("wind_direction_10m") or []
-        if not times or not speeds:
-            continue
-
-        # Find the "now" index once per cell — subsequent frames are that
-        # index plus each forecast-hour offset.
-        base_idx = _nearest_hour_index(times, now)
-        if base_idx is None:
-            continue
+        base_idx = _nearest_hour_index(times, now) if times else None
 
         for h in _FORECAST_HOURS:
-            idx = base_idx + h  # 1-hour steps in Open-Meteo's hourly array
-            if idx >= len(times):
-                break
-            speed_ms = speeds[idx] if idx < len(speeds) else None
-            if speed_ms is None:
-                continue
-            dir_deg = dirs[idx] if idx < len(dirs) else None
-            kts_arr, dirs_arr, vt_out = frames_per_hour[h]
-            kts_arr[cell_idx] = round(
-                float(_mps_to_kt(float(speed_ms)) or 0.0), 1,
-            )
-            dirs_arr[cell_idx] = (
-                round(float(dir_deg), 1) if dir_deg is not None else None
-            )
-            if not vt_out:
-                t = times[idx]
-                vt_out = t if t.endswith("Z") else (t + "Z")
-                frames_per_hour[h] = (kts_arr, dirs_arr, vt_out)
+            # Default: no data for this frame at this cell.
+            kt: float = 0.0
+            dir_deg_out: float | None = None
+            if base_idx is not None and times:
+                idx = base_idx + h  # 1-hour steps in Open-Meteo's array
+                if idx < len(times):
+                    speed_ms = speeds[idx] if idx < len(speeds) else None
+                    if speed_ms is not None:
+                        kt = round(
+                            float(_mps_to_kt(float(speed_ms)) or 0.0), 1,
+                        )
+                        dir_raw = dirs[idx] if idx < len(dirs) else None
+                        dir_deg_out = (
+                            round(float(dir_raw), 1)
+                            if dir_raw is not None else None
+                        )
+                        if not frame_vt[h]:
+                            t = times[idx]
+                            frame_vt[h] = t if t.endswith("Z") else (t + "Z")
+            frame_kts[h].append(kt)
+            frame_dirs[h].append(dir_deg_out)
 
+    frames_per_hour = {
+        h: (frame_kts[h], frame_dirs[h], frame_vt[h])
+        for h in _FORECAST_HOURS
+    }
     return coords, frames_per_hour
 
 
@@ -422,12 +428,8 @@ def fetch_model_wind_grid(
             all_coords.extend(chunk_coords)
             for h in _FORECAST_HOURS:
                 kts, dirs, vt = chunk_frames.get(h, ([], [], ""))
-                # Pad chunk arrays to full chunk length in case some cells
-                # had no data.
-                needed = len(chunk_coords)
-                if len(kts) < needed:
-                    kts = kts + [0.0] * (needed - len(kts))
-                    dirs = dirs + [None] * (needed - len(dirs))
+                # _extract_bulk_frames guarantees len(kts) == len(dirs)
+                # == len(chunk_coords) — no padding needed here.
                 all_kts[h].extend(kts)
                 all_dirs[h].extend(dirs)
                 if vt and not frame_valid_times[h]:
