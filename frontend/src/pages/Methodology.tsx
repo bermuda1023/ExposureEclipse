@@ -556,39 +556,6 @@ export function Methodology() {
         </ul>
       </Section>
 
-      <Section id="fund-analyzer" title="Fund portfolio analyzer">
-        <p>
-          Sidebar page under <code>/fund-analysis</code>. Runs a
-          Sharpe-maximising / min-vol allocation across a curated set of
-          hedge fund tracks against 10 reference benchmarks.
-        </p>
-        <ul>
-          <li>
-            Fund returns and benchmark returns are stored in{" "}
-            <code>mockdata/fund_returns.json</code>, built by{" "}
-            <code>backend/scripts/build_fund_returns.py</code>.
-          </li>
-          <li>
-            Statistics reported: annualised return, annualised vol, Sharpe
-            (0% Rf), Sortino, max drawdown, alpha vs each benchmark, beta,
-            information ratio.
-          </li>
-          <li>
-            Optimizer: mean-variance QP over a simplex (long-only, sum-to
-            -1) using historical monthly returns. Correlation matrix is
-            shrunk toward the Ledoit-Wolf estimator when the sample is
-            short.
-          </li>
-          <li>
-            Minimum-investment constraint: cell-level allocations are
-            snapped to <code>ceil(a / minInvestment)</code> multiples of{" "}
-            <code>minInvestment</code>. Current minimums: Orbis Equity /
-            Balanced &amp; Contrarius = $50k; Upslope = $200k; others per
-            build_fund_returns.py inline notes.
-          </li>
-        </ul>
-      </Section>
-
       <Section id="observability" title="Observability &amp; edge behaviour">
         <ul>
           <li>
@@ -663,17 +630,6 @@ function TopNav() {
       >
         ← Back to Exposure map
       </a>
-      <span style={{ color: "var(--ink-300)" }}>·</span>
-      <a
-        href="/fund-analysis"
-        style={{
-          fontSize: "0.75rem",
-          color: "var(--ink-600)",
-          textDecoration: "none",
-        }}
-      >
-        Fund analysis
-      </a>
     </nav>
   );
 }
@@ -686,7 +642,6 @@ function TOC() {
     ["wind-heatmap", "Interpolated wind heatmap"],
     ["hazard-grids", "Hazard climatology grids"],
     ["layers-engine", "Layer / XOL engine"],
-    ["fund-analyzer", "Fund portfolio analyzer"],
     ["observability", "Observability & edge behaviour"],
     ["the-rules", "The ten operating rules"],
   ];
