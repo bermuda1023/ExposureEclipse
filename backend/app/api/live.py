@@ -30,6 +30,7 @@ from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.sea_surface_temp import sst_field
 from ..services.weather_alerts import fetch_active_alerts
 from ..services.wind_field_map import wind_field_grid
+from ..services.wind_forecast import point_forecast
 
 router = APIRouter(prefix="/live", tags=["live"])
 
@@ -169,19 +170,45 @@ class SurgePolygonOut(CamelModel):
 
 
 class WindGridPointOut(CamelModel):
-    """One cell of the interpolated surface-wind field. ``sources`` counts
-    how many raw observations contributed to the IDW value — the frontend
-    can dim low-confidence cells if it chooses."""
+    """One cell of the interpolated surface-wind field.
+
+    ``wind_dir_deg`` uses meteorological FROM convention (0°=N, 90°=E).
+    ``sources`` counts contributing observations. ``confidence`` is a 0..1
+    heuristic combining source count and proximity to those sources — high
+    when the cell sits on top of real data, low near the fringe of the
+    interpolation radius. Renderer can dim low-confidence cells."""
 
     lat: float
     lon: float
     wind_kt: float
+    wind_dir_deg: float | None
     sources: int
+    confidence: float
 
 
 class WindGridMeta(CamelModel):
     step_deg: float
     obs_max_age_hours: float
+
+
+class ModelForecastOut(CamelModel):
+    """One NWP model's wind forecast at a single point + time."""
+
+    model: str            # "gfs" | "ecmwf"
+    valid_time_utc: str
+    wind_kt: float
+    wind_dir_deg: float | None
+    wind_gust_kt: float | None
+
+
+class PointForecastOut(CamelModel):
+    """Wind at a lat/lon, per model. Empty ``forecasts`` when Open-Meteo is
+    unreachable; the click UI shows 'model data unavailable' in that case."""
+
+    lat: float
+    lon: float
+    fetched_at_utc: str
+    forecasts: list[ModelForecastOut]
 
 
 class LiveStormBundle(CamelModel):
@@ -538,7 +565,12 @@ def live_storm_bundle(
         cells, wind_step = wind_field_grid(*bbox)
         wind_map_out = [
             WindGridPointOut(
-                lat=c.lat, lon=c.lon, wind_kt=c.wind_kt, sources=c.sources,
+                lat=c.lat,
+                lon=c.lon,
+                wind_kt=c.wind_kt,
+                wind_dir_deg=c.wind_dir_deg,
+                sources=c.sources,
+                confidence=c.confidence,
             )
             for c in cells
         ]
@@ -561,6 +593,35 @@ def live_storm_bundle(
         peak_surge=peak_surge_out,
         wind_map=wind_map_out,
         wind_map_meta=WindGridMeta(step_deg=wind_step, obs_max_age_hours=4.0),
+    )
+
+
+@router.get("/wind-forecast", response_model=PointForecastOut)
+def wind_forecast_at_point(
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lon: float = Query(..., ge=-180.0, le=180.0),
+) -> PointForecastOut:
+    """GFS + ECMWF surface-wind forecast for a single point.
+
+    Powers the click-to-inspect popup on the interpolated wind heatmap —
+    users see obs vs both models side-by-side to sanity-check the field
+    (agreement = high confidence; large disagreement = the observation is
+    unusual or a model is off, either way worth flagging)."""
+    result = point_forecast(lat, lon)
+    return PointForecastOut(
+        lat=result.lat,
+        lon=result.lon,
+        fetched_at_utc=result.fetched_at_utc,
+        forecasts=[
+            ModelForecastOut(
+                model=f.model,
+                valid_time_utc=f.valid_time_utc,
+                wind_kt=f.wind_kt,
+                wind_dir_deg=f.wind_dir_deg,
+                wind_gust_kt=f.wind_gust_kt,
+            )
+            for f in result.forecasts
+        ],
     )
 
 

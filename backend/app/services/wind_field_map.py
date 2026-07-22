@@ -44,7 +44,9 @@ class WindGridCell:
     lat: float
     lon: float
     wind_kt: float
-    sources: int   # count of obs that contributed to this cell
+    wind_dir_deg: float | None   # meteorological convention: FROM direction
+    sources: int                 # obs contributing to this cell
+    confidence: float            # 0..1 heuristic — see _cell_confidence
 
 
 MAX_AGE_HOURS = 4.0
@@ -53,6 +55,7 @@ LAND_STATION_SAMPLE = 60         # subsampled; IDW smooths the density down
 IDW_POWER = 2.0
 IDW_RADIUS_DEG = 3.0             # ~330 km at mid-latitudes
 NEIGHBOR_RADIUS_DEG = 1.5        # for the dead-sensor check
+CONFIDENT_SOURCE_COUNT = 5       # ≥ this many contributors ⇒ full confidence
 
 
 def _parse_iso(s: str) -> datetime | None:
@@ -81,10 +84,14 @@ def _adaptive_step(span: float) -> float:
 
 def _fetch_land_obs(
     west: float, south: float, east: float, north: float,
-) -> list[tuple[float, float, float, str]]:
+) -> list[tuple[float, float, float, float | None, str]]:
     """Spatially-uniform subsample of NWS land stations + parallel latest-obs
     fetch. Uses fewer stations than the discrete-marker view since the IDW
-    interpolation already smooths."""
+    interpolation already smooths.
+
+    Returns tuples of (lat, lon, wind_kt, wind_dir_deg, observed_at).
+    ``wind_dir_deg`` is None when the station reports speed but not direction.
+    """
     all_in_bbox: list[tuple[str, str, float, float]] = []
     for f in _nws_all_stations():
         geom = f.get("geometry") or {}
@@ -103,7 +110,7 @@ def _fetch_land_obs(
         all_in_bbox, west, south, east, north, LAND_STATION_SAMPLE,
     )
 
-    out: list[tuple[float, float, float, str]] = []
+    out: list[tuple[float, float, float, float | None, str]] = []
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = [
             pool.submit(_fetch_latest_obs, sid, name, lat, lon)
@@ -116,31 +123,35 @@ def _fetch_land_obs(
                 continue
             if rec is None or rec.wind_kt is None:
                 continue
-            out.append((rec.lat, rec.lon, float(rec.wind_kt), rec.observed_at))
+            out.append((
+                rec.lat, rec.lon, float(rec.wind_kt),
+                float(rec.wind_dir_deg) if rec.wind_dir_deg is not None else None,
+                rec.observed_at,
+            ))
     return out
 
 
 def _clean_obs(
-    obs: list[tuple[float, float, float, str]],
+    obs: list[tuple[float, float, float, float | None, str]],
     now: datetime,
-) -> list[tuple[float, float, float]]:
-    """Apply freshness + dead-sensor filters. Returns (lat, lon, kt) only."""
-    fresh: list[tuple[float, float, float]] = []
-    for lat, lon, kt, iso in obs:
+) -> list[tuple[float, float, float, float | None]]:
+    """Apply freshness + dead-sensor filters. Returns (lat, lon, kt, dir)."""
+    fresh: list[tuple[float, float, float, float | None]] = []
+    for lat, lon, kt, dir_deg, iso in obs:
         dt = _parse_iso(iso)
         if dt is not None:
             age_h = (now - dt).total_seconds() / 3600.0
             if age_h > MAX_AGE_HOURS:
                 continue
-        fresh.append((lat, lon, kt))
+        fresh.append((lat, lon, kt, dir_deg))
 
-    cleaned: list[tuple[float, float, float]] = []
-    for lat, lon, kt in fresh:
+    cleaned: list[tuple[float, float, float, float | None]] = []
+    for lat, lon, kt, dir_deg in fresh:
         if kt > 0:
-            cleaned.append((lat, lon, kt))
+            cleaned.append((lat, lon, kt, dir_deg))
             continue
         neighbor_kts = [
-            k for (la, lo, k) in fresh
+            k for (la, lo, k, _d) in fresh
             if k > 0
             and abs(la - lat) < NEIGHBOR_RADIUS_DEG
             and abs(lo - lon) < NEIGHBOR_RADIUS_DEG
@@ -148,14 +159,30 @@ def _clean_obs(
         if not neighbor_kts:
             # No signal nearby to compare against — keep the zero so calm
             # regions aren't erased.
-            cleaned.append((lat, lon, kt))
+            cleaned.append((lat, lon, kt, dir_deg))
             continue
         neighbor_kts.sort()
         median = neighbor_kts[len(neighbor_kts) // 2]
         if median <= LOCAL_KILL_MEDIAN_KT:
-            cleaned.append((lat, lon, kt))
+            cleaned.append((lat, lon, kt, dir_deg))
         # else: dead sensor / stuck-at-zero — drop.
     return cleaned
+
+
+def _cell_confidence(count: int, weight_sum: float) -> float:
+    """Heuristic 0..1 confidence for one cell. Combines source density with
+    the IDW weight_sum (which encodes distance to nearest obs — high when
+    the cell sits close to real observations, low when it's near the fringe
+    of the influence radius). Simple product form keeps both signals
+    meaningful without introducing arbitrary tunable weights."""
+    if count <= 0:
+        return 0.0
+    density = min(1.0, count / CONFIDENT_SOURCE_COUNT)
+    # weight_sum ≈ Σ 1/d² with the +0.01 epsilon. Cap at 5 (well above what
+    # a single on-station obs contributes ~ 1/0.01 = 100 while multi-obs
+    # cells often sit in the 2-10 range). This yields a smooth 0..1.
+    proximity = min(1.0, weight_sum / 5.0)
+    return round(density * proximity, 3)
 
 
 def wind_field_grid(
@@ -163,21 +190,42 @@ def wind_field_grid(
     *, now: datetime | None = None,
 ) -> tuple[list[WindGridCell], float]:
     """Return (grid_cells, cell_step_deg). Cells with no obs in range are
-    omitted — the renderer paints those as gaps rather than fake data."""
+    omitted — the renderer paints those as gaps rather than fake data.
+
+    Direction is derived from a parallel IDW on the u/v vector components
+    (rather than a scalar mean on the angle). Averaging angles directly
+    breaks at the 0/360 wraparound; vector-mean handles convergent and
+    divergent flow correctly."""
     if now is None:
         now = datetime.now(timezone.utc)
 
-    obs: list[tuple[float, float, float, str]] = []
+    obs: list[tuple[float, float, float, float | None, str]] = []
     for b in buoys_in_bbox(west, south, east, north):
         if b.wind_kt is None:
             continue
-        obs.append((b.lat, b.lon, float(b.wind_kt), b.observed_at))
+        obs.append((
+            b.lat, b.lon, float(b.wind_kt),
+            float(b.wind_dir_deg) if b.wind_dir_deg is not None else None,
+            b.observed_at,
+        ))
     obs.extend(_fetch_land_obs(west, south, east, north))
 
     step = _adaptive_step(max(east - west, north - south))
     cleaned = _clean_obs(obs, now)
     if not cleaned:
         return [], step
+
+    # Pre-compute vector components once — u = -kt·sin(dir), v = -kt·cos(dir)
+    # in meteorological "wind from" convention.
+    precomputed: list[tuple[float, float, float, float | None, float | None]] = []
+    for lat, lon, kt, dir_deg in cleaned:
+        u: float | None = None
+        v: float | None = None
+        if dir_deg is not None and kt > 0:
+            r = math.radians(dir_deg)
+            u = -kt * math.sin(r)
+            v = -kt * math.cos(r)
+        precomputed.append((lat, lon, kt, u, v))
 
     r_sq = IDW_RADIUS_DEG ** 2
     cells: list[WindGridCell] = []
@@ -187,9 +235,12 @@ def wind_field_grid(
         lon = west
         while lon <= east + 1e-9:
             weight_sum = 0.0
-            value_sum = 0.0
+            speed_sum = 0.0
+            u_sum = 0.0
+            v_sum = 0.0
+            uv_weight_sum = 0.0
             count = 0
-            for (la, lo, kt) in cleaned:
+            for (la, lo, kt, u, v) in precomputed:
                 dlat = la - lat
                 dlon = (lo - lon) * cos_lat
                 d2 = dlat * dlat + dlon * dlon
@@ -198,17 +249,36 @@ def wind_field_grid(
                 # +ε keeps the on-station weight finite.
                 w = 1.0 / ((d2 + 0.01) ** (IDW_POWER / 2))
                 weight_sum += w
-                value_sum += w * kt
+                speed_sum += w * kt
+                if u is not None and v is not None:
+                    u_sum += w * u
+                    v_sum += w * v
+                    uv_weight_sum += w
                 count += 1
-            if count > 0:
-                cells.append(
-                    WindGridCell(
-                        lat=round(lat, 3),
-                        lon=round(lon, 3),
-                        wind_kt=round(value_sum / weight_sum, 1),
-                        sources=count,
-                    )
+            if count == 0:
+                lon += step
+                continue
+
+            wind_kt = round(speed_sum / weight_sum, 1)
+            wind_dir_deg: float | None = None
+            if uv_weight_sum > 0:
+                u_mean = u_sum / uv_weight_sum
+                v_mean = v_sum / uv_weight_sum
+                # atan2 returns the "wind blowing toward" direction; invert
+                # to recover meteorological FROM direction.
+                to_deg = math.degrees(math.atan2(u_mean, v_mean))
+                wind_dir_deg = round((to_deg + 180.0) % 360.0, 1)
+
+            cells.append(
+                WindGridCell(
+                    lat=round(lat, 3),
+                    lon=round(lon, 3),
+                    wind_kt=wind_kt,
+                    wind_dir_deg=wind_dir_deg,
+                    sources=count,
+                    confidence=_cell_confidence(count, weight_sum),
                 )
+            )
             lon += step
         lat += step
     return cells, step

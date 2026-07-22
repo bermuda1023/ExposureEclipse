@@ -806,6 +806,155 @@ export function LiveStormLayer({ map }: Props) {
     };
   }, [map]);
 
+  // Windy.com-style click-to-inspect on the wind heatmap. Shows the IDW
+  // -interpolated obs value + confidence + a live GFS / ECMWF forecast fetch
+  // so the underwriter can eyeball obs-vs-model agreement.
+  useEffect(() => {
+    if (!map) return;
+    let popup: mapboxgl.Popup | null = null;
+
+    const kmh = (kt: number | null | undefined) =>
+      kt == null ? null : Math.round(kt * 1.852);
+    const mph = (kt: number | null | undefined) =>
+      kt == null ? null : Math.round(kt * 1.15078);
+
+    const compass = (deg: number | null | undefined): string => {
+      if (deg == null || Number.isNaN(deg)) return "—";
+      const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+      const i = Math.round(((deg % 360) / 22.5)) % 16;
+      return `${dirs[i]} (${Math.round(deg)}°)`;
+    };
+
+    const confBadge = (c: number): string => {
+      if (c >= 0.6) return `<span style="color:#166534;font-weight:600">HIGH</span>`;
+      if (c >= 0.3) return `<span style="color:#a16207;font-weight:600">MED</span>`;
+      return `<span style="color:#991b1b;font-weight:600">LOW</span>`;
+    };
+
+    const speedTriple = (kt: number | null | undefined) =>
+      kt == null
+        ? "—"
+        : `<b>${kt.toFixed(0)} kt</b> · ${mph(kt)} mph · ${kmh(kt)} km/h`;
+
+    const onClick = async (e: mapboxgl.MapMouseEvent) => {
+      const f = (e as any).features?.[0];
+      if (!f) return;
+      const p = f.properties as {
+        windKt: number;
+        windDirDeg: number | null;
+        sources: number;
+        confidence: number;
+      };
+      const mb = await import("mapbox-gl");
+      popup?.remove();
+      // Skeleton popup — filled in when the model fetch resolves.
+      const container = document.createElement("div");
+      container.style.cssText =
+        "font-size:11px;line-height:1.5;min-width:240px;max-width:280px";
+      container.innerHTML = renderPopupBody(p, null, false);
+      popup = new mb.default.Popup({ closeButton: true, closeOnClick: true, maxWidth: "320px" })
+        .setLngLat(e.lngLat)
+        .setDOMContent(container)
+        .addTo(map);
+
+      // Fetch GFS + ECMWF in the background; if the popup was closed before
+      // the response lands, dropping the update is harmless.
+      try {
+        const { fetchWindPointForecast } = await import("../../api/live");
+        const forecast = await fetchWindPointForecast(e.lngLat.lat, e.lngLat.lng);
+        if (popup && popup.isOpen()) {
+          container.innerHTML = renderPopupBody(p, forecast, true);
+        }
+      } catch {
+        if (popup && popup.isOpen()) {
+          container.innerHTML = renderPopupBody(p, null, true);
+        }
+      }
+    };
+
+    function renderPopupBody(
+      obs: { windKt: number; windDirDeg: number | null; sources: number; confidence: number },
+      forecast: import("../../api/live").PointForecast | null,
+      loaded: boolean,
+    ): string {
+      const rows: string[] = [];
+      rows.push(
+        `<div style="font-weight:700;color:#0f172a;margin-bottom:4px">Wind at point</div>`,
+      );
+      rows.push(
+        `<div><b>Observed (IDW blend):</b> ${speedTriple(obs.windKt)}</div>`,
+        `<div>Direction: ${compass(obs.windDirDeg)}</div>`,
+        `<div>Confidence: ${confBadge(obs.confidence)} · ${obs.sources} sources · ${(obs.confidence * 100).toFixed(0)}%</div>`,
+        `<hr style="border:0;border-top:1px solid #e2e8f0;margin:6px 0"/>`,
+      );
+      if (!loaded) {
+        rows.push(`<div style="color:#64748b">Fetching GFS + ECMWF…</div>`);
+      } else if (forecast && forecast.forecasts.length > 0) {
+        rows.push(
+          `<div style="font-weight:700;color:#0f172a;margin-bottom:2px">Model forecast (10m)</div>`,
+        );
+        for (const m of forecast.forecasts) {
+          const badge =
+            m.model === "gfs"
+              ? `<span style="background:#1e3a8a;color:white;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">GFS</span>`
+              : `<span style="background:#065f46;color:white;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">ECMWF</span>`;
+          rows.push(
+            `<div style="margin-top:3px">${badge} ${speedTriple(m.windKt)}${
+              m.windGustKt != null ? ` · gust ${m.windGustKt.toFixed(0)} kt` : ""
+            }</div>`,
+            `<div style="color:#475569;margin-left:38px">Dir ${compass(m.windDirDeg)}</div>`,
+          );
+        }
+        // Agreement hint: if obs sits between the two models, that's a
+        // consistent picture. Big gaps flag either an outlier obs or model
+        // error — either way worth a second look.
+        const speeds = forecast.forecasts.map((m) => m.windKt);
+        if (speeds.length >= 1) {
+          const modelMean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+          const gap = Math.abs(obs.windKt - modelMean);
+          const note =
+            gap < 5
+              ? `<span style="color:#166534">obs matches models</span>`
+              : gap < 15
+              ? `<span style="color:#a16207">obs differs from models by ${gap.toFixed(0)} kt</span>`
+              : `<span style="color:#991b1b">obs differs from models by ${gap.toFixed(0)} kt — flag</span>`;
+          rows.push(
+            `<div style="margin-top:5px;font-size:10px">Δ vs model mean: ${note}</div>`,
+          );
+        }
+      } else {
+        rows.push(
+          `<div style="color:#a16207">Model data unavailable</div>`,
+        );
+      }
+      return rows.join("");
+    }
+
+    const reg = () => {
+      if (map.getLayer(LAYER_WIND_MAP_FILL)) {
+        map.on("click", LAYER_WIND_MAP_FILL, onClick as never);
+        map.on("mouseenter", LAYER_WIND_MAP_FILL, () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", LAYER_WIND_MAP_FILL, () => {
+          map.getCanvas().style.cursor = "";
+        });
+      }
+    };
+    if (map.isStyleLoaded()) reg();
+    else map.once("idle", reg);
+
+    return () => {
+      try {
+        map.off("click", LAYER_WIND_MAP_FILL, onClick as never);
+      } catch {
+        /* layer torn down */
+      }
+      popup?.remove();
+    };
+  }, [map]);
+
   return null;
 }
 

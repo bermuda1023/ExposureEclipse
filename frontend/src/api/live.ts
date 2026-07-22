@@ -139,12 +139,29 @@ export interface WindGridPoint {
   lat: number;
   lon: number;
   windKt: number;
+  windDirDeg: number | null;
   sources: number;
+  confidence: number;
 }
 
 export interface WindGridMeta {
   stepDeg: number;
   obsMaxAgeHours: number;
+}
+
+export interface ModelForecast {
+  model: "gfs" | "ecmwf";
+  validTimeUtc: string;
+  windKt: number;
+  windDirDeg: number | null;
+  windGustKt: number | null;
+}
+
+export interface PointForecast {
+  lat: number;
+  lon: number;
+  fetchedAtUtc: string;
+  forecasts: ModelForecast[];
 }
 
 export interface LiveStormBundle {
@@ -169,6 +186,9 @@ export interface LiveStormBundle {
 
 export const fetchLiveStormList = () =>
   apiGet<LiveStormListResponse>("/live/storms");
+
+export const fetchWindPointForecast = (lat: number, lon: number) =>
+  apiGet<PointForecast>("/live/wind-forecast", { lat, lon });
 
 export const fetchLiveStormBundle = (
   stormId: string,
