@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -54,14 +55,26 @@ def _mps_to_kt(v: float | None) -> float | None:
     return v * 1.94384 if v is not None else None
 
 
-@lru_cache(maxsize=256)
+# Same "don't cache failures" pattern as _fetch_bulk_chunk. A single 429
+# used to poison the popup for the whole session; now failures re-attempt
+# on the next click while successful responses stay cached.
+_POINT_CACHE_MAX = 256
+_point_cache: OrderedDict[tuple[float, float, str], dict] = OrderedDict()
+
+
 def _fetch_open_meteo_hourly(lat: float, lon: float, model_key: str) -> dict | None:
     """One HTTP GET to Open-Meteo for a single model's hourly wind block.
 
     Uses the ``hourly`` endpoint rather than ``current`` because ECMWF's IFS
     is only published on hourly cadence, so ``current`` returns nulls for it.
-    Cached by (lat, lon, model) so rapid re-clicks near the same spot don't
-    hammer the API."""
+    Cached (successful responses only) by (lat, lon, model) so rapid re
+    -clicks near the same spot don't hammer the API."""
+    key = (lat, lon, model_key)
+    hit = _point_cache.get(key)
+    if hit is not None:
+        _point_cache.move_to_end(key)
+        return hit
+
     params = {
         "latitude": f"{lat:.3f}",
         "longitude": f"{lon:.3f}",
@@ -77,9 +90,14 @@ def _fetch_open_meteo_hourly(lat: float, lon: float, model_key: str) -> dict | N
     )
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read().decode("utf-8"))
     except Exception:  # noqa: BLE001
         return None
+
+    _point_cache[key] = data
+    while len(_point_cache) > _POINT_CACHE_MAX:
+        _point_cache.popitem(last=False)
+    return data
 
 
 def _nearest_hour_index(times: list[str], now: datetime) -> int | None:
@@ -243,15 +261,28 @@ def _extract_bulk_cells(
     return out, valid_time
 
 
-@lru_cache(maxsize=32)
+# Manual LRU that ONLY caches successful non-empty results. The previous
+# @lru_cache implementation also cached failures — once Open-Meteo returned
+# 429 for any chunk (transient rate-limit or blip), the empty tuple got
+# baked into the cache and every future request in that serverless
+# container returned "no data available" until the process recycled. Users
+# saw ECMWF flip from "working" to permanently "unavailable" mid-session.
+_BULK_CACHE_MAX = 64
+_bulk_cache: OrderedDict[tuple[str, str, str], tuple[dict, ...]] = OrderedDict()
+
+
 def _fetch_bulk_chunk(
     lat_str: str, lon_str: str, model_key: str,
 ) -> tuple[dict, ...]:
-    """Cache key is the concatenated coord strings so identical bboxes reuse
-    the result. Retries on 429 (Open-Meteo's free tier rate-limits bursts of
-    parallel requests) — without this a Pacific-wide bbox would return with
-    empty streaks where individual chunks got throttled. Returns a tuple
-    (hashable so lru_cache works)."""
+    """Fetch one multi-location Open-Meteo chunk with retries on 429.
+    Successful non-empty responses are cached; failures + empties are not
+    (so a transient rate-limit doesn't permanently poison the bbox)."""
+    key = (lat_str, lon_str, model_key)
+    hit = _bulk_cache.get(key)
+    if hit is not None:
+        _bulk_cache.move_to_end(key)
+        return hit
+
     import time as _t
     params = {
         "latitude": lat_str,
@@ -266,20 +297,27 @@ def _fetch_bulk_chunk(
     req = urllib.request.Request(
         url, headers={"User-Agent": "exposure-eclipse-forecast/1.0"},
     )
+    items: tuple[dict, ...] = ()
     for attempt in range(_RETRY_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            items = data if isinstance(data, list) else [data]
-            return tuple(items)
+            payload = data if isinstance(data, list) else [data]
+            items = tuple(payload)
+            break
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < _RETRY_ATTEMPTS:
                 _t.sleep(_RETRY_BACKOFF_S * (2 ** attempt))
                 continue
-            return ()
+            break
         except Exception:  # noqa: BLE001
-            return ()
-    return ()
+            break
+
+    if items:
+        _bulk_cache[key] = items
+        while len(_bulk_cache) > _BULK_CACHE_MAX:
+            _bulk_cache.popitem(last=False)
+    return items
 
 
 def fetch_model_wind_grid(
