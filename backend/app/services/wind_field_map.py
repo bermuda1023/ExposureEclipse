@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 from .marine_obs import (
     _fetch_latest_obs,
-    _nws_all_stations,
+    _nws_stations_in_bbox,
     _spatial_subsample,
     buoys_in_bbox,
 )
@@ -79,8 +79,8 @@ LOCAL_KILL_MEDIAN_KT = 5.0
 # use every station in the bbox up to a safety cap so IDW has as many
 # neighbours as possible. Cap keeps latency bounded when a bbox covers many
 # CONUS states.
-LAND_STATION_CAP = 500
-LAND_STATION_WORKERS = 32
+LAND_STATION_CAP = 800
+LAND_STATION_WORKERS = 48
 IDW_POWER = 2.0
 IDW_RADIUS_DEG = 3.0             # ~330 km at mid-latitudes
 NEIGHBOR_RADIUS_DEG = 1.5        # for the dead-sensor check
@@ -145,8 +145,15 @@ def _fetch_land_obs_with_meta(
     station_id). ``wind_dir_deg`` is None when the station reports speed
     but not direction.
     """
-    candidates: list[tuple[str, str, float, float]] = []
-    for f in _nws_all_stations():
+    # Pull only stations for states overlapping the bbox instead of
+    # scanning NWS's full global list. Old approach paged /stations
+    # globally and quit at 30 pages, which never reached the K-prefixed
+    # ASOS/AWOS at every major US airport (they sort after '0'-'9', 'A',
+    # 'B', 'C' — an ID range that alone eats 15k+ stations). This yields
+    # 3–8 fast per-state calls for a typical storm bbox and includes every
+    # ASOS + mesonet the states own.
+    all_in_bbox: list[tuple[str, str, float, float]] = []
+    for f in _nws_stations_in_bbox(west, south, east, north):
         geom = f.get("geometry") or {}
         coords = geom.get("coordinates") or [None, None]
         lon, lat = coords[0], coords[1]
@@ -158,9 +165,28 @@ def _fetch_land_obs_with_meta(
         sid = props.get("stationIdentifier") or ""
         if not sid:
             continue
-        candidates.append((sid, props.get("name") or sid, lat, lon))
-        if len(candidates) >= LAND_STATION_CAP:
-            break
+        all_in_bbox.append((sid, props.get("name") or sid, lat, lon))
+
+    # A Bertha-sized bbox now yields ~8k candidates (was ~120 pre-state-
+    # fetch). Fetching latest obs for all of them serially would blow past
+    # Vercel's 30 s serverless budget even with 32-way parallelism. Instead:
+    #   1. Always include every K-prefixed station (ASOS/AWOS — airport
+    #      -grade quality, hourly hourly updates, mission-critical for
+    #      aviation so extremely reliable). Typically 500-800 per bbox.
+    #   2. Fill the remaining LAND_STATION_CAP budget with a spatially
+    #      -uniform sample of everything else (mesonet, RAWS, COOP, etc.)
+    #      so mid-bbox holes get covered.
+    airport_stations = [c for c in all_in_bbox if c[0].startswith("K")]
+    other_stations = [c for c in all_in_bbox if not c[0].startswith("K")]
+    airport_stations = airport_stations[:LAND_STATION_CAP]
+    remaining_budget = max(0, LAND_STATION_CAP - len(airport_stations))
+    if remaining_budget > 0 and other_stations:
+        other_subset = _spatial_subsample(
+            other_stations, west, south, east, north, remaining_budget,
+        )
+    else:
+        other_subset = []
+    candidates = airport_stations + other_subset
 
     out: list[tuple[float, float, float, float | None, str, str]] = []
     with ThreadPoolExecutor(max_workers=LAND_STATION_WORKERS) as pool:

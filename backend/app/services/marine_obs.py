@@ -23,7 +23,18 @@ from functools import lru_cache
 
 NDBC_LATEST_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
 NWS_STATIONS_URL = "https://api.weather.gov/stations"
-NWS_USER_AGENT = "exposure-eclipse/1.0 (contact: support@example.invalid)"
+# Per NWS docs (api.weather.gov Content Negotiation):
+#   > User-Agent tells a website what type of device you are using so it
+#   > can tailor the best experience for you. […] the more unique to your
+#   > application […] the less likely it will be affected by a security
+#   > event. If you include contact information (website or email), we
+#   > can contact you if your string is associated to a security event.
+# Keep the URL identifying and a real contact so a rate-limit or security
+# flag lands in an inbox we actually check.
+NWS_USER_AGENT = (
+    "ExposureEclipse/1.0 (+https://github.com/bermuda1023/ExposureEclipse; "
+    "contact james.anfossi@accountingbda.com)"
+)
 FETCH_TIMEOUT_S = 30
 
 
@@ -174,37 +185,138 @@ def _nws_get(
         return None
 
 
-@lru_cache(maxsize=1)
-def _nws_all_stations() -> list[dict]:
-    """All NWS observation stations (paginated until exhausted, capped).
+# Bounding boxes for every US state / territory NWS serves. Coarse but
+# comprehensive — an actual bbox library would be overkill here since we
+# just need to know which states' stations to fetch for a storm.
+# Values are (west, south, east, north) in lat/lon degrees.
+_STATE_BBOXES: dict[str, tuple[float, float, float, float]] = {
+    "AL": (-88.5, 30.2, -84.9, 35.0),
+    "AR": (-94.6, 33.0, -89.6, 36.5),
+    "AZ": (-114.8, 31.3, -109.0, 37.0),
+    "CA": (-124.5, 32.5, -114.1, 42.0),
+    "CO": (-109.1, 37.0, -102.0, 41.0),
+    "CT": (-73.8, 40.9, -71.8, 42.1),
+    "DC": (-77.15, 38.79, -76.90, 39.00),
+    "DE": (-75.8, 38.4, -75.0, 39.9),
+    "FL": (-87.6, 24.5, -80.0, 31.0),
+    "GA": (-85.6, 30.4, -80.8, 35.0),
+    "IA": (-96.7, 40.4, -90.1, 43.6),
+    "ID": (-117.3, 42.0, -111.0, 49.0),
+    "IL": (-91.6, 36.9, -87.5, 42.6),
+    "IN": (-88.1, 37.8, -84.8, 41.8),
+    "KS": (-102.1, 36.9, -94.6, 40.0),
+    "KY": (-89.6, 36.5, -81.9, 39.2),
+    "LA": (-94.1, 28.9, -88.8, 33.0),
+    "MA": (-73.5, 41.2, -69.9, 42.9),
+    "MD": (-79.5, 37.9, -75.0, 39.7),
+    "ME": (-71.1, 43.0, -66.9, 47.5),
+    "MI": (-90.4, 41.7, -82.4, 48.3),
+    "MN": (-97.2, 43.4, -89.5, 49.4),
+    "MO": (-95.8, 36.0, -89.1, 40.6),
+    "MS": (-91.7, 30.2, -88.1, 35.0),
+    "MT": (-116.1, 44.4, -104.0, 49.0),
+    "NC": (-84.4, 33.8, -75.4, 36.6),
+    "ND": (-104.1, 45.9, -96.6, 49.0),
+    "NE": (-104.1, 40.0, -95.3, 43.0),
+    "NH": (-72.6, 42.7, -70.6, 45.3),
+    "NJ": (-75.6, 38.9, -73.9, 41.4),
+    "NM": (-109.1, 31.3, -103.0, 37.0),
+    "NV": (-120.0, 35.0, -114.0, 42.0),
+    "NY": (-79.8, 40.5, -71.9, 45.0),
+    "OH": (-84.8, 38.4, -80.5, 42.0),
+    "OK": (-103.0, 33.6, -94.4, 37.0),
+    "OR": (-124.6, 42.0, -116.5, 46.3),
+    "PA": (-80.5, 39.7, -74.7, 42.3),
+    "PR": (-67.3, 17.9, -65.2, 18.5),
+    "RI": (-71.9, 41.1, -71.1, 42.0),
+    "SC": (-83.4, 32.0, -78.5, 35.2),
+    "SD": (-104.1, 42.5, -96.4, 45.9),
+    "TN": (-90.3, 34.9, -81.6, 36.7),
+    "TX": (-106.6, 25.8, -93.5, 36.5),
+    "UT": (-114.1, 37.0, -109.0, 42.0),
+    "VA": (-83.7, 36.5, -75.2, 39.5),
+    "VT": (-73.4, 42.7, -71.5, 45.0),
+    "WA": (-124.8, 45.5, -116.9, 49.0),
+    "WI": (-92.9, 42.5, -86.8, 47.1),
+    "WV": (-82.7, 37.2, -77.7, 40.6),
+    "WY": (-111.1, 41.0, -104.1, 45.0),
+}
 
-    NWS's /stations endpoint returns metadata + GeoJSON Point geometry per
-    station. We pull up to ~15,000 stations (limit=500 per page × 30 pages)
-    which comfortably covers all of CONUS + territories. Was previously
-    capped at 4,000 which left interior CONUS under-covered — inland east
-    Texas returned "nearest obs 166 km" (Houston metro) even though there
-    are dozens of NWS ASOS + mesonet sites within 30-50 km of any point.
-    Cached once per cold start."""
-    out: list[dict] = []
-    cursor = None
-    for _ in range(30):
-        params = {"limit": 500}
-        if cursor:
-            params["cursor"] = cursor
-        page = _nws_get("/stations", params=params)
+
+def _states_overlapping_bbox(
+    west: float, south: float, east: float, north: float,
+) -> list[str]:
+    """USPS codes for every state whose bbox overlaps the query bbox."""
+    out: list[str] = []
+    for code, (w, s, e, n) in _STATE_BBOXES.items():
+        if not (e < west or w > east or n < south or s > north):
+            out.append(code)
+    return out
+
+
+@lru_cache(maxsize=64)
+def _nws_stations_for_state(state: str) -> tuple[dict, ...]:
+    """All stations NWS knows about in ``state`` (USPS code). Cached per
+    state so a Gulf-storm bbox spanning 6 states = 6 fast API calls."""
+    stations: list[dict] = []
+    next_url: str | None = None
+    for _ in range(20):  # per-state cap; TX has ~2500, most much less
+        if next_url is None:
+            page = _nws_get("/stations", params={"limit": 500, "state": state})
+        else:
+            page = _nws_get_absolute(next_url)
         if not page:
             break
         features = page.get("features") or []
-        out.extend(features)
-        # If NWS returned fewer than we asked for, we're at the end.
+        stations.extend(features)
         if len(features) < 500:
             break
-        cursor = ((page.get("pagination") or {}).get("next") or "")
-        if "cursor=" in cursor:
-            cursor = cursor.split("cursor=")[-1].split("&")[0]
-        else:
+        next_url = (page.get("pagination") or {}).get("next") or None
+        if not next_url:
             break
-    return out
+    return tuple(stations)
+
+
+def _nws_stations_in_bbox(
+    west: float, south: float, east: float, north: float,
+) -> list[dict]:
+    """Union of station lists for every state overlapping the bbox.
+    Replaces the previous "fetch all NWS stations globally then filter"
+    pattern which only reached the numeric-prefixed sites — the K-prefixed
+    ASOS/AWOS at every major airport sort after 'C' and never got pulled."""
+    states = _states_overlapping_bbox(west, south, east, north)
+    if not states:
+        return []
+    stations: list[dict] = []
+    for state in states:
+        stations.extend(_nws_stations_for_state(state))
+    return stations
+
+
+# Old API kept for callers that don't yet pass a bbox. Falls back to the
+# US mega-bbox so we at least fetch every CONUS + territory state — much
+# broader than any real storm bbox but bounded, cached per-state.
+def _nws_all_stations() -> list[dict]:
+    """Deprecated: prefer ``_nws_stations_in_bbox`` when a bbox is known."""
+    return _nws_stations_in_bbox(-180.0, 17.0, -65.0, 50.0)
+
+
+def _nws_get_absolute(url: str) -> dict | None:
+    """Fetch an absolute URL against api.weather.gov — used to follow
+    pagination cursors verbatim without our own URL-encoding step
+    corrupting them."""
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": NWS_USER_AGENT,
+            "Accept": "application/geo+json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _fetch_latest_obs(sid: str, name: str, lat: float, lon: float) -> LandObservation | None:
