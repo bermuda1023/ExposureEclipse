@@ -606,6 +606,17 @@ export function LiveStormLayer({ map }: Props) {
         },
       });
 
+      // ── Force top-of-stack for the NHC cone and surge polygons. Layer
+      //    insertion order races with MapView's county tileset (added on the
+      //    later `load` event vs our `style.load`), so without an explicit
+      //    move the choropleth fill can end up painted on top of these. Cone
+      //    goes first (backdrop), then surge (must be the highest so coastal
+      //    bands read clearly). Idempotent — safe to call every apply. ──
+      moveToTop(map, LAYER_NHC_CONE_FILL);
+      moveToTop(map, LAYER_NHC_CONE_LINE);
+      moveToTop(map, LAYER_SURGE_FILL);
+      moveToTop(map, LAYER_SURGE_LINE);
+
       // ── Visibility — driven purely by the panel toggles. ──
       setVis(map, LAYER_SST, showSst);
       setVis(map, LAYER_ALERTS_FILL, showAlerts);
@@ -764,4 +775,10 @@ function ensureLayer(
 function setVis(map: MbMap, id: string, visible: boolean): void {
   if (!map.getLayer(id)) return;
   map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
+}
+
+function moveToTop(map: MbMap, id: string): void {
+  if (!map.getLayer(id)) return;
+  // Two-arg form with beforeId undefined moves the layer to the very top.
+  map.moveLayer(id);
 }
