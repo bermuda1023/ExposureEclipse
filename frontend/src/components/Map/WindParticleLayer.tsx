@@ -537,6 +537,18 @@ export function WindParticleLayer({ map }: Props) {
         for (let i = 0; i < 4; i++) gl.disableVertexAttribArray(i);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        // Reset clearColor — Mapbox's next gl.clear() would otherwise pick
+        // up our transparent-black setting and clear whatever it's
+        // clearing to invisible.
+        gl.clearColor(0, 0, 0, 0);
+        // Also unbind any texture units we touched so Mapbox doesn't
+        // sample from stale ones on units 0-2 (its programs are unlikely
+        // to accidentally rely on them, but cheap insurance).
+        for (let u = 0; u < 3; u++) {
+          gl.activeTexture(gl.TEXTURE0 + u);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+        }
+        gl.activeTexture(gl.TEXTURE0);
 
         // Ask Mapbox for another frame — Mapbox only re-renders when the
         // map view changes, so we have to nudge it to keep animating.
