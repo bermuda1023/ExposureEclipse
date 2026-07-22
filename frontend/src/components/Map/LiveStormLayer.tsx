@@ -1282,19 +1282,15 @@ export function LiveStormLayer({ map }: Props) {
             `<div style="margin-top:5px;font-size:10px">Δ vs model mean: ${note}</div>`,
           );
         }
-      } else {
-        // Only show a "couldn't fetch" note if the current mode NEEDS a
-        // separate model fetch to be complete. In gfs / ecmwf modes the
-        // cell value is already the model forecast, so a failed
-        // comparison fetch shouldn't imply "no data".
-        const contextual =
-          mode === "gfs"
-            ? "Couldn't fetch ECMWF for comparison."
-            : mode === "ecmwf"
-            ? "Couldn't fetch GFS for comparison."
-            : "Model forecasts couldn't load right now — try again in a moment.";
+      } else if (mode === "observed" || mode.startsWith("diff-")) {
+        // Only warn when the failed fetch actually breaks the popup's
+        // purpose — observed mode expects models for cross-validation,
+        // and diff modes need both operands. In gfs / ecmwf modes the
+        // top of the popup already IS the forecast the user wanted;
+        // silently omit the comparison section rather than nagging them
+        // about a model they didn't ask for.
         rows.push(
-          `<div style="color:#a16207;font-size:10px">${contextual}</div>`,
+          `<div style="color:#a16207;font-size:10px">Model forecasts couldn't load right now — try again in a moment.</div>`,
         );
       }
       return rows.join("");
