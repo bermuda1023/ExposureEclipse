@@ -162,6 +162,7 @@ uniform sampler2D u_wind;
 uniform vec2 u_wind_min;
 uniform vec2 u_wind_max;
 uniform sampler2D u_color_ramp;
+uniform float u_particle_alpha;
 
 varying vec2 v_particle_pos;
 
@@ -169,7 +170,11 @@ void main() {
     vec2 velocity = mix(u_wind_min, u_wind_max, texture2D(u_wind, v_particle_pos).rg);
     float speed_t = length(velocity) / length(u_wind_max);
     vec2 ramp_pos = vec2(fract(16.0 * speed_t), floor(16.0 * speed_t) / 16.0);
-    gl_FragColor = texture2D(u_color_ramp, ramp_pos);
+    vec3 rgb = texture2D(u_color_ramp, ramp_pos).rgb;
+    // Semi-transparent particles let the underlying heatmap read through
+    // — matches Windy's translucent look and stops trails from turning
+    // into an opaque wash over the storm center.
+    gl_FragColor = vec4(rgb, u_particle_alpha);
 }
 `;
 

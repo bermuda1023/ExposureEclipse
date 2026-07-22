@@ -28,28 +28,34 @@ import {
 
 const LAYER_ID = "wind-particles";
 
-// Tuning knobs. Values chosen so a typical storm bbox shows fluid motion
-// without obscuring the underlying heatmap. Was 16384 particles at fade
-// 0.9 which stacked up until the map went dark on a Bertha-size bbox —
-// even with fast fade, 16k dots × point-size 1.5 covered a huge chunk of
-// the visible pixels every frame.
-const PARTICLE_RES = 64;                 // → 64×64 = 4096 particles
-const FADE_OPACITY = 0.82;               // faster decay so trails stay wispy
-const SPEED_FACTOR = 10.0;               // particle drift speed
-const DROP_RATE = 0.004;                 // baseline particle respawn rate
+// Tuning knobs, calibrated against a side-by-side Windy.com comparison.
+// The visual goal is soft, elongated white streaks flowing along the
+// vector field — NOT tiny fast dots. Long trails + slow motion + big
+// particles + high density is what gives that "paint being brushed
+// along the wind" look. Underlying heatmap conveys speed; particles
+// convey direction and motion.
+const PARTICLE_RES = 96;                 // → 96×96 = 9216 particles
+const FADE_OPACITY = 0.94;               // slow decay = long visible trails
+const SPEED_FACTOR = 3.5;                // slow drift so trails read as
+                                         // continuous streaks not jumps
+const DROP_RATE = 0.003;                 // baseline particle respawn rate
 const DROP_RATE_BUMP = 0.01;             // extra respawn in low-wind cells
-const POINT_SIZE = 1.0;                  // pixel size for each particle
+const POINT_SIZE = 2.5;                  // pixel size for each particle
+const PARTICLE_ALPHA = 0.55;             // per-particle base alpha; trails
+                                         // then fade below this via FADE_OPACITY
 
-// SSHWS-inspired color ramp — matches the fill palette so animated
-// particles read as the same visual language as the underlying heatmap.
+// Whitish palette with just a hint of colour for high winds — mirrors
+// Windy.com's aesthetic where the particles read as motion and the
+// underlying heatmap carries the speed information. Dark saturated
+// colours from earlier iterations turned the particle layer into an
+// opaque black mass over the map.
 const RAMP_COLORS: Record<number, string> = {
   0.00: "rgb(255,255,255)",
-  0.15: "rgb(200,240,180)",
-  0.30: "rgb(250,220,80)",
-  0.45: "rgb(240,140,60)",
-  0.60: "rgb(220,40,40)",
-  0.80: "rgb(120,20,20)",
-  1.00: "rgb(120,20,110)",
+  0.20: "rgb(255,255,240)",
+  0.40: "rgb(255,250,220)",
+  0.60: "rgb(255,240,200)",
+  0.80: "rgb(255,230,210)",
+  1.00: "rgb(255,220,220)",
 };
 
 interface Props {
@@ -586,6 +592,9 @@ function drawParticles(
   );
   gl.uniform1f(
     gl.getUniformLocation(s.drawProgram, "u_point_size"), POINT_SIZE,
+  );
+  gl.uniform1f(
+    gl.getUniformLocation(s.drawProgram, "u_particle_alpha"), PARTICLE_ALPHA,
   );
 
   gl.drawArrays(gl.POINTS, 0, s.particleCount);
