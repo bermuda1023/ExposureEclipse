@@ -93,15 +93,33 @@ def _parse_ndbc_float(s: str) -> float | None:
     return v
 
 
-@lru_cache(maxsize=1)
+_NDBC_CACHE: dict[str, tuple[float, list[BuoyObservation]]] = {}
+# NDBC updates latest_obs.txt roughly every 10 minutes. TTL a bit shorter
+# than that so we never serve data more than one publish-cycle stale.
+_NDBC_CACHE_TTL_S = 8 * 60
+
+
 def _ndbc_all() -> list[BuoyObservation]:
-    """Parse the NDBC latest_obs.txt once per cold-start. ~900 stations."""
+    """Parse the NDBC latest_obs.txt. Cached for ~8 min so we never serve
+    peak-storm readings that have since fallen off (Vercel serverless
+    containers stay warm for many minutes; the previous @lru_cache had no
+    TTL, so a KSPR reading of 47 kt gusting 69 during peak Bertha winds
+    stayed pinned for the container's whole life even after actual winds
+    dropped to 11 gusting 17 kt)."""
+    import time as _t
+    now = _t.time()
+    hit = _NDBC_CACHE.get("all")
+    if hit is not None and (now - hit[0]) < _NDBC_CACHE_TTL_S:
+        return hit[1]
+
     req = urllib.request.Request(NDBC_LATEST_URL, headers={"User-Agent": "eclipse/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
             text = r.read().decode("utf-8", errors="replace")
     except Exception:  # noqa: BLE001
-        return []
+        # Serve stale data rather than empty on a transient NDBC blip —
+        # a 15-min-old reading is better than nothing.
+        return hit[1] if hit is not None else []
 
     out: list[BuoyObservation] = []
     for line in text.splitlines():
@@ -143,6 +161,7 @@ def _ndbc_all() -> list[BuoyObservation]:
                 observed_at=iso,
             )
         )
+    _NDBC_CACHE["all"] = (now, out)
     return out
 
 
