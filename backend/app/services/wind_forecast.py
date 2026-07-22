@@ -226,8 +226,12 @@ class ModelWindGrid:
 # Sending too many parallel small requests caused visible "empty streaks"
 # on the wind heatmap when Open-Meteo rate-limited a handful of the chunks.
 _CHUNK_SIZE = 400
-_RETRY_ATTEMPTS = 2
-_RETRY_BACKOFF_S = 1.5
+# Aggressive retry policy — the model-grid fetch is chunked in row-major
+# order, so a permanent failure on any single chunk drops a horizontal
+# band from the response. Better to hammer the retry for a few extra
+# seconds than serve a heatmap with gaps.
+_RETRY_ATTEMPTS = 4
+_RETRY_BACKOFF_S = 1.2
 
 # Forecast horizon for the timeline slider. NHC issues 5-day forecasts;
 # we sample every 6 hours through the same window. 13 frames at ~1770
@@ -261,7 +265,16 @@ def _extract_bulk_frames(
     frame_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
     frame_vt: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
 
-    for req, item in zip(requested_coords, items):
+    # Pad `items` up to len(requested_coords) with empty dicts so a chunk
+    # that came back with fewer items than requested (or entirely empty
+    # because the fetch failed permanently) still emits coords for every
+    # cell — otherwise we'd drop that chunk's whole horizontal band from
+    # the returned grid and the frontend would render a white gap where
+    # the band was.
+    padded_items = list(items) + [{}] * max(
+        0, len(requested_coords) - len(items),
+    )
+    for req, item in zip(requested_coords, padded_items):
         req_lat, req_lon = req
         coords.append(WindCoord(
             lat=round(float(req_lat), 3),
@@ -352,7 +365,28 @@ def _fetch_bulk_chunk(
             items = tuple(payload)
             break
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < _RETRY_ATTEMPTS:
+            # Retry 429 (rate-limit), 500-series (transient upstream), and
+            # 502/503/504 (edge/gateway hiccups). Anything else — 400 for a
+            # malformed URL, 404 for an unknown model — is a permanent
+            # failure and further retries won't help.
+            transient = (
+                e.code == 429
+                or (500 <= e.code < 600)
+            )
+            if transient and attempt < _RETRY_ATTEMPTS:
+                _t.sleep(_RETRY_BACKOFF_S * (2 ** attempt))
+                continue
+            break
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            json.JSONDecodeError,
+        ):
+            # Network-level errors and truncated JSON both retry — they're
+            # exactly the class of hiccup that leaves horizontal gaps in
+            # the grid when only one chunk hits them.
+            if attempt < _RETRY_ATTEMPTS:
                 _t.sleep(_RETRY_BACKOFF_S * (2 ** attempt))
                 continue
             break
