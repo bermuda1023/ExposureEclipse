@@ -1027,6 +1027,32 @@ export function LiveStormLayer({ map }: Props) {
         ? "—"
         : `<b>${kt.toFixed(0)} kt</b> · ${mph(kt)} mph · ${kmh(kt)} km/h`;
 
+    // Open-Meteo doesn't return the model init cycle in the point-forecast
+    // response, so we estimate it: both GFS and ECMWF cycle every 6 h at
+    // 00Z / 06Z / 12Z / 18Z; the most recent cycle available at any moment
+    // is roughly `now - typical_latency`. GFS is usually available ~4 h
+    // after the cycle time; ECMWF's IFS 0.25° is delayed ~8 h. This is a
+    // subtle caption, not authoritative provenance — but it lets the user
+    // see roughly how fresh the forecast is.
+    const estimateModelRun = (model: "gfs" | "ecmwf"): string => {
+      const latencyHours = model === "gfs" ? 4 : 8;
+      const now = new Date();
+      const nowMs = now.getTime();
+      const cycleAgeMs = latencyHours * 3_600_000;
+      const cycleTime = new Date(nowMs - cycleAgeMs);
+      // Snap to previous multiple of 6 hours UTC.
+      const utcHours = cycleTime.getUTCHours();
+      const snappedHour = Math.floor(utcHours / 6) * 6;
+      cycleTime.setUTCHours(snappedHour, 0, 0, 0);
+      const hh = String(cycleTime.getUTCHours()).padStart(2, "0");
+      // If the cycle is today, show just "12Z run"; if yesterday, "12Z ·
+      // yesterday" so the user notices if the run is stale.
+      const todayUtc = new Date(nowMs);
+      todayUtc.setUTCHours(0, 0, 0, 0);
+      const sameDay = cycleTime.getTime() >= todayUtc.getTime();
+      return sameDay ? `${hh}Z run` : `${hh}Z run · yesterday`;
+    };
+
     // Client-side IDW at an arbitrary lat/lon using the shipped obs pool.
     // Mirrors the backend math (power = 2, radius 3°) so the "obs at click"
     // in a diff mode matches what the observed grid would show at that spot.
@@ -1258,11 +1284,12 @@ export function LiveStormLayer({ map }: Props) {
             m.model === "gfs"
               ? `<span style="background:#1e3a8a;color:white;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">GFS</span>`
               : `<span style="background:#065f46;color:white;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700">ECMWF</span>`;
+          const runTag = estimateModelRun(m.model as "gfs" | "ecmwf");
           rows.push(
             `<div style="margin-top:3px">${badge} ${speedTriple(m.windKt)}${
               m.windGustKt != null ? ` · gust ${m.windGustKt.toFixed(0)} kt` : ""
             }</div>`,
-            `<div style="color:#475569;margin-left:38px">Dir ${compass(m.windDirDeg)}</div>`,
+            `<div style="color:#475569;margin-left:38px">Dir ${compass(m.windDirDeg)} <span style="color:#94a3b8;font-size:9px">· ${runTag}</span></div>`,
           );
         }
         // Agreement hint — only meaningful in observed mode where the top
