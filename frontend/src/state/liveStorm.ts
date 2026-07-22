@@ -35,6 +35,7 @@ interface LiveStormState {
   showForecastCone: boolean;  // NHC's official cone of uncertainty
   showSurge: boolean;         // NHC peak storm surge coastal polygons
   showWindMap: boolean;       // interpolated surface-wind heatmap
+  showWindParticles: boolean; // animated windy.com-style particles
 
   // Mode of the wind-map layer: obs / model / diff. On mode change we lazy
   // -fetch the required model grid(s) once per storm. Status is exposed so
@@ -72,7 +73,8 @@ export type ToggleKey =
   | "showWindField"
   | "showForecastCone"
   | "showSurge"
-  | "showWindMap";
+  | "showWindMap"
+  | "showWindParticles";
 
 export const useLiveStormStore = create<LiveStormState>((set) => ({
   activeStormId: null,
@@ -90,6 +92,7 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   showForecastCone: true,
   showSurge: false,
   showWindMap: true,
+  showWindParticles: true,
   windMapMode: "observed" as WindMapMode,
   gfsGrid: null,
   ecmwfGrid: null,

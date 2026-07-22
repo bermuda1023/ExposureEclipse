@@ -179,12 +179,19 @@ export function LiveStormPanel() {
           {list.isLoading && <div>Loading storms…</div>}
           {list.error && (
             <div style={{ color: "var(--error-700)" }}>
-              Live feed unreachable. Replay still works once the catalogue loads.
+              Live feed unreachable.
             </div>
           )}
           {list.data && (
             <>
-              {list.data.note && (
+              {list.data.active.length > 0 ? (
+                <StormPicker
+                  label="Active in Atlantic"
+                  rows={list.data.active}
+                  activeId={activeId}
+                  onPick={(id) => useLiveStormStore.getState().start(id)}
+                />
+              ) : (
                 <div
                   style={{
                     fontSize: "0.7rem",
@@ -195,23 +202,9 @@ export function LiveStormPanel() {
                     borderRadius: 4,
                   }}
                 >
-                  {list.data.note}
+                  No active Atlantic storms right now.
                 </div>
               )}
-              {list.data.active.length > 0 && (
-                <StormPicker
-                  label="Active in Atlantic"
-                  rows={list.data.active}
-                  activeId={activeId}
-                  onPick={(id) => useLiveStormStore.getState().start(id)}
-                />
-              )}
-              <StormPicker
-                label={`Replay (${list.data.replay.length})`}
-                rows={list.data.replay}
-                activeId={activeId}
-                onPick={(id) => useLiveStormStore.getState().start(id)}
-              />
             </>
           )}
           <div style={{ borderTop: "1px solid var(--ink-200)", paddingTop: 8 }}>
@@ -233,6 +226,7 @@ export function LiveStormPanel() {
               <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
               <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
               <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
+              <LayerChip store={store} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
               <WindMapModeSelector store={store} />
               <LayerChip store={store} k="showAlerts" label="NWS alerts" hint="Watches + warnings" color="#ea580c" />
               <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
