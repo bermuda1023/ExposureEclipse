@@ -125,6 +125,16 @@ export interface WindField {
   outerRings: OuterRing[];
 }
 
+export interface ForecastCone {
+  ring: [number, number][];   // NHC's cone-of-uncertainty outer boundary
+}
+
+export interface SurgePolygon {
+  ring: [number, number][];   // one NHC peak-surge coastal band polygon
+  surgeRange: string;         // "1-2 ft" | "3-6 ft" | ...
+  color: string;              // NHC-provided colour hint (e.g. "blue")
+}
+
 export interface LiveStormBundle {
   storm: LiveStormRow;
   observedTrack: ObservedFix[];
@@ -139,6 +149,8 @@ export interface LiveStormBundle {
   sstMeta: SSTMeta;
   observedWindField: WindField;
   forecastWindField: WindField;
+  forecastCone: ForecastCone | null;   // live storms only
+  peakSurge: SurgePolygon[];           // live storms only; empty when N/A
 }
 
 export const fetchLiveStormList = () =>
@@ -151,6 +163,7 @@ export const fetchLiveStormBundle = (
     includeAlerts?: boolean;
     includeSst?: boolean;
     includeLand?: boolean;
+    includeSurge?: boolean;
   } = {},
 ) =>
   apiGet<LiveStormBundle>(`/live/storms/${encodeURIComponent(stormId)}`, {
@@ -158,4 +171,5 @@ export const fetchLiveStormBundle = (
     includeAlerts: options.includeAlerts ?? true,
     includeSst: options.includeSst ?? true,
     includeLand: options.includeLand ?? false, // NWS land station fetch is slow
+    includeSurge: options.includeSurge ?? true,
   });

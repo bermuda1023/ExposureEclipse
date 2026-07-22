@@ -43,6 +43,8 @@ const SRC_OBS_RINGS = "live-obs-outer-rings";
 const SRC_FCST_INNER = "live-fcst-inner-cone";
 const SRC_FCST_OUTER = "live-fcst-outer-cone";
 const SRC_FCST_RINGS = "live-fcst-outer-rings";
+const SRC_NHC_CONE = "live-nhc-cone";
+const SRC_SURGE = "live-surge";
 
 const LAYER_OBSERVED = "live-observed-line";
 const LAYER_FORECAST_LATEST = "live-forecast-latest-line";
@@ -60,6 +62,22 @@ const LAYER_FCST_OUTER = "live-fcst-outer-fill";
 const LAYER_FCST_RINGS = "live-fcst-rings-fill";
 const LAYER_BUOYS_TEXT = "live-buoys-text";
 const LAYER_LAND_TEXT = "live-land-text";
+const LAYER_NHC_CONE_FILL = "live-nhc-cone-fill";
+const LAYER_NHC_CONE_LINE = "live-nhc-cone-line";
+const LAYER_SURGE_FILL = "live-surge-fill";
+const LAYER_SURGE_LINE = "live-surge-line";
+
+// NHC's peak-storm-surge palette: hint colours in the KML mirror the standard
+// NHC surge legend. Ordered coolest → hottest so the fill layer's match
+// expression stacks correctly.
+const SURGE_COLOR: Record<string, string> = {
+  blue: "#2563eb",         // 1-2 ft
+  yellow: "#facc15",       // 3-6 ft
+  orange: "#f97316",       // 6-9 ft
+  red: "#dc2626",          // 9+ ft
+  purple: "#7c3aed",       // extreme
+  gray: "#94a3b8",
+};
 
 // Zoom at which buoy + station wind speed labels appear right next to the
 // marker (no hover needed). Below this they'd visually clutter the map.
@@ -233,6 +251,32 @@ function buildRingFC(rings: import("../../api/live").OuterRing[] | undefined) {
   return { type: "FeatureCollection" as const, features };
 }
 
+function buildNHCConeFC(cone: import("../../api/live").ForecastCone | null | undefined) {
+  const features: GeoJSON.Feature[] = [];
+  if (cone && cone.ring.length >= 3) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [cone.ring] },
+      properties: {},
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
+}
+
+function buildSurgeFC(surge: import("../../api/live").SurgePolygon[] | undefined) {
+  const features: GeoJSON.Feature[] = [];
+  if (!surge) return { type: "FeatureCollection" as const, features };
+  for (const s of surge) {
+    if (s.ring.length < 3) continue;
+    features.push({
+      type: "Feature",
+      geometry: { type: "Polygon", coordinates: [s.ring] },
+      properties: { surgeRange: s.surgeRange, color: s.color },
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
+}
+
 export function LiveStormLayer({ map }: Props) {
   const data = useLiveStormStore((s) => s.data);
   const showForecastHistory = useLiveStormStore((s) => s.showForecastHistory);
@@ -241,6 +285,8 @@ export function LiveStormLayer({ map }: Props) {
   const showLand = useLiveStormStore((s) => s.showLand);
   const showSst = useLiveStormStore((s) => s.showSst);
   const showWindField = useLiveStormStore((s) => s.showWindField);
+  const showForecastCone = useLiveStormStore((s) => s.showForecastCone);
+  const showSurge = useLiveStormStore((s) => s.showSurge);
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -273,6 +319,8 @@ export function LiveStormLayer({ map }: Props) {
       setSource(map, SRC_FCST_OUTER, buildConeQuadFC(data?.forecastWindField.outerCone));
       setSource(map, SRC_FCST_RINGS, buildRingFC(data?.forecastWindField.outerRings));
       setSource(map, SRC_FCST_INNER, buildConeQuadFC(data?.forecastWindField.innerCone));
+      setSource(map, SRC_NHC_CONE, buildNHCConeFC(data?.forecastCone));
+      setSource(map, SRC_SURGE, buildSurgeFC(data?.peakSurge));
 
       // ── Layers (stable paint, no data-dependent opacity). Visibility is
       //    flipped via setLayoutProperty below so toggling without remounting
@@ -384,6 +432,63 @@ export function LiveStormLayer({ map }: Props) {
           "fill-outline-color": "rgba(0,0,0,0)",
         },
       }, "county-line");
+
+      // NHC's official cone of uncertainty — the swept-circle envelope of
+      // 60-70% forecast-track probability. Sits under the forecast line so it
+      // reads as the backdrop, not the primary path.
+      ensureLayer(map, LAYER_NHC_CONE_FILL, {
+        id: LAYER_NHC_CONE_FILL, type: "fill", source: SRC_NHC_CONE,
+        paint: {
+          "fill-color": "#94a3b8",
+          "fill-opacity": 0.18,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_NHC_CONE_LINE, {
+        id: LAYER_NHC_CONE_LINE, type: "line", source: SRC_NHC_CONE,
+        paint: {
+          "line-color": "#475569",
+          "line-width": 1.4,
+          "line-opacity": 0.7,
+          "line-dasharray": [4, 3] as unknown as never,
+        },
+      });
+
+      // NHC peak-storm-surge coastal bands. Colours mirror NHC's own legend
+      // (blue = 1-2 ft → red = 9+ ft). Opaque enough to be legible against
+      // the SST fill and county tileset.
+      ensureLayer(map, LAYER_SURGE_FILL, {
+        id: LAYER_SURGE_FILL, type: "fill", source: SRC_SURGE,
+        paint: {
+          "fill-color": [
+            "match", ["get", "color"],
+            "blue", SURGE_COLOR.blue,
+            "yellow", SURGE_COLOR.yellow,
+            "orange", SURGE_COLOR.orange,
+            "red", SURGE_COLOR.red,
+            "purple", SURGE_COLOR.purple,
+            SURGE_COLOR.gray,
+          ] as unknown as never,
+          "fill-opacity": 0.55,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      });
+      ensureLayer(map, LAYER_SURGE_LINE, {
+        id: LAYER_SURGE_LINE, type: "line", source: SRC_SURGE,
+        paint: {
+          "line-color": [
+            "match", ["get", "color"],
+            "blue", SURGE_COLOR.blue,
+            "yellow", "#a16207",
+            "orange", "#c2410c",
+            "red", "#7f1d1d",
+            "purple", "#4c1d95",
+            SURGE_COLOR.gray,
+          ] as unknown as never,
+          "line-width": 0.8,
+          "line-opacity": 0.9,
+        },
+      });
 
       ensureLayer(map, LAYER_FORECAST_HISTORY, {
         id: LAYER_FORECAST_HISTORY, type: "line", source: SRC_FORECAST_HISTORY,
@@ -519,11 +624,19 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_FCST_OUTER, showWindField);
       setVis(map, LAYER_FCST_RINGS, showWindField);
       setVis(map, LAYER_FCST_INNER, showWindField);
+      setVis(map, LAYER_NHC_CONE_FILL, showForecastCone);
+      setVis(map, LAYER_NHC_CONE_LINE, showForecastCone);
+      setVis(map, LAYER_SURGE_FILL, showSurge);
+      setVis(map, LAYER_SURGE_LINE, showSurge);
     };
 
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, data, showForecastHistory, showAlerts, showBuoys, showLand, showSst, showWindField]);
+  }, [
+    map, data,
+    showForecastHistory, showAlerts, showBuoys, showLand, showSst,
+    showWindField, showForecastCone, showSurge,
+  ]);
 
   // Hover popups for buoys and land stations.
   useEffect(() => {

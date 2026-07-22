@@ -1,0 +1,268 @@
+"""NHC KMZ/KML product parsers.
+
+CurrentStorms.json points at three products we use for the live-storm overlay:
+
+  * Forecast track (KMZ) — Placemarks with individual forecast fixes at
+    0/12/24/36/48/72/96/120 hours, plus a summary LineString.
+  * Track cone of uncertainty (KMZ) — single Polygon representing the 60-70%
+    confidence envelope around the forecast track.
+  * Peak storm surge (plain KML) — coloured coastal Polygons per surge band
+    (e.g. "1-2 ft", "3-6 ft").
+
+Parsers below are deliberately stdlib-only (``zipfile`` + ``xml.etree``) —
+CLAUDE.md forbids pandas/pyshp in prod. All fetches are LRU-cached by URL.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import re
+import urllib.request
+import xml.etree.ElementTree as ET
+import zipfile
+from dataclasses import dataclass
+from functools import lru_cache
+
+FETCH_TIMEOUT_S = 30
+KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
+
+# NHC forecast-fix header patterns inside Placemark descriptions.
+_HOURS_RE = re.compile(r"(\d+)\s*hr\s*Forecast", re.IGNORECASE)
+_WIND_RE = re.compile(r"Maximum Wind:\s*(\d+)\s*knots?", re.IGNORECASE)
+_VALID_RE = re.compile(r"Valid at:\s*([^<]+?)\s*(?:</td>|\|)", re.IGNORECASE)
+_INITIAL_MARKER = "Advisory Information"
+
+
+@dataclass(slots=True, frozen=True)
+class NHCForecastFix:
+    lat: float
+    lon: float
+    wind_kt: int
+    hours_out: int
+    valid_time: str
+
+
+@dataclass(slots=True, frozen=True)
+class NHCSurgePolygon:
+    coords: list[tuple[float, float]]  # [(lon, lat), ...] closed ring
+    surge_range: str                   # e.g. "1-2 ft"
+    color: str                         # NHC-provided colour hint (e.g. "blue")
+
+
+# ─────────────────────────── HTTP ───────────────────────────
+
+
+@lru_cache(maxsize=64)
+def _download(url: str) -> bytes:
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "exposure-eclipse-live/1.0"}
+    )
+    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
+        return resp.read()
+
+
+def _kml_from_kmz(payload: bytes) -> bytes:
+    """Return the first .kml entry inside a KMZ archive."""
+    with zipfile.ZipFile(io.BytesIO(payload)) as z:
+        for name in z.namelist():
+            if name.lower().endswith(".kml"):
+                return z.read(name)
+    raise ValueError("KMZ archive contains no .kml file")
+
+
+def _fetch_kml(url: str) -> bytes:
+    """Fetch a KML or KMZ URL and return the raw KML bytes."""
+    payload = _download(url)
+    if url.lower().endswith(".kmz"):
+        return _kml_from_kmz(payload)
+    return payload
+
+
+# ─────────────────────────── KML helpers ───────────────────────────
+
+
+def _iter_placemarks(kml_bytes: bytes):
+    """Iterate Placemark elements, tolerant of an absent xmlns."""
+    # NHC KMLs sometimes ship without the KML namespace (e.g. cone.kml uses
+    # a Google Earth-flavoured URI). Strip namespaces so xpath is trivial.
+    text = kml_bytes.decode("utf-8", errors="replace")
+    # NHC's cone.kml uses single-quoted xmlns; forecast track uses double.
+    # Strip both so xpath below stays namespace-free.
+    text = re.sub(r"""\sxmlns(:\w+)?=['"][^'"]+['"]""", "", text)
+    root = ET.fromstring(text)
+    yield from root.iter("Placemark")
+
+
+def _extract_coord_list(text: str) -> list[tuple[float, float]]:
+    """Parse a KML <coordinates> text block into [(lon, lat), ...]."""
+    out: list[tuple[float, float]] = []
+    for tok in text.replace("\n", " ").replace("\t", " ").split():
+        parts = tok.split(",")
+        if len(parts) < 2:
+            continue
+        try:
+            lon = float(parts[0])
+            lat = float(parts[1])
+        except ValueError:
+            continue
+        out.append((lon, lat))
+    return out
+
+
+# ─────────────────────────── forecast track ───────────────────────────
+
+
+def fetch_forecast_track(kmz_url: str) -> list[NHCForecastFix]:
+    """Fetch NHC's forecast-track KMZ and return one fix per Placemark point.
+
+    The KML holds one Point Placemark per lead-time anchor (Advisory
+    Information + 12/24/36/48/72/96/120 hr Forecast) with the storm's
+    projected position and intensity in the description HTML. LineString
+    placemarks are skipped — they are duplicative summaries of the individual
+    fixes.
+    """
+    try:
+        kml = _fetch_kml(kmz_url)
+    except Exception:  # noqa: BLE001 — network / parse failure → empty
+        return []
+    fixes: list[NHCForecastFix] = []
+    for pm in _iter_placemarks(kml):
+        point = pm.find("Point")
+        if point is None:
+            continue
+        coords_el = point.find("coordinates")
+        if coords_el is None or not (coords_el.text or "").strip():
+            continue
+        coords = _extract_coord_list(coords_el.text or "")
+        if not coords:
+            continue
+        lon, lat = coords[0]
+
+        desc_el = pm.find("description")
+        desc = desc_el.text or "" if desc_el is not None else ""
+
+        hours_out: int | None = None
+        if _INITIAL_MARKER in desc:
+            hours_out = 0
+        else:
+            m = _HOURS_RE.search(desc)
+            if m:
+                hours_out = int(m.group(1))
+        if hours_out is None:
+            continue
+
+        wind_kt = 0
+        wm = _WIND_RE.search(desc)
+        if wm:
+            wind_kt = int(wm.group(1))
+
+        valid_time = ""
+        vm = _VALID_RE.search(desc)
+        if vm:
+            valid_time = vm.group(1).strip()
+
+        fixes.append(
+            NHCForecastFix(
+                lat=lat,
+                lon=lon,
+                wind_kt=wind_kt,
+                hours_out=hours_out,
+                valid_time=valid_time,
+            )
+        )
+    fixes.sort(key=lambda f: f.hours_out)
+    return fixes
+
+
+# ─────────────────────────── track cone ───────────────────────────
+
+
+def fetch_track_cone(kmz_url: str) -> list[tuple[float, float]]:
+    """Fetch NHC's cone-of-uncertainty KMZ. Returns the outer boundary as a
+    closed [(lon, lat), ...] ring, or an empty list on failure.
+
+    The cone KML has one Placemark holding a Polygon; take its outer
+    LinearRing coordinates.
+    """
+    try:
+        kml = _fetch_kml(kmz_url)
+    except Exception:  # noqa: BLE001
+        return []
+    for pm in _iter_placemarks(kml):
+        polygon = pm.find("Polygon")
+        if polygon is None:
+            continue
+        ring = polygon.find(".//outerBoundaryIs/LinearRing/coordinates")
+        if ring is None or not (ring.text or "").strip():
+            continue
+        coords = _extract_coord_list(ring.text or "")
+        if len(coords) >= 3:
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+            return coords
+    return []
+
+
+# ─────────────────────────── peak storm surge ───────────────────────────
+
+
+def fetch_peak_surge(kml_url: str) -> list[NHCSurgePolygon]:
+    """Fetch NHC's peak storm surge KML and return one polygon per surge band.
+
+    Each Placemark has a name like ``"Perdido Bay...1-2 ft"`` and a
+    description containing a JSON blob with ``peak_surge_range`` and a colour
+    hint. When storm surge is not applicable to a system (e.g. an open-ocean
+    tropical storm) the file may 404 — we degrade to an empty list.
+    """
+    try:
+        kml = _fetch_kml(kml_url)
+    except Exception:  # noqa: BLE001
+        return []
+    polygons: list[NHCSurgePolygon] = []
+    for pm in _iter_placemarks(kml):
+        polygon = pm.find("Polygon")
+        if polygon is None:
+            continue
+        ring = polygon.find(".//outerBoundaryIs/LinearRing/coordinates")
+        if ring is None or not (ring.text or "").strip():
+            continue
+        coords = _extract_coord_list(ring.text or "")
+        if len(coords) < 3:
+            continue
+        if coords[0] != coords[-1]:
+            coords.append(coords[0])
+
+        desc_el = pm.find("description")
+        surge_range = ""
+        color = "gray"
+        if desc_el is not None and desc_el.text:
+            try:
+                data = json.loads(desc_el.text.strip())
+                surge_range = str(data.get("peak_surge_range") or "")
+                color = str(data.get("color") or "gray")
+            except (ValueError, TypeError):
+                pass
+        if not surge_range:
+            # Fall back to parsing the name: "Location...1-2 ft"
+            name_el = pm.find("name")
+            if name_el is not None and name_el.text and "..." in name_el.text:
+                surge_range = name_el.text.rsplit("...", 1)[-1].strip()
+
+        polygons.append(
+            NHCSurgePolygon(
+                coords=coords,
+                surge_range=surge_range,
+                color=color,
+            )
+        )
+    return polygons
+
+
+__all__ = [
+    "NHCForecastFix",
+    "NHCSurgePolygon",
+    "fetch_forecast_track",
+    "fetch_track_cone",
+    "fetch_peak_surge",
+]

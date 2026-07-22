@@ -21,6 +21,8 @@ from ..services.live_hurricane import (
     LiveStormSummary,
     build_wind_cones,
     fetch_active_summaries,
+    fetch_live_forecast_cone,
+    fetch_live_peak_surge,
     replay_summaries,
     storm_and_forecasts,
 )
@@ -150,6 +152,21 @@ class WindFieldOut(CamelModel):
     outer_rings: list[OuterRingOut]
 
 
+class ForecastConeOut(CamelModel):
+    """NHC's official forecast cone of uncertainty. Live storms only — empty
+    ring on retired/replay storms."""
+
+    ring: list[list[float]]   # [[lon, lat], ...] closed outer boundary
+
+
+class SurgePolygonOut(CamelModel):
+    """One NHC peak-storm-surge band polygon (e.g. '3-6 ft' inundation)."""
+
+    ring: list[list[float]]
+    surge_range: str
+    color: str
+
+
 class LiveStormBundle(CamelModel):
     storm: LiveStormRow
     observed_track: list[ObservedFix]
@@ -167,6 +184,11 @@ class LiveStormBundle(CamelModel):
     # is the latest advisory's projected track.
     observed_wind_field: WindFieldOut
     forecast_wind_field: WindFieldOut
+    # NHC-issued products, populated only for live storms. `forecast_cone` is
+    # the swept-circle envelope from NHC's cone KMZ; `peak_surge` is the
+    # per-band coastal inundation polygons from NHC's peak-surge KML.
+    forecast_cone: ForecastConeOut | None
+    peak_surge: list[SurgePolygonOut]
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -269,6 +291,7 @@ def live_storm_bundle(
     include_alerts: bool = Query(default=True, alias="includeAlerts"),
     include_sst: bool = Query(default=True, alias="includeSst"),
     include_land: bool = Query(default=True, alias="includeLand"),
+    include_surge: bool = Query(default=True, alias="includeSurge"),
 ) -> LiveStormBundle:
     """Full data bundle for one storm — track + forecast + obs + alerts + SST."""
     result = storm_and_forecasts(atcf_id, as_of_index=as_of_index)
@@ -457,6 +480,26 @@ def live_storm_bundle(
         outer_rings=[_r_out(r) for r in fcst_rings],
     )
 
+    # NHC-issued products only exist for live storms. Cone is a single ring;
+    # peak surge is per-band coloured polygons along the coast.
+    forecast_cone_out: ForecastConeOut | None = None
+    peak_surge_out: list[SurgePolygonOut] = []
+    if is_live:
+        cone_ring = fetch_live_forecast_cone(atcf_id)
+        if cone_ring:
+            forecast_cone_out = ForecastConeOut(
+                ring=[[round(lon, 4), round(lat, 4)] for lon, lat in cone_ring],
+            )
+        if include_surge:
+            for poly in fetch_live_peak_surge(atcf_id):
+                peak_surge_out.append(
+                    SurgePolygonOut(
+                        ring=[[round(lon, 5), round(lat, 5)] for lon, lat in poly.coords],
+                        surge_range=poly.surge_range,
+                        color=poly.color,
+                    )
+                )
+
     return LiveStormBundle(
         storm=storm_row,
         observed_track=observed_fixes,
@@ -471,6 +514,8 @@ def live_storm_bundle(
         sst_meta=SSTMeta(source=sst_source, step_deg=sst_step),
         observed_wind_field=observed_wind,
         forecast_wind_field=forecast_wind,
+        forecast_cone=forecast_cone_out,
+        peak_surge=peak_surge_out,
     )
 
 

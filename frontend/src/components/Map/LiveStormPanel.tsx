@@ -78,11 +78,12 @@ export function LiveStormPanel() {
       includeAlerts: store.showAlerts,
       includeSst: store.showSst,
       includeLand: store.showLand,
+      includeSurge: store.showSurge,
     })
       .then(store.setData)
       .catch((e) => store.setError(String(e?.message ?? e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, store.showBuoys, store.showAlerts, store.showSst, store.showLand]);
+  }, [activeId, store.showBuoys, store.showAlerts, store.showSst, store.showLand, store.showSurge]);
 
   return (
     <div
@@ -179,6 +180,8 @@ export function LiveStormPanel() {
               Layers
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <LayerChip store={store} k="showForecastCone" label="NHC cone" hint="Cone of uncertainty" color="#475569" />
+              <LayerChip store={store} k="showSurge" label="Peak surge" hint="NHC coastal inundation" color="#dc2626" />
               <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64" color="#b91c1c" />
               <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Ghost tracks" color="#475569" />
               <LayerChip store={store} k="showAlerts" label="NWS alerts" hint="Watches + warnings" color="#ea580c" />
@@ -363,6 +366,14 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
       <div>{data.observedTrack.length} observed fixes · {data.forecasts.length} advisories</div>
       <div>{data.alerts.length} alerts in cone · {data.buoys.length} buoys</div>
       {data.landStations.length > 0 && <div>{data.landStations.length} land stations</div>}
+      {data.forecastCone && (
+        <div>NHC cone: {data.forecastCone.ring.length} pts</div>
+      )}
+      {data.peakSurge.length > 0 && (
+        <div>
+          Peak surge: {data.peakSurge.length} coastal polygons
+        </div>
+      )}
       {data.sst.length > 0 && (
         <div>
           SST {data.sstMinC}–{data.sstMaxC}°C ·{" "}

@@ -37,6 +37,12 @@ from .hurricane_impact import (
     rmax_nm,
 )
 from .ibtracs import Storm, TrackPoint, fetch_storms, lookup_r64_quads_nm
+from .nhc_gis import (
+    NHCSurgePolygon,
+    fetch_forecast_track,
+    fetch_peak_surge,
+    fetch_track_cone,
+)
 
 CURRENT_STORMS_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
 FETCH_TIMEOUT_S = 30
@@ -254,6 +260,34 @@ def _get_live_entry(atcf_id: str) -> dict | None:
     return None
 
 
+def fetch_live_forecast_cone(atcf_id: str) -> list[tuple[float, float]]:
+    """NHC's forecast cone-of-uncertainty polygon for a live storm — the
+    familiar swept-circle envelope shown on hurricanes.gov. Empty list when
+    the storm is not in the live feed or the KMZ is unreachable."""
+    entry = _get_live_entry(atcf_id)
+    if entry is None:
+        return []
+    cone_kmz = (entry.get("trackCone") or {}).get("kmzFile")
+    if not cone_kmz:
+        return []
+    return fetch_track_cone(cone_kmz)
+
+
+def fetch_live_peak_surge(atcf_id: str) -> list[NHCSurgePolygon]:
+    """NHC's peak storm-surge forecast for a live storm — coloured coastal
+    polygons per surge band (1-2 ft, 3-6 ft, ...). Not every storm publishes a
+    surge product (open-ocean systems, weak systems); empty list in that case.
+    """
+    entry = _get_live_entry(atcf_id)
+    if entry is None:
+        return []
+    surge = entry.get("peakSurgeKML") or {}
+    surge_url = surge.get("peakSurgeKMLFile")
+    if not surge_url:
+        return []
+    return fetch_peak_surge(surge_url)
+
+
 def _project_point(
     lat: float, lon: float, bearing_deg: float, distance_nm: float,
 ) -> tuple[float, float]:
@@ -401,38 +435,57 @@ def _live_storm_and_forecasts(
     )
 
     forecast_points: list[ForecastPoint] = []
-    if move_dir is not None and move_speed is not None and move_speed > 0:
-        for h in FORECAST_HOUR_ANCHORS:
-            f_lat, f_lon = _project_point(lat, lon, move_dir, move_speed * h)
+    # Prefer NHC's actual forecast track KMZ (real forecaster-issued lat/lon
+    # + intensity at 12/24/36/48/72/96/120 hr anchors). Fall back to a motion
+    # -vector extrapolation only if the KMZ is missing or fails to parse.
+    forecast_kmz = (entry.get("forecastTrack") or {}).get("kmzFile")
+    if forecast_kmz:
+        for fix in fetch_forecast_track(forecast_kmz):
             forecast_points.append(
                 ForecastPoint(
-                    lat=f_lat,
-                    lon=f_lon,
-                    wind_kt=intensity,
-                    hours_out=h,
-                    valid_time=_shift_iso_hours(last_update, h),
+                    lat=fix.lat,
+                    lon=fix.lon,
+                    wind_kt=fix.wind_kt or intensity,
+                    hours_out=fix.hours_out,
+                    valid_time=fix.valid_time
+                    or _shift_iso_hours(last_update, fix.hours_out),
                 )
             )
-    else:
-        # Stationary or unknown motion — one point at T+0 so the frontend has
-        # something to render.
-        forecast_points.append(
-            ForecastPoint(
-                lat=lat,
-                lon=lon,
-                wind_kt=intensity,
-                hours_out=0,
-                valid_time=last_update,
+
+    if not forecast_points:
+        if move_dir is not None and move_speed is not None and move_speed > 0:
+            for h in FORECAST_HOUR_ANCHORS:
+                f_lat, f_lon = _project_point(lat, lon, move_dir, move_speed * h)
+                forecast_points.append(
+                    ForecastPoint(
+                        lat=f_lat,
+                        lon=f_lon,
+                        wind_kt=intensity,
+                        hours_out=h,
+                        valid_time=_shift_iso_hours(last_update, h),
+                    )
+                )
+        else:
+            # Stationary or unknown motion — one point at T+0 so the frontend
+            # has something to render.
+            forecast_points.append(
+                ForecastPoint(
+                    lat=lat,
+                    lon=lon,
+                    wind_kt=intensity,
+                    hours_out=0,
+                    valid_time=last_update,
+                )
             )
-        )
 
     advisories = [
         ForecastTrack(
             advisory_number=1,
             issued_at=last_update,
             points=forecast_points,
-            # Marked False: the fix is the NHC current advisory, projected
-            # along the reported motion vector. Not a historical ghost line.
+            # Marked False: this is the current NHC forecast advisory (real
+            # data when the KMZ is available, motion-vector extrapolation as
+            # a last-resort fallback), not a historical ghost line.
             synthetic=False,
         )
     ]
