@@ -331,6 +331,16 @@ export function WindParticleLayer({ map }: Props) {
 
     let state: LayerState | null = null;
     let cancelled = false;
+    // Trail framebuffer stores particle positions in *screen* space (that's
+    // how the webgl-wind fade trick works). When the camera pans or zooms,
+    // the old trail pixels stay stuck at their previous screen coords
+    // while the world underneath moves — so trails visibly detach from
+    // their true world locations. Flip this flag on any camera event and
+    // clear both screen textures inside the next render call.
+    let trailsDirty = false;
+    const markTrailsDirty = () => {
+      trailsDirty = true;
+    };
 
     // Skip diff modes — particles only make sense in observed / gfs / ecmwf.
     if (mode.startsWith("diff-")) {
@@ -460,6 +470,17 @@ export function WindParticleLayer({ map }: Props) {
         gl.disable(gl.STENCIL_TEST);
         gl.disable(gl.CULL_FACE);
 
+        // Camera moved since last frame → wipe the accumulated trail so
+        // it doesn't decouple from the world underneath. Skipping the
+        // fade for one frame means shorter trails during motion, which
+        // is a visual acceptable tradeoff vs. trails clearly floating
+        // in the wrong place.
+        if (trailsDirty) {
+          clearTexture(gl, s.framebuffer, s.screenTextureA);
+          clearTexture(gl, s.framebuffer, s.screenTextureB);
+          trailsDirty = false;
+        }
+
         // ─── Pass 1: draw the previous screen texture into the current
         //     screen texture, faded by u_opacity — this gives us trails.
         gl.bindFramebuffer(gl.FRAMEBUFFER, s.framebuffer);
@@ -529,8 +550,16 @@ export function WindParticleLayer({ map }: Props) {
     if (map.isStyleLoaded()) attach();
     else map.once("idle", attach);
 
+    // Any camera change invalidates the accumulated trail — see render()
+    // for the clear. Listening to 'move' is enough (fires on both pan and
+    // zoom); adding 'zoom' would just double-fire on the same events.
+    map.on("move", markTrailsDirty);
+
     return () => {
       cancelled = true;
+      try {
+        map.off("move", markTrailsDirty);
+      } catch { /* torn down */ }
       try {
         if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
       } catch { /* torn down */ }
