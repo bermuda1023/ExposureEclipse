@@ -513,6 +513,17 @@ export function WindParticleLayer({ map }: Props) {
         s.screenTextureA = s.screenTextureB;
         s.screenTextureB = tmpScreen;
 
+        // CRITICAL: restore GL state that Mapbox expects. updateParticles
+        // left the framebuffer bound to a 128×128 particle-state texture
+        // and the viewport clamped to that same tiny size — every
+        // Mapbox layer drawn AFTER us was rendering into that pixel
+        // grid, which is why the map, land station points, and choropleth
+        // all appeared offset / shrunken / shifted from where they
+        // should be. Unbind the framebuffer and reset viewport before
+        // returning so Mapbox's subsequent draws land on the real canvas.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
         // Ask Mapbox for another frame — Mapbox only re-renders when the
         // map view changes, so we have to nudge it to keep animating.
         map.triggerRepaint();
