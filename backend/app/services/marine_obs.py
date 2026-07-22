@@ -147,8 +147,16 @@ def buoys_in_bbox(
 # ─────────────────────────── NWS land stations ───────────────────────────
 
 
-def _nws_get(path: str, params: dict | None = None) -> dict | None:
-    """GET against api.weather.gov; returns parsed JSON or None on error."""
+def _nws_get(
+    path: str,
+    params: dict | None = None,
+    *,
+    timeout_s: int = FETCH_TIMEOUT_S,
+) -> dict | None:
+    """GET against api.weather.gov; returns parsed JSON or None on error.
+    ``timeout_s`` can be overridden by the caller — the /stations pagination
+    is happy to wait ~30 s but per-station latest-obs fetches want to fail
+    fast so a stuck endpoint doesn't hold up a whole 500-station batch."""
     url = f"https://api.weather.gov{path}"
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -160,7 +168,7 @@ def _nws_get(path: str, params: dict | None = None) -> dict | None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
             return json.loads(r.read().decode("utf-8"))
     except Exception:  # noqa: BLE001
         return None
@@ -194,7 +202,10 @@ def _nws_all_stations() -> list[dict]:
 
 
 def _fetch_latest_obs(sid: str, name: str, lat: float, lon: float) -> LandObservation | None:
-    obs = _nws_get(f"/stations/{sid}/observations/latest")
+    # 6-second per-station cap. NWS station endpoints occasionally hang for
+    # the full 30 s default; with 500 stations in parallel a handful of
+    # hangs could push total latency past Vercel's serverless timeout.
+    obs = _nws_get(f"/stations/{sid}/observations/latest", timeout_s=6)
     if not obs:
         return None
     p = (obs.get("properties") or {})

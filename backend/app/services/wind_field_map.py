@@ -66,7 +66,13 @@ class WindObs:
 
 MAX_AGE_HOURS = 4.0
 LOCAL_KILL_MEDIAN_KT = 5.0
-LAND_STATION_SAMPLE = 60         # subsampled; IDW smooths the density down
+# Was 60 with spatial subsampling — that thinned dense metro coverage
+# (Houston / DFW have 30+ ASOS+mesonet sites) to a sparse skeleton. Now we
+# use every station in the bbox up to a safety cap so IDW has as many
+# neighbours as possible. Cap keeps latency bounded when a bbox covers many
+# CONUS states.
+LAND_STATION_CAP = 500
+LAND_STATION_WORKERS = 32
 IDW_POWER = 2.0
 IDW_RADIUS_DEG = 3.0             # ~330 km at mid-latitudes
 NEIGHBOR_RADIUS_DEG = 1.5        # for the dead-sensor check
@@ -109,15 +115,23 @@ def _adaptive_step(span: float) -> float:
 def _fetch_land_obs_with_meta(
     west: float, south: float, east: float, north: float,
 ) -> list[tuple[float, float, float, float | None, str, str]]:
-    """Spatially-uniform subsample of NWS land stations + parallel latest-obs
-    fetch. Uses fewer stations than the discrete-marker view since the IDW
-    interpolation already smooths.
+    """Fetch the latest wind observation for every NWS station in the bbox
+    (up to ``LAND_STATION_CAP``). Runs in parallel across
+    ``LAND_STATION_WORKERS`` threads.
+
+    Previously spatial-subsampled to 60 stations for even distribution, but
+    that thinned metro clusters (Houston / DFW have 30+ ASOS + mesonet
+    sites) to a small skeleton — the IDW field ended up under-constrained
+    exactly where the most ground-truth was available. Now we take every
+    station and let the IDW's inverse-square weighting handle the natural
+    non-uniform density (a dense city cluster just gives that area
+    higher-confidence values, which is the correct behaviour).
 
     Returns tuples of (lat, lon, wind_kt, wind_dir_deg, observed_at,
     station_id). ``wind_dir_deg`` is None when the station reports speed
     but not direction.
     """
-    all_in_bbox: list[tuple[str, str, float, float]] = []
+    candidates: list[tuple[str, str, float, float]] = []
     for f in _nws_all_stations():
         geom = f.get("geometry") or {}
         coords = geom.get("coordinates") or [None, None]
@@ -130,18 +144,17 @@ def _fetch_land_obs_with_meta(
         sid = props.get("stationIdentifier") or ""
         if not sid:
             continue
-        all_in_bbox.append((sid, props.get("name") or sid, lat, lon))
-    candidates = _spatial_subsample(
-        all_in_bbox, west, south, east, north, LAND_STATION_SAMPLE,
-    )
+        candidates.append((sid, props.get("name") or sid, lat, lon))
+        if len(candidates) >= LAND_STATION_CAP:
+            break
 
     out: list[tuple[float, float, float, float | None, str, str]] = []
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=LAND_STATION_WORKERS) as pool:
         futures = [
             pool.submit(_fetch_latest_obs, sid, name, lat, lon)
             for sid, name, lat, lon in candidates
         ]
-        for fut in as_completed(futures, timeout=30):
+        for fut in as_completed(futures, timeout=45):
             try:
                 rec = fut.result()
             except Exception:  # noqa: BLE001

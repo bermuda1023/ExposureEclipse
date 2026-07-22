@@ -365,11 +365,13 @@ function buildWindObsFC(
         windKt: o.windKt,
         stationId: o.stationId,
         source: o.source,
-        // 1 = drawn brightly, 0 = dimmed. Everything is bright when there's no
-        // active highlight (viewing the full obs pool).
+        // 1 = visible contributor, 0 = hidden. Obs points are OFF by default
+        // — they only appear when the user clicks "N sources" in a wind-map
+        // cell popup, and only the stations that fed that specific cell are
+        // marked visible.
         highlighted:
           highlighted === null
-            ? 1
+            ? 0
             : highlighted.has(`${o.stationId}|${o.lat}|${o.lon}`) ? 1 : 0,
       },
     })),
@@ -644,14 +646,14 @@ export function LiveStormLayer({ map }: Props) {
         map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-color", paintExpr);
       }
 
-      // Contributor observation points — one small dot per cleaned obs.
-      // Dim by default; light up when the user drills into a cell's sources.
+      // Contributor observation points. Completely invisible unless the
+      // user has drilled into a cell via the "N sources" link — then only
+      // the stations that fed that specific cell are shown, so the map
+      // stays clean during normal browsing.
       ensureLayer(map, LAYER_WIND_OBS, {
         id: LAYER_WIND_OBS, type: "circle", source: SRC_WIND_OBS,
         paint: {
-          "circle-radius": [
-            "case", ["==", ["get", "highlighted"], 1], 6, 3,
-          ] as unknown as never,
+          "circle-radius": 6,
           "circle-color": [
             "match", ["get", "source"],
             "buoy", "#0891b2",
@@ -659,15 +661,14 @@ export function LiveStormLayer({ map }: Props) {
             "#94a3b8",
           ] as unknown as never,
           "circle-stroke-color": "#0f172a",
-          "circle-stroke-width": [
-            "case", ["==", ["get", "highlighted"], 1], 2, 0.6,
-          ] as unknown as never,
+          "circle-stroke-width": 2,
           "circle-opacity": [
             "case",
-            // With no active drill-down (highlighted=1 for all), keep the
-            // pool visible at moderate opacity; when drilling in, non
-            // -highlighted dots fade way down so the contributor set pops.
-            ["==", ["get", "highlighted"], 1], 0.9, 0.15,
+            ["==", ["get", "highlighted"], 1], 0.95, 0,
+          ] as unknown as never,
+          "circle-stroke-opacity": [
+            "case",
+            ["==", ["get", "highlighted"], 1], 0.95, 0,
           ] as unknown as never,
         },
       });
