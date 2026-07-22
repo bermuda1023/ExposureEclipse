@@ -123,21 +123,28 @@ export function MapView({ data, isLoading, error }: Props) {
       zoom: 3.6,
       minZoom: 2,
       maxZoom: 12,
-      // Force flat Web Mercator instead of Mapbox v3's default globe
-      // projection. The custom WebGL wind-particle layer uses a hand
-      // -rolled lng/lat → mercator formula in its vertex shader; that
-      // math only matches the projection matrix Mapbox hands to render()
-      // when the map is in mercator mode. On globe / adaptive projection
-      // (Mapbox v3 default at low zoom levels) the matrix is different
-      // and particles + heatmap fills end up projected to the wrong
-      // world coordinates — visible as rectangles floating over the
-      // wrong continent when the user zooms out.
-      projection: { name: "mercator" },
+      // Force flat Web Mercator (string form — the object form's field
+      // name has drifted across Mapbox versions and silently no-ops if
+      // wrong). The custom WebGL wind-particle layer uses a hand-rolled
+      // lng/lat → mercator formula in its vertex shader; that math only
+      // matches the projection matrix Mapbox hands to render() when the
+      // map is in mercator mode. On globe / adaptive projection (Mapbox
+      // v3 default at low zoom levels) the matrix is different and
+      // particles + Mapbox-native layers end up projected to wildly
+      // wrong world coordinates.
+      projection: "mercator",
     });
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new mapboxgl.ScaleControl({ unit: "imperial" }), "bottom-left");
 
     map.on("load", () => {
+      // Belt-and-suspenders: also call setProjection after style load in
+      // case the constructor arg was ignored due to a style/version
+      // mismatch. Idempotent.
+      try {
+        map.setProjection("mercator");
+      } catch { /* older versions error harmlessly */ }
+
       // ── State source + layers ──
       map.addSource(STATE_TILESET.src, {
         type: "vector",

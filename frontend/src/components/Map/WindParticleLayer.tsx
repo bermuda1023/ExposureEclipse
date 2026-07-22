@@ -513,16 +513,30 @@ export function WindParticleLayer({ map }: Props) {
         s.screenTextureA = s.screenTextureB;
         s.screenTextureB = tmpScreen;
 
-        // CRITICAL: restore GL state that Mapbox expects. updateParticles
-        // left the framebuffer bound to a 128×128 particle-state texture
-        // and the viewport clamped to that same tiny size — every
-        // Mapbox layer drawn AFTER us was rendering into that pixel
-        // grid, which is why the map, land station points, and choropleth
-        // all appeared offset / shrunken / shifted from where they
-        // should be. Unbind the framebuffer and reset viewport before
-        // returning so Mapbox's subsequent draws land on the real canvas.
+        // CRITICAL: restore GL state that Mapbox expects. Custom layers
+        // that don't fully reset state end up corrupting subsequent
+        // Mapbox layer draws — user saw land stations plotted over the
+        // ocean and choropleth cells at the wrong lat/lon because we
+        // were leaving:
+        //   - the framebuffer bound to a 128×128 particle-state texture,
+        //     which meant Mapbox's next layer drew into that tiny pixel
+        //     grid instead of the canvas
+        //   - the viewport clamped to (0, 0, 128, 128)
+        //   - a vertex attribute enabled + array buffer bound
+        //   - a custom program active
+        // Reset all of it before returning. Blend is set back to
+        // premultiplied alpha (Mapbox's convention) so its next draws
+        // composite correctly.
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.useProgram(null);
+        // Disable the attribute indices we enable in bindAttribute —
+        // Mapbox layers may leave attrib 0 disabled and expect it that
+        // way, so unwind anything we touched.
+        for (let i = 0; i < 4; i++) gl.disableVertexAttribArray(i);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
         // Ask Mapbox for another frame — Mapbox only re-renders when the
         // map view changes, so we have to nudge it to keep animating.
