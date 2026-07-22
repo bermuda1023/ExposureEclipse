@@ -110,9 +110,10 @@ const SURGE_COLOR: Record<string, string> = {
   gray: "#94a3b8",
 };
 
-// Zoom at which buoy + station wind speed labels appear right next to the
-// marker (no hover needed). Below this they'd visually clutter the map.
-const OBS_LABEL_MIN_ZOOM = 6.5;
+// (Temporarily removed — labels showing station IDs are always visible
+// down to zoom 3 during the coord-offset debugging pass. Restore the
+// wind-kt display + zoom floor once we've isolated the mis-plotted
+// stations.)
 
 // Cat-colored step palette for the wind-field cones (matches historical
 // impact view so the visual language is consistent across the app).
@@ -839,15 +840,17 @@ export function LiveStormLayer({ map }: Props) {
       // user zooms in past the marker-cluster zoom. text-allow-overlap=false
       // keeps the map readable; closely-spaced stations drop their label
       // rather than stacking. Halo gives contrast over the SST fill.
+      // Temporary DEBUG mode: station IDs always visible next to every
+      // buoy + land dot so the user can call out specific stations that
+      // look mis-plotted and I can verify their real coord. Zoom floor
+      // dropped from OBS_LABEL_MIN_ZOOM (6.5) to 3 so IDs read even at
+      // basin-wide overview. Revert to wind-kt display once the coord
+      // -offset investigation lands.
       ensureLayer(map, LAYER_BUOYS_TEXT, {
         id: LAYER_BUOYS_TEXT, type: "symbol", source: SRC_BUOYS,
-        minzoom: OBS_LABEL_MIN_ZOOM,
+        minzoom: 3,
         layout: {
-          "text-field": [
-            "concat",
-            ["to-string", ["round", ["get", "windKt"]]],
-            " kt",
-          ] as unknown as never,
+          "text-field": ["get", "stationId"] as unknown as never,
           "text-size": 10,
           "text-offset": [0, -1.1] as unknown as never,
           "text-anchor": "bottom",
@@ -862,13 +865,9 @@ export function LiveStormLayer({ map }: Props) {
       });
       ensureLayer(map, LAYER_LAND_TEXT, {
         id: LAYER_LAND_TEXT, type: "symbol", source: SRC_LAND,
-        minzoom: OBS_LABEL_MIN_ZOOM,
+        minzoom: 3,
         layout: {
-          "text-field": [
-            "concat",
-            ["to-string", ["round", ["get", "windKt"]]],
-            " kt",
-          ] as unknown as never,
+          "text-field": ["get", "stationId"] as unknown as never,
           "text-size": 10,
           "text-offset": [0, -1.1] as unknown as never,
           "text-anchor": "bottom",
