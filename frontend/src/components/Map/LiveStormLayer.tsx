@@ -376,21 +376,57 @@ function buildWindObsFC(
   };
 }
 
-/** Diff two aligned grids (obs vs model, or model vs model). Cells are keyed
- *  by rounded lat/lon since the backend uses a fixed 0.5° step + rounding. */
+/** Diff two grids. Both back-ends emit at a fixed 0.5° step aligned to the
+ *  bbox origin, so exact-key matching works in the common case; a
+ *  nearest-neighbor fallback (within one grid step) handles any residual
+ *  rounding drift between the observed grid and model-provider grid
+ *  snap-to-native behaviour. Returns one output cell per A cell that has a
+ *  B match — cells with no counterpart are dropped (empty gap on the map). */
 function computeDiffGrid(
   a: Array<{ lat: number; lon: number; windKt: number }>,
   b: Array<{ lat: number; lon: number; windKt: number }>,
 ): Array<{ lat: number; lon: number; windKt: number; diff: number }> {
-  const key = (lat: number, lon: number) =>
-    `${lat.toFixed(2)}|${lon.toFixed(2)}`;
-  const bMap = new Map(b.map((c) => [key(c.lat, c.lon), c]));
+  const STEP = 0.5;
+  const TOL = STEP * 0.51; // just over half a step, so nearest cell wins
+  // Bucket B into 0.5° bins for O(1) neighborhood lookup.
+  const binKey = (lat: number, lon: number) =>
+    `${Math.round(lat / STEP)}|${Math.round(lon / STEP)}`;
+  const bBins = new Map<
+    string,
+    Array<{ lat: number; lon: number; windKt: number }>
+  >();
+  for (const cb of b) {
+    const k = binKey(cb.lat, cb.lon);
+    const list = bBins.get(k) ?? [];
+    list.push(cb);
+    bBins.set(k, list);
+  }
+
   const out: Array<{ lat: number; lon: number; windKt: number; diff: number }> =
     [];
   for (const ca of a) {
-    const cb = bMap.get(key(ca.lat, ca.lon));
-    if (!cb) continue;
-    const diff = ca.windKt - cb.windKt;
+    const bi = Math.round(ca.lat / STEP);
+    const bj = Math.round(ca.lon / STEP);
+    // Check the target bin and eight neighbors to survive off-by-one snaps.
+    let best: { lat: number; lon: number; windKt: number } | null = null;
+    let bestD2 = Infinity;
+    for (let di = -1; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        const list = bBins.get(`${bi + di}|${bj + dj}`);
+        if (!list) continue;
+        for (const cb of list) {
+          const dlat = ca.lat - cb.lat;
+          const dlon = ca.lon - cb.lon;
+          const d2 = dlat * dlat + dlon * dlon;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            best = cb;
+          }
+        }
+      }
+    }
+    if (!best || Math.sqrt(bestD2) > TOL) continue;
+    const diff = ca.windKt - best.windKt;
     out.push({ lat: ca.lat, lon: ca.lon, windKt: diff, diff });
   }
   return out;

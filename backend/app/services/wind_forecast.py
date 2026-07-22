@@ -194,13 +194,21 @@ _CHUNK_SIZE = 100
 
 
 def _extract_bulk_cells(
+    requested_coords: list[tuple[float, float]],
     items: list[dict], wire_name: str, now: datetime,
 ) -> tuple[list[ModelWindCell], str]:
     """Flatten Open-Meteo's per-location responses into ModelWindCells at the
-    nearest hour. Returns (cells, valid_time_utc)."""
+    nearest hour. Returns (cells, valid_time_utc).
+
+    Cells are emitted at the *requested* lat/lon (not Open-Meteo's returned
+    lat/lon, which snaps to the model's native grid — GFS ~0.25°, ECMWF IFS
+    0.25° — and would break the cell-key alignment the frontend relies on
+    to compute diffs vs the observed grid. Open-Meteo does bilinear
+    interpolation from the native grid to the requested point anyway, so
+    the values are still meaningful at the requested coord."""
     out: list[ModelWindCell] = []
     valid_time = ""
-    for item in items:
+    for req, item in zip(requested_coords, items):
         hourly = item.get("hourly") or {}
         times = hourly.get("time") or []
         speeds = hourly.get("wind_speed_10m") or []
@@ -214,17 +222,14 @@ def _extract_bulk_cells(
         if speed_ms is None:
             continue
         dir_deg = dirs[idx] if idx < len(dirs) else None
-        lat = item.get("latitude")
-        lon = item.get("longitude")
-        if lat is None or lon is None:
-            continue
         if not valid_time:
             t = times[idx]
             valid_time = t if t.endswith("Z") else (t + "Z")
+        req_lat, req_lon = req
         out.append(
             ModelWindCell(
-                lat=round(float(lat), 3),
-                lon=round(float(lon), 3),
+                lat=round(float(req_lat), 3),
+                lon=round(float(req_lon), 3),
                 wind_kt=round(float(_mps_to_kt(float(speed_ms)) or 0.0), 1),
                 wind_dir_deg=(
                     round(float(dir_deg), 1) if dir_deg is not None else None
@@ -304,19 +309,19 @@ def fetch_model_wind_grid(
     all_cells: list[ModelWindCell] = []
     valid_time = ""
     with ThreadPoolExecutor(max_workers=min(6, len(chunks))) as pool:
-        futures = []
+        futures: list[tuple[list[tuple[float, float]], object]] = []
         for ch in chunks:
             lat_str = ",".join(f"{c[0]:.3f}" for c in ch)
             lon_str = ",".join(f"{c[1]:.3f}" for c in ch)
             futures.append(
-                pool.submit(_fetch_bulk_chunk, lat_str, lon_str, model_key)
+                (ch, pool.submit(_fetch_bulk_chunk, lat_str, lon_str, model_key))
             )
-        for fut in futures:
+        for ch, fut in futures:
             try:
-                items = fut.result()
+                items = fut.result()  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 items = ()
-            cells, vt = _extract_bulk_cells(list(items), model_wire, now)
+            cells, vt = _extract_bulk_cells(ch, list(items), model_wire, now)
             all_cells.extend(cells)
             if vt and not valid_time:
                 valid_time = vt

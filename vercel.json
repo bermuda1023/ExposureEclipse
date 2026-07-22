@@ -9,7 +9,9 @@
     { "source": "/api", "destination": "/api/index" },
     { "source": "/admin/(.*)", "destination": "/index.html" },
     { "source": "/fund-analysis/(.*)", "destination": "/index.html" },
-    { "source": "/fund-analysis", "destination": "/index.html" }
+    { "source": "/fund-analysis", "destination": "/index.html" },
+    { "source": "/methodology/(.*)", "destination": "/index.html" },
+    { "source": "/methodology", "destination": "/index.html" }
   ],
   "functions": {
     "api/index.py": {
