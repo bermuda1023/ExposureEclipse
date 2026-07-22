@@ -1018,6 +1018,31 @@ export function LiveStormLayer({ map }: Props) {
         ? "—"
         : `<b>${kt.toFixed(0)} kt</b> · ${mph(kt)} mph · ${kmh(kt)} km/h`;
 
+    // Client-side IDW at an arbitrary lat/lon using the shipped obs pool.
+    // Mirrors the backend math (power = 2, radius 3°) so the "obs at click"
+    // in a diff mode matches what the observed grid would show at that spot.
+    const obsIdwAt = (
+      lat: number,
+      lon: number,
+      obs: Array<import("../../api/live").WindObs>,
+      radiusDeg = 3.0,
+    ): number | null => {
+      const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), 0.05);
+      const r2 = radiusDeg * radiusDeg;
+      let wSum = 0;
+      let vSum = 0;
+      for (const o of obs) {
+        const dlat = o.lat - lat;
+        const dlon = (o.lon - lon) * cosLat;
+        const d2 = dlat * dlat + dlon * dlon;
+        if (d2 > r2) continue;
+        const w = 1 / Math.pow(d2 + 0.01, 1);
+        wSum += w;
+        vSum += w * o.windKt;
+      }
+      return wSum > 0 ? vSum / wSum : null;
+    };
+
     const onClick = async (e: mapboxgl.MapMouseEvent) => {
       const f = (e as any).features?.[0];
       if (!f) return;
@@ -1033,12 +1058,17 @@ export function LiveStormLayer({ map }: Props) {
       };
       const mode = useLiveStormStore.getState().windMapMode;
       const bundleData = useLiveStormStore.getState().data;
+      // Obs value at the exact click point — used when the mode's Δ needs
+      // an observed value (obs-vs-model diffs).
+      const obsAtClick = bundleData
+        ? obsIdwAt(e.lngLat.lat, e.lngLat.lng, bundleData.windObs)
+        : null;
       const mb = await import("mapbox-gl");
       popup?.remove();
       const container = document.createElement("div");
       container.style.cssText =
         "font-size:11px;line-height:1.5;min-width:260px;max-width:300px";
-      container.innerHTML = renderPopupBody(p, null, false, mode);
+      container.innerHTML = renderPopupBody(p, null, false, mode, obsAtClick);
       popup = new mb.default.Popup({ closeButton: true, closeOnClick: true, maxWidth: "340px" })
         .setLngLat(e.lngLat)
         .setDOMContent(container)
@@ -1050,12 +1080,12 @@ export function LiveStormLayer({ map }: Props) {
         const { fetchWindPointForecast } = await import("../../api/live");
         const forecast = await fetchWindPointForecast(e.lngLat.lat, e.lngLat.lng);
         if (popup && popup.isOpen()) {
-          container.innerHTML = renderPopupBody(p, forecast, true, mode);
+          container.innerHTML = renderPopupBody(p, forecast, true, mode, obsAtClick);
           wireSourcesDrilldown(container, p, bundleData);
         }
       } catch {
         if (popup && popup.isOpen()) {
-          container.innerHTML = renderPopupBody(p, null, true, mode);
+          container.innerHTML = renderPopupBody(p, null, true, mode, obsAtClick);
           wireSourcesDrilldown(container, p, bundleData);
         }
       }
@@ -1098,6 +1128,7 @@ export function LiveStormLayer({ map }: Props) {
       forecast: import("../../api/live").PointForecast | null,
       loaded: boolean,
       mode: import("../../state/liveStorm").WindMapMode,
+      obsAtClick: number | null,
     ): string {
       const rows: string[] = [];
       const isDiff = mode.startsWith("diff-");
@@ -1113,10 +1144,36 @@ export function LiveStormLayer({ map }: Props) {
         `<div style="font-weight:700;color:#0f172a;margin-bottom:4px">Wind at point <span style="color:#64748b;font-weight:400">· ${modeLabel[mode] ?? mode}</span></div>`,
       );
       if (isDiff) {
-        const sign = obs.diff >= 0 ? "+" : "";
-        rows.push(
-          `<div><b>Δ:</b> ${sign}${obs.diff.toFixed(1)} kt <span style="color:#64748b">(first minus second)</span></div>`,
-        );
+        // Compute the Δ from the actual model / obs values at the click
+        // point — same numbers the user sees in the "Model forecast" block
+        // below. The cell-level diff was at the 0.5° grid center, not at
+        // this exact click, and users read it as inconsistent when the two
+        // sums disagree by more than a couple kt. Fall back to the cell
+        // value while the forecast loads.
+        const gfs = forecast?.forecasts.find((f) => f.model === "gfs") ?? null;
+        const ecmwf = forecast?.forecasts.find((f) => f.model === "ecmwf") ?? null;
+        let point: { a: number; b: number; aLabel: string; bLabel: string } | null = null;
+        if (mode === "diff-gfs-vs-ecmwf" && gfs && ecmwf) {
+          point = { a: gfs.windKt, b: ecmwf.windKt, aLabel: "GFS", bLabel: "ECMWF" };
+        } else if (mode === "diff-obs-vs-gfs" && obsAtClick != null && gfs) {
+          point = { a: obsAtClick, b: gfs.windKt, aLabel: "Obs", bLabel: "GFS" };
+        } else if (mode === "diff-obs-vs-ecmwf" && obsAtClick != null && ecmwf) {
+          point = { a: obsAtClick, b: ecmwf.windKt, aLabel: "Obs", bLabel: "ECMWF" };
+        }
+        if (point) {
+          const delta = point.a - point.b;
+          const sign = delta >= 0 ? "+" : "";
+          const color = Math.abs(delta) < 3 ? "#166534" : Math.abs(delta) < 8 ? "#a16207" : "#991b1b";
+          rows.push(
+            `<div style="font-size:12px"><b>Δ ${point.aLabel} − ${point.bLabel}:</b> <span style="color:${color};font-weight:700">${sign}${delta.toFixed(1)} kt</span></div>`,
+            `<div style="color:#64748b;font-size:10px">${point.aLabel} ${point.a.toFixed(1)} kt − ${point.bLabel} ${point.b.toFixed(1)} kt (at click point)</div>`,
+          );
+        } else {
+          const sign = obs.diff >= 0 ? "+" : "";
+          rows.push(
+            `<div><b>Δ:</b> ${sign}${obs.diff.toFixed(1)} kt <span style="color:#64748b">${loaded ? "" : "(cell value while models load…)"}</span></div>`,
+          );
+        }
       } else {
         rows.push(
           `<div><b>${modeLabel[mode]}:</b> ${speedTriple(obs.windKt)}</div>`,
