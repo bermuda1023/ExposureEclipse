@@ -284,7 +284,7 @@ def _fetch_bulk_chunk(
 
 def fetch_model_wind_grid(
     west: float, south: float, east: float, north: float,
-    model_wire: str, *, step_deg: float = 0.5,
+    model_wire: str, *, step_deg: float = 0.25,
 ) -> ModelWindGrid:
     """GFS or ECMWF wind grid over the bbox, at ``step_deg`` resolution.
 

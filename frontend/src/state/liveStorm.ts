@@ -81,12 +81,14 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   error: null,
   showForecastHistory: true,
   showAlerts: true,
-  showBuoys: true,
+  // NDBC buoys, wind-field cone, and NHC peak-surge polygons all default
+  // OFF now — they get busy fast and users mostly want them on-demand.
+  showBuoys: false,
   showLand: false,
   showSst: true,
-  showWindField: true,
+  showWindField: false,
   showForecastCone: true,
-  showSurge: true,
+  showSurge: false,
   showWindMap: true,
   windMapMode: "observed" as WindMapMode,
   gfsGrid: null,

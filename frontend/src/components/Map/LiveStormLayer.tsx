@@ -317,6 +317,10 @@ interface WindMapCellProps {
   sources?: number;
   confidence?: number;
   nearestObsKm?: number | null;
+  distScore?: number;
+  countScore?: number;
+  agreementScore?: number;
+  contributorSpreadKt?: number | null;
 }
 
 function buildWindMapFC(cells: WindMapCellProps[] | undefined, stepDeg: number) {
@@ -345,6 +349,10 @@ function buildWindMapFC(cells: WindMapCellProps[] | undefined, stepDeg: number) 
         sources: c.sources ?? 0,
         confidence: c.confidence ?? 0,
         nearestObsKm: c.nearestObsKm ?? null,
+        distScore: c.distScore ?? 0,
+        countScore: c.countScore ?? 0,
+        agreementScore: c.agreementScore ?? 0,
+        contributorSpreadKt: c.contributorSpreadKt ?? null,
         lat: c.lat,
         lon: c.lon,
       },
@@ -1054,6 +1062,10 @@ export function LiveStormLayer({ map }: Props) {
         sources: number;
         confidence: number;
         nearestObsKm: number | null;
+        distScore: number;
+        countScore: number;
+        agreementScore: number;
+        contributorSpreadKt: number | null;
         lat: number;
         lon: number;
       };
@@ -1125,7 +1137,12 @@ export function LiveStormLayer({ map }: Props) {
     }
 
     function renderPopupBody(
-      obs: { windKt: number; diff: number; windDirDeg: number | null; sources: number; confidence: number; nearestObsKm: number | null },
+      obs: {
+        windKt: number; diff: number; windDirDeg: number | null;
+        sources: number; confidence: number; nearestObsKm: number | null;
+        distScore: number; countScore: number; agreementScore: number;
+        contributorSpreadKt: number | null;
+      },
       forecast: import("../../api/live").PointForecast | null,
       loaded: boolean,
       mode: import("../../state/liveStorm").WindMapMode,
@@ -1189,8 +1206,23 @@ export function LiveStormLayer({ map }: Props) {
           ? "—"
           : `${obs.nearestObsKm} km`;
         rows.push(
-          `<div>Confidence: ${confBadge(obs.confidence)} · ${(obs.confidence * 100).toFixed(0)}% · nearest obs ${distStr}</div>`,
+          `<div>Confidence: ${confBadge(obs.confidence)} · <b>${(obs.confidence * 100).toFixed(0)}%</b> · nearest obs ${distStr}</div>`,
           `<div>Contributors: <a href="#" data-sources-link style="color:#2563eb;text-decoration:underline">${obs.sources} sources</a> <span style="color:#64748b">(click to highlight on map)</span></div>`,
+        );
+        // Score breakdown — why this cell scored what it did. Composite =
+        // dist × count × agreement. If any single component drags the
+        // number down, you can see which one and why.
+        const spreadStr = obs.contributorSpreadKt == null
+          ? "n/a"
+          : `${obs.contributorSpreadKt.toFixed(1)} kt σ`;
+        rows.push(
+          `<details style="margin-top:2px"><summary style="font-size:10px;color:#64748b;cursor:pointer">Score breakdown</summary>` +
+          `<div style="font-size:10px;color:#475569;margin-top:3px;padding-left:8px;border-left:2px solid #e2e8f0">` +
+            `<div>Distance: ${(obs.distScore * 100).toFixed(0)}% <span style="color:#94a3b8">(nearest ${distStr})</span></div>` +
+            `<div>Sources: ${(obs.countScore * 100).toFixed(0)}% <span style="color:#94a3b8">(${obs.sources} contributor${obs.sources === 1 ? "" : "s"})</span></div>` +
+            `<div>Agreement: ${(obs.agreementScore * 100).toFixed(0)}% <span style="color:#94a3b8">(${spreadStr})</span></div>` +
+            `<div style="margin-top:2px;color:#0f172a">= ${(obs.confidence * 100).toFixed(0)}% composite</div>` +
+          `</div></details>`,
         );
       }
       rows.push(

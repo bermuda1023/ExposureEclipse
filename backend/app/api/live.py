@@ -186,6 +186,11 @@ class WindGridPointOut(CamelModel):
     sources: int
     confidence: float
     nearest_obs_km: float | None
+    # Score breakdown (all 0..1). Multiply to get confidence.
+    dist_score: float
+    count_score: float
+    agreement_score: float
+    contributor_spread_kt: float | None
 
 
 class WindGridMeta(CamelModel):
@@ -610,6 +615,10 @@ def live_storm_bundle(
                 sources=c.sources,
                 confidence=c.confidence,
                 nearest_obs_km=c.nearest_obs_km,
+                dist_score=c.dist_score,
+                count_score=c.count_score,
+                agreement_score=c.agreement_score,
+                contributor_spread_kt=c.contributor_spread_kt,
             )
             for c in cells
         ]

@@ -143,6 +143,10 @@ export interface WindGridPoint {
   sources: number;
   confidence: number;
   nearestObsKm: number | null;
+  distScore: number;
+  countScore: number;
+  agreementScore: number;
+  contributorSpreadKt: number | null;
 }
 
 export interface WindGridMeta {

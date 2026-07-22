@@ -48,6 +48,14 @@ class WindGridCell:
     sources: int                 # obs contributing to this cell
     confidence: float            # 0..1 heuristic — see _cell_confidence
     nearest_obs_km: float | None # closest contributing observation
+    # Individual score components (0..1) so the frontend popup can show
+    # WHY a cell scored HIGH / MED / LOW instead of just the multiplied
+    # composite. Users can then judge whether an "HIGH at 60 km" cell is
+    # trustworthy — usually it is when 3+ obs agree tightly.
+    dist_score: float
+    count_score: float
+    agreement_score: float
+    contributor_spread_kt: float | None  # σ of contributor speeds
 
 
 @dataclass(slots=True, frozen=True)
@@ -78,7 +86,13 @@ IDW_RADIUS_DEG = 3.0             # ~330 km at mid-latitudes
 NEIGHBOR_RADIUS_DEG = 1.5        # for the dead-sensor check
 OUTLIER_MAX_DEV_KT = 25.0        # |obs - local_median| above this ⇒ drop
 ABS_MAX_WIND_KT = 200.0          # world-record verifiable sustained ~= 220 kt
-FIXED_STEP_DEG = 0.5             # aligned with the model grid so diffs are cell-to-cell
+# Cell step for the observed heatmap. Matches Open-Meteo's native model
+# resolution (GFS ~0.25°, ECMWF IFS 0.25°) so that switching between Obs /
+# GFS / ECMWF views doesn't visibly change the tiling and diffs are exact
+# cell-to-cell subtractions. Was 0.5° — bumping to 0.25° quadruples the
+# cell count but keeps interpolation cost trivial (few hundred obs × few
+# thousand cells = tens of ms in Python).
+FIXED_STEP_DEG = 0.25
 # Confidence thresholds (in output space) are set on the frontend. Below are
 # the raw-signal knobs the confidence composite uses.
 NEAR_OBS_DIST_DEG = 1.5           # nearest obs within this ⇒ full distance score
@@ -230,6 +244,51 @@ def _clean_obs(
 
         cleaned.append((lat, lon, kt, dir_deg))
     return cleaned
+
+
+def _cell_confidence_parts(
+    nearest_dist_deg: float | None,
+    count: int,
+    speeds: list[float],
+) -> tuple[float, float, float, float, float | None]:
+    """Return (composite, dist_score, count_score, agreement_score, std).
+    Same math as ``_cell_confidence`` but exposes the individual signals so
+    the frontend can show the user why a given cell scored HIGH / MED /
+    LOW instead of just a black-box composite."""
+    if count <= 0 or nearest_dist_deg is None:
+        return 0.0, 0.0, 0.0, 0.0, None
+    if nearest_dist_deg <= 0.7:
+        dist_score = 1.0
+    elif nearest_dist_deg >= IDW_RADIUS_DEG:
+        dist_score = 0.0
+    else:
+        span = IDW_RADIUS_DEG - 0.7
+        dist_score = max(0.0, 1.0 - (nearest_dist_deg - 0.7) / span)
+    if count == 1:
+        count_score = 0.7
+    else:
+        count_score = 1.0
+    std: float | None = None
+    if len(speeds) < 2:
+        agreement_score = 1.0
+    else:
+        mean_s = sum(speeds) / len(speeds)
+        var = sum((s - mean_s) ** 2 for s in speeds) / len(speeds)
+        std = var ** 0.5
+        if std <= 5.0:
+            agreement_score = 1.0
+        elif std >= 20.0:
+            agreement_score = 0.0
+        else:
+            agreement_score = max(0.0, 1.0 - (std - 5.0) / 15.0)
+    composite = dist_score * count_score * agreement_score
+    return (
+        round(composite, 3),
+        round(dist_score, 3),
+        round(count_score, 3),
+        round(agreement_score, 3),
+        round(std, 1) if std is not None else None,
+    )
 
 
 def _cell_confidence(
@@ -422,6 +481,9 @@ def wind_field_grid(
             nearest_km = (
                 round(nearest_dist * 111.0, 0) if nearest_dist is not None else None
             )
+            composite, dist_s, count_s, agree_s, std = _cell_confidence_parts(
+                nearest_dist, count, contributor_speeds,
+            )
             cells.append(
                 WindGridCell(
                     lat=round(lat, 3),
@@ -429,10 +491,12 @@ def wind_field_grid(
                     wind_kt=wind_kt,
                     wind_dir_deg=wind_dir_deg,
                     sources=count,
-                    confidence=_cell_confidence(
-                        nearest_dist, count, contributor_speeds,
-                    ),
+                    confidence=composite,
                     nearest_obs_km=nearest_km,
+                    dist_score=dist_s,
+                    count_score=count_s,
+                    agreement_score=agree_s,
+                    contributor_spread_kt=std,
                 )
             )
             lon += step
