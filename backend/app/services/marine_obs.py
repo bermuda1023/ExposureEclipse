@@ -338,6 +338,31 @@ def _nws_get_absolute(url: str) -> dict | None:
         return None
 
 
+def _nws_speed_to_kt(field: dict | None) -> float | None:
+    """Convert an NWS windSpeed/windGust value block to knots. NWS's default
+    unitCode is ``wmoUnit:km_h-1`` (km/h), which the old code was silently
+    treating as m/s and then multiplying by 1.94 — so a legitimate 12-kt
+    reading came out as 43 kt (12 kt → 22 km/h → 22×1.94 ≈ 43). Some
+    stations still report ``wmoUnit:m_s-1`` (m/s), so we branch on the
+    actual unit code instead of assuming."""
+    if not field:
+        return None
+    v = field.get("value")
+    if v is None:
+        return None
+    unit = (field.get("unitCode") or "").lower()
+    if "km_h" in unit or "kilometer" in unit:
+        return float(v) * 0.539957        # km/h → kt
+    if "m_s" in unit or "meter" in unit:
+        return float(v) * 1.94384         # m/s → kt
+    if "mile" in unit or "mph" in unit:
+        return float(v) * 0.868976        # mph → kt
+    if "kn" in unit:
+        return float(v)                   # already kt
+    # Unknown unit — assume km/h since that's NWS's documented default.
+    return float(v) * 0.539957
+
+
 def _fetch_latest_obs(sid: str, name: str, lat: float, lon: float) -> LandObservation | None:
     # 6-second per-station cap. NWS station endpoints occasionally hang for
     # the full 30 s default; with 500 stations in parallel a handful of
@@ -346,9 +371,9 @@ def _fetch_latest_obs(sid: str, name: str, lat: float, lon: float) -> LandObserv
     if not obs:
         return None
     p = (obs.get("properties") or {})
-    wind_kt = _mps_to_kt((p.get("windSpeed") or {}).get("value"))
+    wind_kt = _nws_speed_to_kt(p.get("windSpeed"))
     wind_dir = (p.get("windDirection") or {}).get("value")
-    gust_kt = _mps_to_kt((p.get("windGust") or {}).get("value"))
+    gust_kt = _nws_speed_to_kt(p.get("windGust"))
     pres_pa = (p.get("barometricPressure") or {}).get("value")
     temp_c = (p.get("temperature") or {}).get("value")
     return LandObservation(
