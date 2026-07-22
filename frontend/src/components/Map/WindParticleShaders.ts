@@ -87,9 +87,13 @@ void main() {
     vec2 velocity = mix(u_wind_min, u_wind_max, lookup_wind(pos));
     float speed_t = length(velocity) / length(u_wind_max);
 
-    // Advect. Flip the meridional component because texture-space y is
-    // down but our v is positive-northward.
-    vec2 offset = vec2(velocity.x, -velocity.y) * 0.0001 * u_speed_factor;
+    // Advect. u positive = eastward (increasing lon = increasing pos.x).
+    // v positive = northward. Our texture is laid out with row 0 = south
+    // and pos.y = 0 = south, so northward wind moves pos.y positive —
+    // no y-flip needed. (The canonical webgl-wind reference had a flip
+    // because its wind PNG stored north at the top of the image, which
+    // becomes texture-Y=0 after upload; our packing is the other way.)
+    vec2 offset = velocity * 0.0001 * u_speed_factor;
     pos = fract(1.0 + pos + offset);
 
     // Random re-seed. Slow cells get a boosted drop rate so the particle

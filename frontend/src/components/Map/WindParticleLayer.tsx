@@ -36,8 +36,10 @@ const LAYER_ID = "wind-particles";
 // convey direction and motion.
 const PARTICLE_RES = 96;                 // → 96×96 = 9216 particles
 const FADE_OPACITY = 0.94;               // slow decay = long visible trails
-const SPEED_FACTOR = 3.5;                // slow drift so trails read as
-                                         // continuous streaks not jumps
+// At 50 kt with the shader's built-in 0.0001 factor, a SPEED_FACTOR of 0.6
+// gives ~10-15 s to traverse a Bertha-size bbox — matches Windy's leisurely
+// flow. Was 3.5 which crossed the storm in ~1 s (blur, not streaks).
+const SPEED_FACTOR = 0.6;
 const DROP_RATE = 0.003;                 // baseline particle respawn rate
 const DROP_RATE_BUMP = 0.01;             // extra respawn in low-wind cells
 const POINT_SIZE = 2.5;                  // pixel size for each particle
