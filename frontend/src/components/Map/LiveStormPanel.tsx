@@ -79,11 +79,16 @@ export function LiveStormPanel() {
       includeSst: store.showSst,
       includeLand: store.showLand,
       includeSurge: store.showSurge,
+      includeWindMap: store.showWindMap,
     })
       .then(store.setData)
       .catch((e) => store.setError(String(e?.message ?? e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, store.showBuoys, store.showAlerts, store.showSst, store.showLand, store.showSurge]);
+  }, [
+    activeId,
+    store.showBuoys, store.showAlerts, store.showSst, store.showLand,
+    store.showSurge, store.showWindMap,
+  ]);
 
   return (
     <div
@@ -182,11 +187,12 @@ export function LiveStormPanel() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
               <LayerChip store={store} k="showForecastCone" label="NHC cone" hint="Cone of uncertainty" color="#475569" />
               <LayerChip store={store} k="showSurge" label="Peak surge" hint="NHC coastal inundation" color="#dc2626" />
-              <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64" color="#b91c1c" />
-              <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Ghost tracks" color="#475569" />
+              <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
+              <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
+              <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
               <LayerChip store={store} k="showAlerts" label="NWS alerts" hint="Watches + warnings" color="#ea580c" />
               <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
-              <LayerChip store={store} k="showLand" label="NWS land stations" hint="Slow source" color="#10b981" />
+              <LayerChip store={store} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
               <LayerChip store={store} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
             </div>
           </div>
@@ -372,6 +378,14 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
       {data.peakSurge.length > 0 && (
         <div>
           Peak surge: {data.peakSurge.length} coastal polygons
+        </div>
+      )}
+      {data.windMap.length > 0 && (
+        <div>
+          Wind map: {data.windMap.length} cells (
+          {Math.max(...data.windMap.map((c) => c.windKt)).toFixed(0)} kt peak,
+          {" "}
+          {data.windMapMeta.stepDeg}° res)
         </div>
       )}
       {data.sst.length > 0 && (

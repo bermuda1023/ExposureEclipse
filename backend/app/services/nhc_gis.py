@@ -259,10 +259,61 @@ def fetch_peak_surge(kml_url: str) -> list[NHCSurgePolygon]:
     return polygons
 
 
+def _prior_advisory_labels(current_adv_num: str, n_prior: int) -> list[str]:
+    """Walk NHC advisory numbers backward from ``current_adv_num``.
+
+    NHC issues full advisories every 6 hours (numeric only: 001, 002, ...) and
+    intermediate advisories mid-cycle (numeric + 'A' suffix: 001A, 002A, ...).
+    Not every storm issues intermediates, so the walk-back sequence tries both
+    forms at each numeric step and lets the caller drop 404s.
+    """
+    m = re.match(r"^(\d+)([A-Za-z]?)$", current_adv_num.strip())
+    if not m:
+        return []
+    num = int(m.group(1))
+    has_a = bool(m.group(2))
+    out: list[str] = []
+    if has_a:
+        out.append(f"{num:03d}")            # e.g. 010A → 010
+    n = num - 1
+    # Generate ~2× as many candidate labels as the caller needs, so we can
+    # skip 404s (intermediate advisories that were never issued for this
+    # storm) and still return the requested count.
+    while len(out) < n_prior * 2 and n >= 1:
+        out.append(f"{n:03d}A")
+        out.append(f"{n:03d}")
+        n -= 1
+    return out
+
+
+def fetch_prior_forecast_tracks(
+    atcf_id: str, current_adv_num: str, *, n_prior: int = 4,
+) -> list[tuple[str, list[NHCForecastFix]]]:
+    """Return (advisory_label, fixes) for up to ``n_prior`` past advisories.
+
+    URL pattern follows the same NHC ``storm_graphics/api`` scheme that
+    CurrentStorms.json exposes for the live advisory; we swap the advisory
+    number in the filename. Failed fetches (404 on advisories the storm
+    never issued) are skipped silently."""
+    out: list[tuple[str, list[NHCForecastFix]]] = []
+    for label in _prior_advisory_labels(current_adv_num, n_prior):
+        url = (
+            f"https://www.nhc.noaa.gov/storm_graphics/api/"
+            f"{atcf_id.upper()}_{label}adv_TRACK.kmz"
+        )
+        fixes = fetch_forecast_track(url)
+        if fixes:
+            out.append((label, fixes))
+            if len(out) >= n_prior:
+                break
+    return out
+
+
 __all__ = [
     "NHCForecastFix",
     "NHCSurgePolygon",
     "fetch_forecast_track",
+    "fetch_prior_forecast_tracks",
     "fetch_track_cone",
     "fetch_peak_surge",
 ]

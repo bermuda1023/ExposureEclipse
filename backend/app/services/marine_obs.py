@@ -14,6 +14,7 @@ when overlaid alongside a hurricane's forecast cone.
 from __future__ import annotations
 
 import json
+import math
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -216,15 +217,50 @@ def _fetch_latest_obs(sid: str, name: str, lat: float, lon: float) -> LandObserv
     )
 
 
+def _spatial_subsample(
+    stations: list[tuple[str, str, float, float]],
+    west: float, south: float, east: float, north: float,
+    target: int,
+) -> list[tuple[str, str, float, float]]:
+    """Grid-based one-per-cell subsample. Guarantees stations are spread over
+    the whole bbox instead of clumping wherever NWS densely instrumented (e.g.
+    Texas mesonet). Target is a soft cap: the returned count may be smaller
+    when regions of the bbox have no stations (open ocean, sparse states)."""
+    if len(stations) <= target:
+        return stations
+    side = max(2, math.ceil(math.sqrt(target)))
+    dw = (east - west) / side
+    dh = (north - south) / side
+    if dw <= 0 or dh <= 0:
+        return stations[:target]
+    picked: dict[tuple[int, int], tuple[str, str, float, float]] = {}
+    # Sort so the choice within a cell is deterministic across requests.
+    for s in sorted(stations, key=lambda x: x[0]):
+        sid, name, lat, lon = s
+        ix = min(side - 1, max(0, int((lon - west) / dw)))
+        iy = min(side - 1, max(0, int((lat - south) / dh)))
+        picked.setdefault((ix, iy), s)
+    return list(picked.values())
+
+
 def land_stations_in_bbox(
     west: float, south: float, east: float, north: float,
-    *, max_stations: int = 250,
+    *, max_stations: int = 80,
 ) -> list[LandObservation]:
-    """NWS observation stations in ``bbox``, each enriched with the latest
-    observation. Concurrent fetch (12 workers) keeps response time bounded
-    even at 200+ stations — sequential previously took >1 minute for that
-    many. NWS API has no rate-limit headers; 12 parallel reads is polite."""
-    candidates: list[tuple[str, str, float, float]] = []
+    """NWS observation stations spread evenly across ``bbox``, each enriched
+    with the latest observation.
+
+    Previously this iterated NWS's global station list in whatever order the
+    API returned it and stopped after 250 in-bbox candidates — which for a
+    bbox spanning e.g. Louisiana + Texas would fill up on the ~300 automated
+    Texas mesonet sites before ever reaching Louisiana. We now collect every
+    in-bbox candidate and spatially subsample onto a grid so obs are visible
+    across the whole storm footprint.
+
+    Concurrent fetch (12 workers). NWS has no rate-limit headers; 12 parallel
+    reads is polite.
+    """
+    all_in_bbox: list[tuple[str, str, float, float]] = []
     for f in _nws_all_stations():
         geom = f.get("geometry") or {}
         coords = geom.get("coordinates") or [None, None]
@@ -237,9 +273,11 @@ def land_stations_in_bbox(
         sid = props.get("stationIdentifier") or ""
         if not sid:
             continue
-        candidates.append((sid, props.get("name") or sid, lat, lon))
-        if len(candidates) >= max_stations:
-            break
+        all_in_bbox.append((sid, props.get("name") or sid, lat, lon))
+
+    candidates = _spatial_subsample(
+        all_in_bbox, west, south, east, north, max_stations,
+    )
 
     out: list[LandObservation] = []
     with ThreadPoolExecutor(max_workers=12) as pool:

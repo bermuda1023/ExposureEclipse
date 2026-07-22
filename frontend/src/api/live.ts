@@ -135,6 +135,18 @@ export interface SurgePolygon {
   color: string;              // NHC-provided colour hint (e.g. "blue")
 }
 
+export interface WindGridPoint {
+  lat: number;
+  lon: number;
+  windKt: number;
+  sources: number;
+}
+
+export interface WindGridMeta {
+  stepDeg: number;
+  obsMaxAgeHours: number;
+}
+
 export interface LiveStormBundle {
   storm: LiveStormRow;
   observedTrack: ObservedFix[];
@@ -151,6 +163,8 @@ export interface LiveStormBundle {
   forecastWindField: WindField;
   forecastCone: ForecastCone | null;   // live storms only
   peakSurge: SurgePolygon[];           // live storms only; empty when N/A
+  windMap: WindGridPoint[];
+  windMapMeta: WindGridMeta;
 }
 
 export const fetchLiveStormList = () =>
@@ -164,6 +178,7 @@ export const fetchLiveStormBundle = (
     includeSst?: boolean;
     includeLand?: boolean;
     includeSurge?: boolean;
+    includeWindMap?: boolean;
   } = {},
 ) =>
   apiGet<LiveStormBundle>(`/live/storms/${encodeURIComponent(stormId)}`, {
@@ -172,4 +187,5 @@ export const fetchLiveStormBundle = (
     includeSst: options.includeSst ?? true,
     includeLand: options.includeLand ?? false, // NWS land station fetch is slow
     includeSurge: options.includeSurge ?? true,
+    includeWindMap: options.includeWindMap ?? true,
   });

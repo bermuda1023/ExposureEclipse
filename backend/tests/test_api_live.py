@@ -94,6 +94,8 @@ def test_live_bundle_builds_from_nhc_feed(monkeypatch: pytest.MonkeyPatch) -> No
             "includeAlerts": "false",
             "includeLand": "false",
             "includeSst": "false",
+            "includeSurge": "false",
+            "includeWindMap": "false",
         },
     )
     assert r.status_code == 200, r.text
@@ -103,7 +105,9 @@ def test_live_bundle_builds_from_nhc_feed(monkeypatch: pytest.MonkeyPatch) -> No
     assert b["storm"]["year"] == 2026
     # Observed track = 2 back-projected + 1 current fix.
     assert len(b["observedTrack"]) == 3
-    # Forecast has one advisory sampled at 8 lead-time anchors.
+    # Fake NHC entry has no forecastTrack KMZ → the motion-vector fallback
+    # produces one 8-anchor advisory. Real live storms may also carry prior
+    # advisories (up to 5 total); the mock does not exercise that path.
     assert len(b["forecasts"]) == 1
     assert len(b["forecasts"][0]["points"]) == 8
     # Wind cones built off the observed fixes.

@@ -41,6 +41,7 @@ from .nhc_gis import (
     NHCSurgePolygon,
     fetch_forecast_track,
     fetch_peak_surge,
+    fetch_prior_forecast_tracks,
     fetch_track_cone,
 )
 
@@ -63,14 +64,16 @@ def _fixes_to_footprint(
     storm_id: str,
     fixes: list[tuple[float, float, int, str]],
     *,
-    min_wind_kt: int = 34,
+    min_wind_kt: int = 25,
 ) -> list[FootprintPoint]:
     """Convert (lat, lon, wind_kt, datetime_iso) tuples → FootprintPoints.
 
     Rmax: IBTrACS measured if present, else Willoughby fallback.
     R64 quadrants: IBTrACS measured if present, else None (symmetric fallback).
-    ``min_wind_kt`` defaults to 34 (TS strength) so the forecast cone is
-    drawn for tropical-storm-strength forecasts too, not just hurricane.
+    ``min_wind_kt`` defaults to 25 (upper-TD threshold) so the cone follows
+    the storm through weakening — cutting at 34 kt was making the forecast
+    cone abruptly disappear once NHC projected the storm below TS strength,
+    even though the track (and the impact radius) continues.
     """
     out: list[FootprintPoint] = []
     for lat, lon, wind, dt in fixes:
@@ -478,9 +481,13 @@ def _live_storm_and_forecasts(
                 )
             )
 
-    advisories = [
+    # Latest advisory gets the highest number so the frontend's
+    # `.reduce((a,b) => a.advisoryNumber >= b.advisoryNumber ? a : b)` picks
+    # it. Prior advisories get decreasing numbers to render as ghost lines.
+    LATEST_ADVISORY_NUMBER = 100
+    advisories: list[ForecastTrack] = [
         ForecastTrack(
-            advisory_number=1,
+            advisory_number=LATEST_ADVISORY_NUMBER,
             issued_at=last_update,
             points=forecast_points,
             # Marked False: this is the current NHC forecast advisory (real
@@ -489,6 +496,35 @@ def _live_storm_and_forecasts(
             synthetic=False,
         )
     ]
+
+    # Prior advisories — fetch the last N tracks NHC issued so the frontend
+    # can render ghost lines showing forecast evolution (whether the storm's
+    # projected path has been shifting left, right, faster, or slower over
+    # successive advisories).
+    current_adv_num = (entry.get("forecastTrack") or {}).get("advNum") or ""
+    if current_adv_num:
+        for i, (_label, prior_fixes) in enumerate(
+            fetch_prior_forecast_tracks(storm_id, current_adv_num, n_prior=4)
+        ):
+            prior_points = [
+                ForecastPoint(
+                    lat=f.lat,
+                    lon=f.lon,
+                    wind_kt=f.wind_kt,
+                    hours_out=f.hours_out,
+                    valid_time=f.valid_time,
+                )
+                for f in prior_fixes
+            ]
+            advisories.append(
+                ForecastTrack(
+                    advisory_number=LATEST_ADVISORY_NUMBER - (i + 1),
+                    issued_at="",
+                    points=prior_points,
+                    synthetic=False,  # real NHC prior advisory, not a synth
+                )
+            )
+
     return live_storm, advisories
 
 

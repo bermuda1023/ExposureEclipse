@@ -26,6 +26,7 @@ interface LiveStormState {
   showWindField: boolean;     // Rmax + R64 cones on observed + forecast tracks
   showForecastCone: boolean;  // NHC's official cone of uncertainty
   showSurge: boolean;         // NHC peak storm surge coastal polygons
+  showWindMap: boolean;       // interpolated surface-wind heatmap
 
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
@@ -42,7 +43,8 @@ export type ToggleKey =
   | "showSst"
   | "showWindField"
   | "showForecastCone"
-  | "showSurge";
+  | "showSurge"
+  | "showWindMap";
 
 export const useLiveStormStore = create<LiveStormState>((set) => ({
   activeStormId: null,
@@ -57,6 +59,7 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   showWindField: true,
   showForecastCone: true,
   showSurge: true,
+  showWindMap: true,
 
   start: (stormId) =>
     set({ activeStormId: stormId, isLoading: true, error: null, data: null }),

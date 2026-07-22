@@ -29,6 +29,7 @@ from ..services.live_hurricane import (
 from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.sea_surface_temp import sst_field
 from ..services.weather_alerts import fetch_active_alerts
+from ..services.wind_field_map import wind_field_grid
 
 router = APIRouter(prefix="/live", tags=["live"])
 
@@ -167,6 +168,22 @@ class SurgePolygonOut(CamelModel):
     color: str
 
 
+class WindGridPointOut(CamelModel):
+    """One cell of the interpolated surface-wind field. ``sources`` counts
+    how many raw observations contributed to the IDW value — the frontend
+    can dim low-confidence cells if it chooses."""
+
+    lat: float
+    lon: float
+    wind_kt: float
+    sources: int
+
+
+class WindGridMeta(CamelModel):
+    step_deg: float
+    obs_max_age_hours: float
+
+
 class LiveStormBundle(CamelModel):
     storm: LiveStormRow
     observed_track: list[ObservedFix]
@@ -189,6 +206,10 @@ class LiveStormBundle(CamelModel):
     # per-band coastal inundation polygons from NHC's peak-surge KML.
     forecast_cone: ForecastConeOut | None
     peak_surge: list[SurgePolygonOut]
+    # Interpolated surface-wind heatmap (IDW over NDBC buoys + NWS land obs).
+    # Empty when include_wind_map is off or no fresh obs are in the bbox.
+    wind_map: list[WindGridPointOut]
+    wind_map_meta: WindGridMeta
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -292,6 +313,7 @@ def live_storm_bundle(
     include_sst: bool = Query(default=True, alias="includeSst"),
     include_land: bool = Query(default=True, alias="includeLand"),
     include_surge: bool = Query(default=True, alias="includeSurge"),
+    include_wind_map: bool = Query(default=True, alias="includeWindMap"),
 ) -> LiveStormBundle:
     """Full data bundle for one storm — track + forecast + obs + alerts + SST."""
     result = storm_and_forecasts(atcf_id, as_of_index=as_of_index)
@@ -381,7 +403,10 @@ def live_storm_bundle(
                 )
             )
     if include_land:
-        for ls in land_stations_in_bbox(*bbox, max_stations=250):
+        # max_stations=80 is the service default — gives a spatially uniform
+        # grid subsample instead of clumping into whichever region has the
+        # densest instrumentation.
+        for ls in land_stations_in_bbox(*bbox):
             land_out.append(
                 LandObsOut(
                     station_id=ls.station_id,
@@ -500,6 +525,20 @@ def live_storm_bundle(
                     )
                 )
 
+    # Interpolated wind heatmap. Runs for any storm (live or replay) since it
+    # is purely observation-driven; caller can turn it off if the extra land
+    # -station fetch is too slow.
+    wind_map_out: list[WindGridPointOut] = []
+    wind_step = 0.4
+    if include_wind_map:
+        cells, wind_step = wind_field_grid(*bbox)
+        wind_map_out = [
+            WindGridPointOut(
+                lat=c.lat, lon=c.lon, wind_kt=c.wind_kt, sources=c.sources,
+            )
+            for c in cells
+        ]
+
     return LiveStormBundle(
         storm=storm_row,
         observed_track=observed_fixes,
@@ -516,6 +555,8 @@ def live_storm_bundle(
         forecast_wind_field=forecast_wind,
         forecast_cone=forecast_cone_out,
         peak_surge=peak_surge_out,
+        wind_map=wind_map_out,
+        wind_map_meta=WindGridMeta(step_deg=wind_step, obs_max_age_hours=4.0),
     )
 
 

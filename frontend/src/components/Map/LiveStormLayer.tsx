@@ -45,6 +45,7 @@ const SRC_FCST_OUTER = "live-fcst-outer-cone";
 const SRC_FCST_RINGS = "live-fcst-outer-rings";
 const SRC_NHC_CONE = "live-nhc-cone";
 const SRC_SURGE = "live-surge";
+const SRC_WIND_MAP = "live-wind-map";
 
 const LAYER_OBSERVED = "live-observed-line";
 const LAYER_FORECAST_LATEST = "live-forecast-latest-line";
@@ -66,6 +67,21 @@ const LAYER_NHC_CONE_FILL = "live-nhc-cone-fill";
 const LAYER_NHC_CONE_LINE = "live-nhc-cone-line";
 const LAYER_SURGE_FILL = "live-surge-fill";
 const LAYER_SURGE_LINE = "live-surge-line";
+const LAYER_WIND_MAP_FILL = "live-wind-map-fill";
+
+// SSHWS-inspired palette for the interpolated wind heatmap. Not a step
+// expression — we interpolate for a smooth field. Anchor points chosen to
+// match the categorical breaks (34 kt TS, 64 kt Cat 1, 96 kt Cat 3).
+const WIND_MAP_COLOR: unknown[] = [
+  "interpolate", ["linear"], ["get", "windKt"],
+  0,   "#e0f2fe",   // near-calm
+  15,  "#a3e635",   // breezy
+  25,  "#facc15",   // strong
+  34,  "#fb923c",   // TS
+  50,  "#dc2626",   // strong TS
+  64,  "#7f1d1d",   // Cat 1
+  96,  "#581c87",   // Cat 3+
+];
 
 // NHC's peak-storm-surge palette: hint colours in the KML mirror the standard
 // NHC surge legend. Ordered coolest → hottest so the fill layer's match
@@ -277,6 +293,33 @@ function buildSurgeFC(surge: import("../../api/live").SurgePolygon[] | undefined
   return { type: "FeatureCollection" as const, features };
 }
 
+function buildWindMapFC(
+  cells: import("../../api/live").WindGridPoint[] | undefined,
+  stepDeg: number,
+) {
+  // One abutting square per cell, sized to the backend's grid step. Same
+  // tiling pattern as the SST layer so the map reads as a continuous
+  // heatmap rather than dots.
+  const half = stepDeg / 2;
+  return {
+    type: "FeatureCollection" as const,
+    features: (cells ?? []).map((c) => ({
+      type: "Feature" as const,
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [[
+          [c.lon - half, c.lat - half],
+          [c.lon + half, c.lat - half],
+          [c.lon + half, c.lat + half],
+          [c.lon - half, c.lat + half],
+          [c.lon - half, c.lat - half],
+        ]],
+      },
+      properties: { windKt: c.windKt, sources: c.sources },
+    })),
+  };
+}
+
 export function LiveStormLayer({ map }: Props) {
   const data = useLiveStormStore((s) => s.data);
   const showForecastHistory = useLiveStormStore((s) => s.showForecastHistory);
@@ -287,6 +330,7 @@ export function LiveStormLayer({ map }: Props) {
   const showWindField = useLiveStormStore((s) => s.showWindField);
   const showForecastCone = useLiveStormStore((s) => s.showForecastCone);
   const showSurge = useLiveStormStore((s) => s.showSurge);
+  const showWindMap = useLiveStormStore((s) => s.showWindMap);
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -321,6 +365,11 @@ export function LiveStormLayer({ map }: Props) {
       setSource(map, SRC_FCST_INNER, buildConeQuadFC(data?.forecastWindField.innerCone));
       setSource(map, SRC_NHC_CONE, buildNHCConeFC(data?.forecastCone));
       setSource(map, SRC_SURGE, buildSurgeFC(data?.peakSurge));
+      setSource(
+        map,
+        SRC_WIND_MAP,
+        buildWindMapFC(data?.windMap, data?.windMapMeta?.stepDeg ?? 0.4),
+      );
 
       // ── Layers (stable paint, no data-dependent opacity). Visibility is
       //    flipped via setLayoutProperty below so toggling without remounting
@@ -429,6 +478,18 @@ export function LiveStormLayer({ map }: Props) {
         paint: {
           "fill-color": ["step", ["get", "windKt"], ...CONE_STEP_COLOR] as unknown as never,
           "fill-opacity": 0.45,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+
+      // Interpolated surface-wind heatmap — smoothed IDW blend of NDBC buoy
+      // + NWS land obs. Sits above the SST layer but under alerts/cones so
+      // the cyclone geometry stays legible.
+      ensureLayer(map, LAYER_WIND_MAP_FILL, {
+        id: LAYER_WIND_MAP_FILL, type: "fill", source: SRC_WIND_MAP,
+        paint: {
+          "fill-color": WIND_MAP_COLOR as unknown as never,
+          "fill-opacity": 0.5,
           "fill-outline-color": "rgba(0,0,0,0)",
         },
       }, "county-line");
@@ -606,16 +667,20 @@ export function LiveStormLayer({ map }: Props) {
         },
       });
 
-      // ── Force top-of-stack for the NHC cone and surge polygons. Layer
-      //    insertion order races with MapView's county tileset (added on the
-      //    later `load` event vs our `style.load`), so without an explicit
-      //    move the choropleth fill can end up painted on top of these. Cone
-      //    goes first (backdrop), then surge (must be the highest so coastal
-      //    bands read clearly). Idempotent — safe to call every apply. ──
+      // ── Force paint order for the live overlays. MapView adds the county
+      //    tileset on the later `load` event vs our `style.load`, so without
+      //    explicit reordering the county choropleth ends up painted over
+      //    our layers. The moveLayer calls below are idempotent and set a
+      //    deterministic stack, bottom → top: wind heatmap → NHC cone →
+      //    surge polygons → forecast + observed track lines. ──
+      moveToTop(map, LAYER_WIND_MAP_FILL);
       moveToTop(map, LAYER_NHC_CONE_FILL);
       moveToTop(map, LAYER_NHC_CONE_LINE);
       moveToTop(map, LAYER_SURGE_FILL);
       moveToTop(map, LAYER_SURGE_LINE);
+      moveToTop(map, LAYER_FORECAST_HISTORY);
+      moveToTop(map, LAYER_FORECAST_LATEST);
+      moveToTop(map, LAYER_OBSERVED);
 
       // ── Visibility — driven purely by the panel toggles. ──
       setVis(map, LAYER_SST, showSst);
@@ -639,6 +704,7 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_NHC_CONE_LINE, showForecastCone);
       setVis(map, LAYER_SURGE_FILL, showSurge);
       setVis(map, LAYER_SURGE_LINE, showSurge);
+      setVis(map, LAYER_WIND_MAP_FILL, showWindMap);
     };
 
     if (map.isStyleLoaded()) apply();
@@ -646,7 +712,7 @@ export function LiveStormLayer({ map }: Props) {
   }, [
     map, data,
     showForecastHistory, showAlerts, showBuoys, showLand, showSst,
-    showWindField, showForecastCone, showSurge,
+    showWindField, showForecastCone, showSurge, showWindMap,
   ]);
 
   // Hover popups for buoys and land stations.
