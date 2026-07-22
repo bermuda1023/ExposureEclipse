@@ -165,18 +165,23 @@ export interface WindObs {
   observedAt: string;
 }
 
-export interface WindModelCell {
+export interface WindGridCoord {
   lat: number;
   lon: number;
-  windKt: number;
-  windDirDeg: number | null;
+}
+
+export interface WindModelFrame {
+  hour: number;                  // forecast hours from "now" (0, 6, 12, ...)
+  validTimeUtc: string;
+  windKt: number[];              // parallel to grid.cells
+  windDirDeg: (number | null)[];
 }
 
 export interface WindModelGrid {
   model: "gfs" | "ecmwf";
   stepDeg: number;
-  cells: WindModelCell[];
-  validTimeUtc: string;
+  cells: WindGridCoord[];
+  frames: WindModelFrame[];
 }
 
 export interface ModelForecast {

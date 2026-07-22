@@ -213,21 +213,34 @@ class WindObsOut(CamelModel):
     observed_at: str
 
 
-class WindModelCellOut(CamelModel):
-    """One cell of a GFS or ECMWF wind grid, aligned to the observed grid
-    so obs/model diffs are trivial cell-by-cell subtractions."""
+class WindGridCoordOut(CamelModel):
+    """Just a lat/lon pair — one entry per grid cell. Parallel-array to
+    every ``WindModelFrameOut.wind_kt``/``wind_dir_deg`` so we don't
+    repeat coordinates at every forecast frame."""
 
     lat: float
     lon: float
-    wind_kt: float
-    wind_dir_deg: float | None
+
+
+class WindModelFrameOut(CamelModel):
+    """One forecast time-step for the whole grid. ``wind_kt`` and
+    ``wind_dir_deg`` are index-aligned with the top-level ``cells`` list."""
+
+    hour: int              # forecast hours from "now" (0, 6, 12, …)
+    valid_time_utc: str
+    wind_kt: list[float]
+    wind_dir_deg: list[float | None]
 
 
 class WindModelGridOut(CamelModel):
+    """Multi-frame GFS/ECMWF wind grid. The frontend picks a frame index
+    based on the time-slider position; all frames share the same cell
+    coordinates so switching frames is O(1)."""
+
     model: str            # "gfs" | "ecmwf"
     step_deg: float
-    cells: list[WindModelCellOut]
-    valid_time_utc: str
+    cells: list[WindGridCoordOut]
+    frames: list[WindModelFrameOut]
 
 
 class ModelForecastOut(CamelModel):
@@ -664,23 +677,26 @@ def wind_model_grid(
     north: float = Query(..., ge=-90.0, le=90.0),
     model: str = Query(..., pattern="^(gfs|ecmwf)$"),
 ) -> WindModelGridOut:
-    """GFS or ECMWF surface-wind grid over a bbox at 0.5° resolution.
-
-    Powers the "flip between obs / GFS / ECMWF / diff" mode on the live wind
-    heatmap. Cell step is aligned with the observed grid so diffs are cheap
-    cell-to-cell on the frontend. Fetches from Open-Meteo — degrades to an
-    empty grid on failure rather than 5xx'ing the mode selector."""
+    """GFS or ECMWF surface-wind grid over a bbox at 0.25° resolution, as
+    multiple forecast frames (0 → 120 h from now). Powers both the
+    mode-selector single-hour views and the time-slider evolution view.
+    Fetches from Open-Meteo — degrades to an empty grid on failure rather
+    than 5xx'ing the mode selector."""
     grid = fetch_model_wind_grid(west, south, east, north, model)
     return WindModelGridOut(
         model=grid.model,
         step_deg=grid.step_deg,
-        valid_time_utc=grid.valid_time_utc,
         cells=[
-            WindModelCellOut(
-                lat=c.lat, lon=c.lon,
-                wind_kt=c.wind_kt, wind_dir_deg=c.wind_dir_deg,
+            WindGridCoordOut(lat=c.lat, lon=c.lon) for c in grid.cells
+        ],
+        frames=[
+            WindModelFrameOut(
+                hour=f.hour,
+                valid_time_utc=f.valid_time_utc,
+                wind_kt=f.wind_kt,
+                wind_dir_deg=f.wind_dir_deg,
             )
-            for c in grid.cells
+            for f in grid.frames
         ],
     )
 

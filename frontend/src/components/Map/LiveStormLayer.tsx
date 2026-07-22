@@ -386,6 +386,25 @@ function buildWindObsFC(
   };
 }
 
+/** Flatten a model grid's coords + frame arrays into the {lat, lon,
+ *  windKt, windDirDeg} shape the rest of the pipeline expects. Returns
+ *  null when the grid is missing or the requested frame is out of range. */
+function materializeFrame(
+  grid: import("../../api/live").WindModelGrid | null,
+  frameIdx: number,
+): Array<{ lat: number; lon: number; windKt: number; windDirDeg: number | null }> | null {
+  if (!grid || grid.frames.length === 0) return null;
+  const clamped = Math.min(Math.max(0, frameIdx), grid.frames.length - 1);
+  const frame = grid.frames[clamped];
+  if (!frame) return null;
+  return grid.cells.map((c, i) => ({
+    lat: c.lat,
+    lon: c.lon,
+    windKt: frame.windKt[i] ?? 0,
+    windDirDeg: frame.windDirDeg[i] ?? null,
+  }));
+}
+
 /** Diff two grids. Both back-ends emit at a fixed 0.5° step aligned to the
  *  bbox origin, so exact-key matching works in the common case; a
  *  nearest-neighbor fallback (within one grid step) handles any residual
@@ -457,6 +476,7 @@ export function LiveStormLayer({ map }: Props) {
   const gfsGrid = useLiveStormStore((s) => s.gfsGrid);
   const ecmwfGrid = useLiveStormStore((s) => s.ecmwfGrid);
   const highlightObs = useLiveStormStore((s) => s.highlightObs);
+  const frameIndex = useLiveStormStore((s) => s.windMapFrameIndex);
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -495,20 +515,28 @@ export function LiveStormLayer({ map }: Props) {
       // is always the baseline; model + diff modes replace or subtract it.
       const stepDeg = data?.windMapMeta?.stepDeg ?? 0.5;
       const obsCells = data?.windMap ?? [];
+
+      // Materialize model cells at the active frame index. Model grids ship
+      // as `{cells: [{lat,lon}], frames: [{windKt[], windDirDeg[]}]}` for
+      // wire compactness; slot in the frame's parallel arrays here so the
+      // downstream builders see the flat `{lat,lon,windKt,...}` shape.
+      const gfsCellsAtFrame = materializeFrame(gfsGrid, frameIndex);
+      const ecmwfCellsAtFrame = materializeFrame(ecmwfGrid, frameIndex);
+
       let cellsForView: WindMapCellProps[] = obsCells;
       let isDiffView = false;
-      if (windMapMode === "gfs" && gfsGrid) {
-        cellsForView = gfsGrid.cells.map((c) => ({ ...c }));
-      } else if (windMapMode === "ecmwf" && ecmwfGrid) {
-        cellsForView = ecmwfGrid.cells.map((c) => ({ ...c }));
-      } else if (windMapMode === "diff-obs-vs-gfs" && gfsGrid) {
-        cellsForView = computeDiffGrid(obsCells, gfsGrid.cells);
+      if (windMapMode === "gfs" && gfsCellsAtFrame) {
+        cellsForView = gfsCellsAtFrame;
+      } else if (windMapMode === "ecmwf" && ecmwfCellsAtFrame) {
+        cellsForView = ecmwfCellsAtFrame;
+      } else if (windMapMode === "diff-obs-vs-gfs" && gfsCellsAtFrame) {
+        cellsForView = computeDiffGrid(obsCells, gfsCellsAtFrame);
         isDiffView = true;
-      } else if (windMapMode === "diff-obs-vs-ecmwf" && ecmwfGrid) {
-        cellsForView = computeDiffGrid(obsCells, ecmwfGrid.cells);
+      } else if (windMapMode === "diff-obs-vs-ecmwf" && ecmwfCellsAtFrame) {
+        cellsForView = computeDiffGrid(obsCells, ecmwfCellsAtFrame);
         isDiffView = true;
-      } else if (windMapMode === "diff-gfs-vs-ecmwf" && gfsGrid && ecmwfGrid) {
-        cellsForView = computeDiffGrid(gfsGrid.cells, ecmwfGrid.cells);
+      } else if (windMapMode === "diff-gfs-vs-ecmwf" && gfsCellsAtFrame && ecmwfCellsAtFrame) {
+        cellsForView = computeDiffGrid(gfsCellsAtFrame, ecmwfCellsAtFrame);
         isDiffView = true;
       }
       setSource(map, SRC_WIND_MAP, buildWindMapFC(cellsForView, stepDeg));
@@ -902,7 +930,7 @@ export function LiveStormLayer({ map }: Props) {
     map, data,
     showForecastHistory, showAlerts, showBuoys, showLand, showSst,
     showWindField, showForecastCone, showSurge, showWindMap,
-    windMapMode, gfsGrid, ecmwfGrid, highlightObs,
+    windMapMode, gfsGrid, ecmwfGrid, highlightObs, frameIndex,
   ]);
 
   // Hover popups for buoys and land stations.

@@ -190,19 +190,34 @@ def point_forecast(lat: float, lon: float) -> PointForecast:
 
 
 @dataclass(slots=True, frozen=True)
-class ModelWindCell:
+class WindCoord:
     lat: float
     lon: float
-    wind_kt: float
-    wind_dir_deg: float | None
+
+
+@dataclass(slots=True, frozen=True)
+class ModelWindFrame:
+    """One forecast time-step for a whole cell grid. ``wind_kt`` and
+    ``wind_dir_deg`` are parallel-array to the outer ``ModelWindGrid.cells``
+    list so the wire payload doesn't repeat lat/lon at every frame."""
+    hour: int              # forecast hours from "now" (0, 6, 12, …)
+    valid_time_utc: str
+    wind_kt: list[float]
+    wind_dir_deg: list[float | None]
 
 
 @dataclass(slots=True, frozen=True)
 class ModelWindGrid:
     model: str
     step_deg: float
-    cells: list[ModelWindCell]
-    valid_time_utc: str
+    cells: list[WindCoord]
+    frames: list[ModelWindFrame]
+
+    @property
+    def valid_time_utc(self) -> str:
+        """First-frame valid time — kept for backward compat with callers
+        that still expect a single-time grid."""
+        return self.frames[0].valid_time_utc if self.frames else ""
 
 
 # Open-Meteo's docs allow up to 5000 coords per request. 400 keeps each URL
@@ -214,51 +229,73 @@ _CHUNK_SIZE = 400
 _RETRY_ATTEMPTS = 2
 _RETRY_BACKOFF_S = 1.5
 
+# Forecast horizon for the timeline slider. NHC issues 5-day forecasts;
+# we sample every 6 hours through the same window. 13 frames at ~1770
+# cells each ≈ 250 KB per model gzipped — comfortable.
+_FORECAST_HOURS: tuple[int, ...] = (0, 6, 12, 18, 24, 30, 36, 42, 48, 60, 72, 96, 120)
 
-def _extract_bulk_cells(
+
+def _extract_bulk_frames(
     requested_coords: list[tuple[float, float]],
-    items: list[dict], wire_name: str, now: datetime,
-) -> tuple[list[ModelWindCell], str]:
-    """Flatten Open-Meteo's per-location responses into ModelWindCells at the
-    nearest hour. Returns (cells, valid_time_utc).
+    items: list[dict],
+    now: datetime,
+) -> tuple[list[WindCoord], dict[int, tuple[list[float], list[float | None], str]]]:
+    """Parse Open-Meteo's multi-location response into (coords, frames).
 
-    Cells are emitted at the *requested* lat/lon (not Open-Meteo's returned
-    lat/lon, which snaps to the model's native grid — GFS ~0.25°, ECMWF IFS
-    0.25° — and would break the cell-key alignment the frontend relies on
-    to compute diffs vs the observed grid. Open-Meteo does bilinear
-    interpolation from the native grid to the requested point anyway, so
-    the values are still meaningful at the requested coord."""
-    out: list[ModelWindCell] = []
-    valid_time = ""
-    for req, item in zip(requested_coords, items):
-        hourly = item.get("hourly") or {}
+    ``frames`` is keyed by forecast-hour offset (from ``now``) matching
+    ``_FORECAST_HOURS``; each value is a tuple of parallel arrays
+    (wind_kt_per_coord, wind_dir_deg_per_coord, valid_time_utc).
+
+    Coordinates emit at the *requested* lat/lon (not Open-Meteo's returned
+    lat/lon — that would snap to the model's native grid and break cell
+    -alignment with the observed grid on the frontend)."""
+    coords: list[WindCoord] = []
+    frames_per_hour: dict[int, tuple[list[float], list[float | None], str]] = {
+        h: ([0.0] * len(requested_coords), [None] * len(requested_coords), "")
+        for h in _FORECAST_HOURS
+    }
+
+    for cell_idx, (req, item) in enumerate(zip(requested_coords, items)):
+        req_lat, req_lon = req
+        coords.append(WindCoord(
+            lat=round(float(req_lat), 3),
+            lon=round(float(req_lon), 3),
+        ))
+
+        hourly = (item or {}).get("hourly") or {}
         times = hourly.get("time") or []
         speeds = hourly.get("wind_speed_10m") or []
         dirs = hourly.get("wind_direction_10m") or []
         if not times or not speeds:
             continue
-        idx = _nearest_hour_index(times, now)
-        if idx is None or idx >= len(speeds):
+
+        # Find the "now" index once per cell — subsequent frames are that
+        # index plus each forecast-hour offset.
+        base_idx = _nearest_hour_index(times, now)
+        if base_idx is None:
             continue
-        speed_ms = speeds[idx]
-        if speed_ms is None:
-            continue
-        dir_deg = dirs[idx] if idx < len(dirs) else None
-        if not valid_time:
-            t = times[idx]
-            valid_time = t if t.endswith("Z") else (t + "Z")
-        req_lat, req_lon = req
-        out.append(
-            ModelWindCell(
-                lat=round(float(req_lat), 3),
-                lon=round(float(req_lon), 3),
-                wind_kt=round(float(_mps_to_kt(float(speed_ms)) or 0.0), 1),
-                wind_dir_deg=(
-                    round(float(dir_deg), 1) if dir_deg is not None else None
-                ),
+
+        for h in _FORECAST_HOURS:
+            idx = base_idx + h  # 1-hour steps in Open-Meteo's hourly array
+            if idx >= len(times):
+                break
+            speed_ms = speeds[idx] if idx < len(speeds) else None
+            if speed_ms is None:
+                continue
+            dir_deg = dirs[idx] if idx < len(dirs) else None
+            kts_arr, dirs_arr, vt_out = frames_per_hour[h]
+            kts_arr[cell_idx] = round(
+                float(_mps_to_kt(float(speed_ms)) or 0.0), 1,
             )
-        )
-    return out, valid_time
+            dirs_arr[cell_idx] = (
+                round(float(dir_deg), 1) if dir_deg is not None else None
+            )
+            if not vt_out:
+                t = times[idx]
+                vt_out = t if t.endswith("Z") else (t + "Z")
+                frames_per_hour[h] = (kts_arr, dirs_arr, vt_out)
+
+    return coords, frames_per_hour
 
 
 # Manual LRU that ONLY caches successful non-empty results. The previous
@@ -290,7 +327,10 @@ def _fetch_bulk_chunk(
         "hourly": "wind_speed_10m,wind_direction_10m",
         "wind_speed_unit": "ms",
         "timezone": "UTC",
-        "forecast_days": 1,
+        # 6 days covers the full 0..120h forecast horizon we sample for
+        # the time slider (NHC ships 5-day forecasts; +1 day of headroom
+        # so a T+120 sample never falls off the end).
+        "forecast_days": 6,
         "models": model_key,
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
@@ -324,12 +364,13 @@ def fetch_model_wind_grid(
     west: float, south: float, east: float, north: float,
     model_wire: str, *, step_deg: float = 0.25,
 ) -> ModelWindGrid:
-    """GFS or ECMWF wind grid over the bbox, at ``step_deg`` resolution.
+    """GFS or ECMWF wind grid over the bbox, at ``step_deg`` resolution,
+    returned as multiple forecast frames (see ``_FORECAST_HOURS``).
 
-    Uses Open-Meteo's multi-location endpoint (a single URL can hold ~100
-    coordinates) with parallel chunked requests. Grid step is deliberately
-    the same as the observed heatmap so the frontend can compute obs-vs
-    -model diffs cell-by-cell without resampling."""
+    Uses Open-Meteo's multi-location endpoint (a single URL holds ~400
+    coordinates for us) with parallel chunked requests. Grid step matches
+    the observed heatmap so the frontend can compute obs-vs-model diffs
+    cell-by-cell without resampling."""
     model_key = next(
         (k for (k, wire) in MODELS if wire == model_wire), None,
     )
@@ -348,17 +389,22 @@ def fetch_model_wind_grid(
 
     if not coords:
         return ModelWindGrid(
-            model=model_wire, step_deg=step_deg, cells=[], valid_time_utc="",
+            model=model_wire, step_deg=step_deg, cells=[], frames=[],
         )
 
-    # Chunk the coords, then dispatch each chunk to Open-Meteo in parallel.
     now = datetime.now(timezone.utc)
     chunks = [
         coords[i : i + _CHUNK_SIZE]
         for i in range(0, len(coords), _CHUNK_SIZE)
     ]
-    all_cells: list[ModelWindCell] = []
-    valid_time = ""
+
+    # Collect chunk results in the same order as coords, so per-chunk
+    # coord-index slices concatenate back into a single global cell array.
+    all_coords: list[WindCoord] = []
+    all_kts: dict[int, list[float]] = {h: [] for h in _FORECAST_HOURS}
+    all_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
+    frame_valid_times: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
+
     with ThreadPoolExecutor(max_workers=min(6, len(chunks))) as pool:
         futures: list[tuple[list[tuple[float, float]], object]] = []
         for ch in chunks:
@@ -372,22 +418,46 @@ def fetch_model_wind_grid(
                 items = fut.result()  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 items = ()
-            cells, vt = _extract_bulk_cells(ch, list(items), model_wire, now)
-            all_cells.extend(cells)
-            if vt and not valid_time:
-                valid_time = vt
+            chunk_coords, chunk_frames = _extract_bulk_frames(ch, list(items), now)
+            all_coords.extend(chunk_coords)
+            for h in _FORECAST_HOURS:
+                kts, dirs, vt = chunk_frames.get(h, ([], [], ""))
+                # Pad chunk arrays to full chunk length in case some cells
+                # had no data.
+                needed = len(chunk_coords)
+                if len(kts) < needed:
+                    kts = kts + [0.0] * (needed - len(kts))
+                    dirs = dirs + [None] * (needed - len(dirs))
+                all_kts[h].extend(kts)
+                all_dirs[h].extend(dirs)
+                if vt and not frame_valid_times[h]:
+                    frame_valid_times[h] = vt
+
+    frames: list[ModelWindFrame] = []
+    for h in _FORECAST_HOURS:
+        vt = frame_valid_times[h]
+        if not vt:
+            # Frame has no data (past the model's forecast horizon).
+            continue
+        frames.append(ModelWindFrame(
+            hour=h,
+            valid_time_utc=vt,
+            wind_kt=all_kts[h],
+            wind_dir_deg=all_dirs[h],
+        ))
 
     return ModelWindGrid(
         model=model_wire, step_deg=step_deg,
-        cells=all_cells, valid_time_utc=valid_time,
+        cells=all_coords, frames=frames,
     )
 
 
 __all__ = [
     "ModelForecast",
-    "ModelWindCell",
+    "ModelWindFrame",
     "ModelWindGrid",
     "PointForecast",
+    "WindCoord",
     "fetch_model_wind_grid",
     "point_forecast",
 ]

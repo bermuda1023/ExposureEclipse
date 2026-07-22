@@ -179,21 +179,27 @@ def _nws_all_stations() -> list[dict]:
     """All NWS observation stations (paginated until exhausted, capped).
 
     NWS's /stations endpoint returns metadata + GeoJSON Point geometry per
-    station. We pull up to ~4,000 stations (limit=500 per page × 8 pages)
-    which covers CONUS comfortably. Cached once per cold start.
-    """
+    station. We pull up to ~15,000 stations (limit=500 per page × 30 pages)
+    which comfortably covers all of CONUS + territories. Was previously
+    capped at 4,000 which left interior CONUS under-covered — inland east
+    Texas returned "nearest obs 166 km" (Houston metro) even though there
+    are dozens of NWS ASOS + mesonet sites within 30-50 km of any point.
+    Cached once per cold start."""
     out: list[dict] = []
     cursor = None
-    for _ in range(8):
+    for _ in range(30):
         params = {"limit": 500}
         if cursor:
             params["cursor"] = cursor
         page = _nws_get("/stations", params=params)
         if not page:
             break
-        out.extend(page.get("features") or [])
+        features = page.get("features") or []
+        out.extend(features)
+        # If NWS returned fewer than we asked for, we're at the end.
+        if len(features) < 500:
+            break
         cursor = ((page.get("pagination") or {}).get("next") or "")
-        # `next` is a full URL — extract the cursor token.
         if "cursor=" in cursor:
             cursor = cursor.split("cursor=")[-1].split("&")[0]
         else:

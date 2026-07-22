@@ -246,6 +246,15 @@ def _clean_obs(
     return cleaned
 
 
+# "Full trust" distance for the composite. Was 1.5° (~165 km) which rated
+# a cell in inland east Texas as HIGH confidence when the nearest actual
+# obs was in the Houston metro 166 km away — clearly wrong for
+# hurricane-scale wind fields where the mesoscale correlation length is
+# 30-60 km. Tightened to 0.5° so anything past ~55 km starts fading, and
+# the fade reaches zero at the 3° IDW radius.
+_FULL_TRUST_DIST_DEG = 0.5
+
+
 def _cell_confidence_parts(
     nearest_dist_deg: float | None,
     count: int,
@@ -257,13 +266,15 @@ def _cell_confidence_parts(
     LOW instead of just a black-box composite."""
     if count <= 0 or nearest_dist_deg is None:
         return 0.0, 0.0, 0.0, 0.0, None
-    if nearest_dist_deg <= 0.7:
+    if nearest_dist_deg <= _FULL_TRUST_DIST_DEG:
         dist_score = 1.0
     elif nearest_dist_deg >= IDW_RADIUS_DEG:
         dist_score = 0.0
     else:
-        span = IDW_RADIUS_DEG - 0.7
-        dist_score = max(0.0, 1.0 - (nearest_dist_deg - 0.7) / span)
+        span = IDW_RADIUS_DEG - _FULL_TRUST_DIST_DEG
+        dist_score = max(
+            0.0, 1.0 - (nearest_dist_deg - _FULL_TRUST_DIST_DEG) / span,
+        )
     if count == 1:
         count_score = 0.7
     else:
@@ -317,15 +328,17 @@ def _cell_confidence(
     if count <= 0 or nearest_dist_deg is None:
         return 0.0
 
-    # Distance score — on top of an obs (< 0.7°, roughly one grid cell) is
-    # full trust, fades to zero at the radius edge.
-    if nearest_dist_deg <= 0.7:
+    # Distance score — same falloff as _cell_confidence_parts. See
+    # _FULL_TRUST_DIST_DEG for the rationale on the 0.5° threshold.
+    if nearest_dist_deg <= _FULL_TRUST_DIST_DEG:
         dist_score = 1.0
     elif nearest_dist_deg >= IDW_RADIUS_DEG:
         dist_score = 0.0
     else:
-        span = IDW_RADIUS_DEG - 0.7
-        dist_score = max(0.0, 1.0 - (nearest_dist_deg - 0.7) / span)
+        span = IDW_RADIUS_DEG - _FULL_TRUST_DIST_DEG
+        dist_score = max(
+            0.0, 1.0 - (nearest_dist_deg - _FULL_TRUST_DIST_DEG) / span,
+        )
 
     # Count score — 2+ contributors = full trust. Solo obs are usable but
     # rated at 0.7 so a single lucky station doesn't max out the score.

@@ -228,6 +228,7 @@ export function LiveStormPanel() {
               <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
               <LayerChip store={store} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
               <WindMapModeSelector store={store} />
+              <WindMapTimeSlider store={store} />
               <LayerChip store={store} k="showAlerts" label="NWS alerts" hint="Watches + warnings" color="#ea580c" />
               <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
               <LayerChip store={store} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
@@ -480,6 +481,123 @@ function WindMapModeSelector({
           {activeStatus}
         </div>
       )}
+    </div>
+  );
+}
+
+function WindMapTimeSlider({
+  store,
+}: {
+  store: ReturnType<typeof useLiveStormStore.getState>;
+}) {
+  if (!store.showWindMap) return null;
+  const mode = store.windMapMode;
+  // Observed grid is always current-time — no frames to scrub through.
+  if (mode === "observed") return null;
+
+  const needsGfs =
+    mode === "gfs" || mode === "diff-obs-vs-gfs" || mode === "diff-gfs-vs-ecmwf";
+  const needsEcmwf =
+    mode === "ecmwf" || mode === "diff-obs-vs-ecmwf" || mode === "diff-gfs-vs-ecmwf";
+
+  // Pick whichever grid's frames drive the timeline. For diff modes both
+  // grids exist and are aligned; taking either's frame list is fine.
+  const drivingGrid = needsGfs
+    ? store.gfsGrid
+    : needsEcmwf
+    ? store.ecmwfGrid
+    : null;
+
+  if (!drivingGrid || drivingGrid.frames.length === 0) return null;
+
+  const idx = Math.min(
+    Math.max(0, store.windMapFrameIndex),
+    drivingGrid.frames.length - 1,
+  );
+  const frame = drivingGrid.frames[idx];
+  const hourLabel =
+    frame.hour === 0 ? "Now" : `T+${frame.hour}h`;
+  const validLabel = (() => {
+    // ISO like "2026-07-22T18:00Z"
+    const m = frame.validTimeUtc.match(
+      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/,
+    );
+    if (!m) return frame.validTimeUtc;
+    const day = new Date(
+      Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]),
+    );
+    const opts: Intl.DateTimeFormatOptions = {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    };
+    return day.toLocaleString(undefined, opts) + " UTC";
+  })();
+
+  return (
+    <div
+      style={{
+        gridColumn: "span 2",
+        marginTop: 4,
+        paddingTop: 6,
+        borderTop: "1px dashed var(--ink-200)",
+        display: "grid",
+        gap: 3,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          fontSize: "0.62rem",
+          fontWeight: 700,
+          color: "var(--ink-500)",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+        }}
+      >
+        <span>Forecast time</span>
+        <span
+          style={{
+            color: "var(--ink-700)",
+            fontWeight: 700,
+            textTransform: "none",
+            letterSpacing: "normal",
+            fontSize: "0.7rem",
+          }}
+        >
+          {hourLabel}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={drivingGrid.frames.length - 1}
+        step={1}
+        value={idx}
+        onChange={(e) =>
+          useLiveStormStore.getState().setWindMapFrameIndex(+e.target.value)
+        }
+        style={{
+          width: "100%",
+          accentColor: "#dc2626",
+          cursor: "pointer",
+        }}
+      />
+      <div
+        style={{
+          fontSize: "0.62rem",
+          color: "var(--ink-500)",
+          textAlign: "center",
+        }}
+      >
+        {validLabel}
+      </div>
     </div>
   );
 }

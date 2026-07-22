@@ -46,6 +46,9 @@ interface LiveStormState {
   ecmwfGrid: WindModelGrid | null;
   gfsGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
   ecmwfGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  // Index into the model grid's frames array. 0 = now; higher = further
+  // into the forecast. Observed mode ignores this (obs is always "now").
+  windMapFrameIndex: number;
 
   // "Show which stations contributed to this cell" drill-down. When set, the
   // map highlights these obs and dims all others.
@@ -62,6 +65,7 @@ interface LiveStormState {
   setGfsGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
   setEcmwfGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
   setHighlightObs: (obs: WindObs[] | null) => void;
+  setWindMapFrameIndex: (i: number) => void;
 }
 
 export type ToggleKey =
@@ -98,6 +102,7 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   ecmwfGrid: null,
   gfsGridStatus: "idle" as const,
   ecmwfGridStatus: "idle" as const,
+  windMapFrameIndex: 0,
   highlightObs: null,
 
   start: (stormId) =>
@@ -111,6 +116,7 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
       ecmwfGrid: null,
       gfsGridStatus: "idle",
       ecmwfGridStatus: "idle",
+      windMapFrameIndex: 0,
       highlightObs: null,
       windMapMode: "observed",
     }),
@@ -120,14 +126,16 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
     activeStormId: null, data: null, isLoading: false, error: null,
     gfsGrid: null, ecmwfGrid: null,
     gfsGridStatus: "idle", ecmwfGridStatus: "idle",
+    windMapFrameIndex: 0,
     highlightObs: null,
     windMapMode: "observed",
   }),
   setToggle: (key, value) => set({ [key]: value } as Partial<LiveStormState>),
-  setWindMapMode: (mode) => set({ windMapMode: mode }),
+  setWindMapMode: (mode) => set({ windMapMode: mode, windMapFrameIndex: 0 }),
   setGfsGrid: (g) => set({ gfsGrid: g }),
   setEcmwfGrid: (g) => set({ ecmwfGrid: g }),
   setGfsGridStatus: (s) => set({ gfsGridStatus: s }),
   setEcmwfGridStatus: (s) => set({ ecmwfGridStatus: s }),
   setHighlightObs: (obs) => set({ highlightObs: obs }),
+  setWindMapFrameIndex: (i) => set({ windMapFrameIndex: i }),
 }));

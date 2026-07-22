@@ -261,6 +261,22 @@ interface LayerState {
 /** Read the currently-relevant cell list (obs / gfs / ecmwf) out of the
  *  Zustand store, in a shape the wind-field builder can consume. Returns
  *  null when the active grid has no cells (renderer should hide). */
+function materializeModelCells(
+  grid: import("../../api/live").WindModelGrid | null,
+  frameIdx: number,
+): Cell[] {
+  if (!grid || grid.frames.length === 0) return [];
+  const clamped = Math.min(Math.max(0, frameIdx), grid.frames.length - 1);
+  const frame = grid.frames[clamped];
+  if (!frame) return [];
+  return grid.cells.map((c, i) => ({
+    lat: c.lat,
+    lon: c.lon,
+    windKt: frame.windKt[i] ?? 0,
+    windDirDeg: frame.windDirDeg[i] ?? null,
+  }));
+}
+
 function selectActiveCells(): {
   cells: Cell[];
   bbox: [number, number, number, number] | null;
@@ -276,19 +292,15 @@ function selectActiveCells(): {
     }));
     return { cells, bbox };
   }
-  if (mode === "gfs" && s.gfsGrid) {
+  if (mode === "gfs") {
     return {
-      cells: s.gfsGrid.cells.map((c) => ({
-        lat: c.lat, lon: c.lon, windKt: c.windKt, windDirDeg: c.windDirDeg,
-      })),
+      cells: materializeModelCells(s.gfsGrid, s.windMapFrameIndex),
       bbox,
     };
   }
-  if (mode === "ecmwf" && s.ecmwfGrid) {
+  if (mode === "ecmwf") {
     return {
-      cells: s.ecmwfGrid.cells.map((c) => ({
-        lat: c.lat, lon: c.lon, windKt: c.windKt, windDirDeg: c.windDirDeg,
-      })),
+      cells: materializeModelCells(s.ecmwfGrid, s.windMapFrameIndex),
       bbox,
     };
   }
@@ -305,6 +317,7 @@ export function WindParticleLayer({ map }: Props) {
   const mode = useLiveStormStore((s) => s.windMapMode);
   const gfsGrid = useLiveStormStore((s) => s.gfsGrid);
   const ecmwfGrid = useLiveStormStore((s) => s.ecmwfGrid);
+  const frameIndex = useLiveStormStore((s) => s.windMapFrameIndex);
 
   useEffect(() => {
     if (!map) return;
@@ -522,7 +535,7 @@ export function WindParticleLayer({ map }: Props) {
         if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
       } catch { /* torn down */ }
     };
-  }, [map, showWindMap, showWindParticles, data, mode, gfsGrid, ecmwfGrid]);
+  }, [map, showWindMap, showWindParticles, data, mode, gfsGrid, ecmwfGrid, frameIndex]);
 
   return null;
 }
