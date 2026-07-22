@@ -323,29 +323,44 @@ def _shift_iso_hours(iso_str: str, hours: int) -> str:
 # ─────────────────────────── replay (IBTrACS-driven) ───────────────────────────
 
 
+# Hard-coded summary metadata for the replay picker. The list endpoint used
+# to derive these from IBTrACS, which meant the 70 MB CSV had to be fetched +
+# parsed just to render the storm picker — that regularly blew Vercel's 10 s
+# cold-start timeout, taking down the whole /api/live/storms endpoint and
+# surfacing "Live feed unreachable" in the frontend. Since REPLAY_CANDIDATES
+# is a small curated list of retired storms whose facts never change, we
+# store the summary values inline. The IBTrACS parse still happens on demand
+# when a replay bundle is actually requested.
+REPLAY_SUMMARY_FACTS: dict[str, dict] = {
+    "AL092022": {
+        "peak_wind_kt": 140,     # Ian, Cat 5 at peak
+        "peak_pressure_mb": 936,
+        "peak_lat": 22.0,
+        "peak_lon": -83.0,
+    },
+}
+
+
 def replay_summaries() -> list[LiveStormSummary]:
-    """The curated set of demo storms — always available even when the Atlantic
-    is quiet. Each entry's metadata comes from IBTrACS."""
-    storms_by_id = {s.storm_id: s for s in fetch_storms()}
+    """The curated set of demo storms — always available even when the
+    Atlantic is quiet AND when IBTrACS is unreachable. Facts come from
+    ``REPLAY_SUMMARY_FACTS``; no network call happens here."""
     out: list[LiveStormSummary] = []
     for atcf, display, year in REPLAY_CANDIDATES:
-        s = storms_by_id.get(atcf)
-        if s is None:
-            continue
-        peak = max((p.wind_kt for p in s.track), default=0)
+        facts = REPLAY_SUMMARY_FACTS.get(atcf, {})
+        peak = int(facts.get("peak_wind_kt") or 0)
         cat = category_for_wind(peak)
         cat_label = f"Cat {cat}" if cat >= 1 else "—"
-        peak_pt = max(s.track, key=lambda p: p.wind_kt)
         out.append(
             LiveStormSummary(
-                storm_id=s.storm_id,
+                storm_id=atcf,
                 name=display,
                 year=year,
                 classification="HU",
                 intensity_kt=peak,
-                pressure_mb=peak_pt.pressure_mb,
-                lat=peak_pt.lat,
-                lon=peak_pt.lon,
+                pressure_mb=facts.get("peak_pressure_mb"),
+                lat=facts.get("peak_lat"),
+                lon=facts.get("peak_lon"),
                 is_live=False,
                 label=f"{display} ({year}) — replay, {cat_label}",
             )
