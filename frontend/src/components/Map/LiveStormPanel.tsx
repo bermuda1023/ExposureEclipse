@@ -11,12 +11,15 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchLiveStormBundle,
   fetchLiveStormList,
+  fetchWindModelGrid,
   type LiveStormRow,
 } from "../../api/live";
 import { fetchHurricaneImpact } from "../../api/hurricanes";
 import { useFiltersStore } from "../../state/filters";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
-import { useLiveStormStore, type ToggleKey } from "../../state/liveStorm";
+import {
+  useLiveStormStore, type ToggleKey, type WindMapMode,
+} from "../../state/liveStorm";
 import { useEffectiveScope } from "../../state/useEffectiveScope";
 import { useViewStore } from "../../state/view";
 
@@ -67,6 +70,34 @@ export function LiveStormPanel() {
       })
       .catch((e) => impactStore.setError(String(e?.message ?? e)));
   }
+
+  // Lazy-fetch model grids whenever the mode requires them and we don't
+  // already have them cached. Each model grid is one Open-Meteo call, so
+  // triggering only on demand keeps the initial bundle fast.
+  useEffect(() => {
+    const mode = store.windMapMode;
+    const needGfs =
+      mode === "gfs"
+      || mode === "diff-obs-vs-gfs"
+      || mode === "diff-gfs-vs-ecmwf";
+    const needEcmwf =
+      mode === "ecmwf"
+      || mode === "diff-obs-vs-ecmwf"
+      || mode === "diff-gfs-vs-ecmwf";
+    if (!store.data) return;
+    const bbox = store.data.bbox;
+    if (needGfs && !store.gfsGrid) {
+      fetchWindModelGrid(bbox, "gfs")
+        .then((g) => useLiveStormStore.getState().setGfsGrid(g))
+        .catch(() => {/* leave null; layer draws obs as fallback */});
+    }
+    if (needEcmwf && !store.ecmwfGrid) {
+      fetchWindModelGrid(bbox, "ecmwf")
+        .then((g) => useLiveStormStore.getState().setEcmwfGrid(g))
+        .catch(() => {/* leave null */});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.windMapMode, store.data, store.gfsGrid, store.ecmwfGrid]);
 
   // Fetch the full bundle whenever activeId changes, throttled to once per
   // 60s while a storm is live (cache).
@@ -190,6 +221,7 @@ export function LiveStormPanel() {
               <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
               <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
               <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
+              <WindMapModeSelector store={store} />
               <LayerChip store={store} k="showAlerts" label="NWS alerts" hint="Watches + warnings" color="#ea580c" />
               <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
               <LayerChip store={store} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
@@ -294,6 +326,74 @@ function StormPicker({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function WindMapModeSelector({
+  store,
+}: {
+  store: ReturnType<typeof useLiveStormStore.getState>;
+}) {
+  if (!store.showWindMap) return null;
+  const modes: Array<[WindMapMode, string, string]> = [
+    ["observed", "Obs", "Interpolated observations"],
+    ["gfs", "GFS", "NOAA GFS surface wind"],
+    ["ecmwf", "ECMWF", "ECMWF IFS surface wind"],
+    ["diff-obs-vs-gfs", "Obs−GFS", "Observed minus GFS (kt)"],
+    ["diff-obs-vs-ecmwf", "Obs−ECMWF", "Observed minus ECMWF (kt)"],
+    ["diff-gfs-vs-ecmwf", "GFS−ECMWF", "GFS minus ECMWF (kt)"],
+  ];
+  return (
+    <div
+      style={{
+        gridColumn: "span 2",
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr 1fr",
+        gap: 3,
+        marginTop: 3,
+        paddingTop: 5,
+        borderTop: "1px dashed var(--ink-200)",
+      }}
+    >
+      <div
+        style={{
+          gridColumn: "span 3",
+          fontSize: "0.6rem",
+          color: "var(--ink-500)",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          marginBottom: 2,
+        }}
+      >
+        Wind map source
+      </div>
+      {modes.map(([mode, label, hint]) => {
+        const active = store.windMapMode === mode;
+        return (
+          <button
+            key={mode}
+            type="button"
+            title={hint}
+            onClick={() => useLiveStormStore.getState().setWindMapMode(mode)}
+            style={{
+              all: "unset",
+              cursor: "pointer",
+              padding: "3px 5px",
+              borderRadius: 3,
+              fontSize: "0.66rem",
+              textAlign: "center",
+              border: `1px solid ${active ? "#dc2626" : "var(--ink-200)"}`,
+              background: active ? "#fef2f2" : "transparent",
+              color: active ? "#7f1d1d" : "var(--ink-600)",
+              fontWeight: active ? 700 : 400,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }

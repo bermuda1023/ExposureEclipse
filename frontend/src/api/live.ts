@@ -142,11 +142,37 @@ export interface WindGridPoint {
   windDirDeg: number | null;
   sources: number;
   confidence: number;
+  nearestObsKm: number | null;
 }
 
 export interface WindGridMeta {
   stepDeg: number;
   obsMaxAgeHours: number;
+  idwRadiusKm: number;
+}
+
+export interface WindObs {
+  lat: number;
+  lon: number;
+  windKt: number;
+  windDirDeg: number | null;
+  source: "buoy" | "land" | "unknown";
+  stationId: string;
+  observedAt: string;
+}
+
+export interface WindModelCell {
+  lat: number;
+  lon: number;
+  windKt: number;
+  windDirDeg: number | null;
+}
+
+export interface WindModelGrid {
+  model: "gfs" | "ecmwf";
+  stepDeg: number;
+  cells: WindModelCell[];
+  validTimeUtc: string;
 }
 
 export interface ModelForecast {
@@ -182,6 +208,7 @@ export interface LiveStormBundle {
   peakSurge: SurgePolygon[];           // live storms only; empty when N/A
   windMap: WindGridPoint[];
   windMapMeta: WindGridMeta;
+  windObs: WindObs[];
 }
 
 export const fetchLiveStormList = () =>
@@ -189,6 +216,14 @@ export const fetchLiveStormList = () =>
 
 export const fetchWindPointForecast = (lat: number, lon: number) =>
   apiGet<PointForecast>("/live/wind-forecast", { lat, lon });
+
+export const fetchWindModelGrid = (
+  bbox: [number, number, number, number],
+  model: "gfs" | "ecmwf",
+) =>
+  apiGet<WindModelGrid>("/live/wind-model-grid", {
+    west: bbox[0], south: bbox[1], east: bbox[2], north: bbox[3], model,
+  });
 
 export const fetchLiveStormBundle = (
   stormId: string,

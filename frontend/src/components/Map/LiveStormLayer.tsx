@@ -68,6 +68,8 @@ const LAYER_NHC_CONE_LINE = "live-nhc-cone-line";
 const LAYER_SURGE_FILL = "live-surge-fill";
 const LAYER_SURGE_LINE = "live-surge-line";
 const LAYER_WIND_MAP_FILL = "live-wind-map-fill";
+const SRC_WIND_OBS = "live-wind-obs";
+const LAYER_WIND_OBS = "live-wind-obs-circle";
 
 // SSHWS-inspired palette for the interpolated wind heatmap. Not a step
 // expression — we interpolate for a smooth field. Anchor points chosen to
@@ -81,6 +83,19 @@ const WIND_MAP_COLOR: unknown[] = [
   50,  "#dc2626",   // strong TS
   64,  "#7f1d1d",   // Cat 1
   96,  "#581c87",   // Cat 3+
+];
+
+// Diverging palette for diff modes — obs minus model (or model minus model).
+// Centered on 0 (agreement) with blue = A weaker than B, red = A stronger.
+const WIND_DIFF_COLOR: unknown[] = [
+  "interpolate", ["linear"], ["get", "diff"],
+  -30, "#1e3a8a",
+  -15, "#60a5fa",
+  -5,  "#bfdbfe",
+   0,  "#f8fafc",
+   5,  "#fecaca",
+   15, "#dc2626",
+   30, "#7f1d1d",
 ];
 
 // NHC's peak-storm-surge palette: hint colours in the KML mirror the standard
@@ -293,10 +308,18 @@ function buildSurgeFC(surge: import("../../api/live").SurgePolygon[] | undefined
   return { type: "FeatureCollection" as const, features };
 }
 
-function buildWindMapFC(
-  cells: import("../../api/live").WindGridPoint[] | undefined,
-  stepDeg: number,
-) {
+interface WindMapCellProps {
+  lat: number;
+  lon: number;
+  windKt: number;
+  diff?: number;
+  windDirDeg?: number | null;
+  sources?: number;
+  confidence?: number;
+  nearestObsKm?: number | null;
+}
+
+function buildWindMapFC(cells: WindMapCellProps[] | undefined, stepDeg: number) {
   // One abutting square per cell, sized to the backend's grid step. Same
   // tiling pattern as the SST layer so the map reads as a continuous
   // heatmap rather than dots.
@@ -315,9 +338,62 @@ function buildWindMapFC(
           [c.lon - half, c.lat - half],
         ]],
       },
-      properties: { windKt: c.windKt, sources: c.sources },
+      properties: {
+        windKt: c.windKt,
+        diff: c.diff ?? 0,
+        windDirDeg: c.windDirDeg ?? null,
+        sources: c.sources ?? 0,
+        confidence: c.confidence ?? 0,
+        nearestObsKm: c.nearestObsKm ?? null,
+        lat: c.lat,
+        lon: c.lon,
+      },
     })),
   };
+}
+
+function buildWindObsFC(
+  obs: import("../../api/live").WindObs[] | undefined,
+  highlighted: Set<string> | null,
+) {
+  return {
+    type: "FeatureCollection" as const,
+    features: (obs ?? []).map((o) => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [o.lon, o.lat] },
+      properties: {
+        windKt: o.windKt,
+        stationId: o.stationId,
+        source: o.source,
+        // 1 = drawn brightly, 0 = dimmed. Everything is bright when there's no
+        // active highlight (viewing the full obs pool).
+        highlighted:
+          highlighted === null
+            ? 1
+            : highlighted.has(`${o.stationId}|${o.lat}|${o.lon}`) ? 1 : 0,
+      },
+    })),
+  };
+}
+
+/** Diff two aligned grids (obs vs model, or model vs model). Cells are keyed
+ *  by rounded lat/lon since the backend uses a fixed 0.5° step + rounding. */
+function computeDiffGrid(
+  a: Array<{ lat: number; lon: number; windKt: number }>,
+  b: Array<{ lat: number; lon: number; windKt: number }>,
+): Array<{ lat: number; lon: number; windKt: number; diff: number }> {
+  const key = (lat: number, lon: number) =>
+    `${lat.toFixed(2)}|${lon.toFixed(2)}`;
+  const bMap = new Map(b.map((c) => [key(c.lat, c.lon), c]));
+  const out: Array<{ lat: number; lon: number; windKt: number; diff: number }> =
+    [];
+  for (const ca of a) {
+    const cb = bMap.get(key(ca.lat, ca.lon));
+    if (!cb) continue;
+    const diff = ca.windKt - cb.windKt;
+    out.push({ lat: ca.lat, lon: ca.lon, windKt: diff, diff });
+  }
+  return out;
 }
 
 export function LiveStormLayer({ map }: Props) {
@@ -331,6 +407,10 @@ export function LiveStormLayer({ map }: Props) {
   const showForecastCone = useLiveStormStore((s) => s.showForecastCone);
   const showSurge = useLiveStormStore((s) => s.showSurge);
   const showWindMap = useLiveStormStore((s) => s.showWindMap);
+  const windMapMode = useLiveStormStore((s) => s.windMapMode);
+  const gfsGrid = useLiveStormStore((s) => s.gfsGrid);
+  const ecmwfGrid = useLiveStormStore((s) => s.ecmwfGrid);
+  const highlightObs = useLiveStormStore((s) => s.highlightObs);
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -365,10 +445,38 @@ export function LiveStormLayer({ map }: Props) {
       setSource(map, SRC_FCST_INNER, buildConeQuadFC(data?.forecastWindField.innerCone));
       setSource(map, SRC_NHC_CONE, buildNHCConeFC(data?.forecastCone));
       setSource(map, SRC_SURGE, buildSurgeFC(data?.peakSurge));
+      // Compute the current wind-map view data based on mode. Observed grid
+      // is always the baseline; model + diff modes replace or subtract it.
+      const stepDeg = data?.windMapMeta?.stepDeg ?? 0.5;
+      const obsCells = data?.windMap ?? [];
+      let cellsForView: WindMapCellProps[] = obsCells;
+      let isDiffView = false;
+      if (windMapMode === "gfs" && gfsGrid) {
+        cellsForView = gfsGrid.cells.map((c) => ({ ...c }));
+      } else if (windMapMode === "ecmwf" && ecmwfGrid) {
+        cellsForView = ecmwfGrid.cells.map((c) => ({ ...c }));
+      } else if (windMapMode === "diff-obs-vs-gfs" && gfsGrid) {
+        cellsForView = computeDiffGrid(obsCells, gfsGrid.cells);
+        isDiffView = true;
+      } else if (windMapMode === "diff-obs-vs-ecmwf" && ecmwfGrid) {
+        cellsForView = computeDiffGrid(obsCells, ecmwfGrid.cells);
+        isDiffView = true;
+      } else if (windMapMode === "diff-gfs-vs-ecmwf" && gfsGrid && ecmwfGrid) {
+        cellsForView = computeDiffGrid(gfsGrid.cells, ecmwfGrid.cells);
+        isDiffView = true;
+      }
+      setSource(map, SRC_WIND_MAP, buildWindMapFC(cellsForView, stepDeg));
+
+      // Contributor obs — always populated so the click-drill-down can
+      // highlight them. When no highlight is active the obs are dimmed at
+      // very low opacity via the layer paint.
+      const highlightKey = highlightObs
+        ? new Set(
+            highlightObs.map((o) => `${o.stationId}|${o.lat}|${o.lon}`),
+          )
+        : null;
       setSource(
-        map,
-        SRC_WIND_MAP,
-        buildWindMapFC(data?.windMap, data?.windMapMeta?.stepDeg ?? 0.4),
+        map, SRC_WIND_OBS, buildWindObsFC(data?.windObs, highlightKey),
       );
 
       // ── Layers (stable paint, no data-dependent opacity). Visibility is
@@ -482,17 +590,51 @@ export function LiveStormLayer({ map }: Props) {
         },
       }, "county-line");
 
-      // Interpolated surface-wind heatmap — smoothed IDW blend of NDBC buoy
-      // + NWS land obs. Sits above the SST layer but under alerts/cones so
-      // the cyclone geometry stays legible.
+      // Interpolated surface-wind heatmap. Palette switches between the
+      // SSHWS-anchored speed ramp (observed / model modes) and the diverging
+      // diff palette (obs-vs-model, model-vs-model). Paint is re-set on
+      // every apply so switching mode updates the colors without
+      // recreating the layer.
+      const paintExpr = (isDiffView ? WIND_DIFF_COLOR : WIND_MAP_COLOR) as unknown as never;
       ensureLayer(map, LAYER_WIND_MAP_FILL, {
         id: LAYER_WIND_MAP_FILL, type: "fill", source: SRC_WIND_MAP,
         paint: {
-          "fill-color": WIND_MAP_COLOR as unknown as never,
+          "fill-color": paintExpr,
           "fill-opacity": 0.5,
           "fill-outline-color": "rgba(0,0,0,0)",
         },
       }, "county-line");
+      if (map.getLayer(LAYER_WIND_MAP_FILL)) {
+        map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-color", paintExpr);
+      }
+
+      // Contributor observation points — one small dot per cleaned obs.
+      // Dim by default; light up when the user drills into a cell's sources.
+      ensureLayer(map, LAYER_WIND_OBS, {
+        id: LAYER_WIND_OBS, type: "circle", source: SRC_WIND_OBS,
+        paint: {
+          "circle-radius": [
+            "case", ["==", ["get", "highlighted"], 1], 6, 3,
+          ] as unknown as never,
+          "circle-color": [
+            "match", ["get", "source"],
+            "buoy", "#0891b2",
+            "land", "#10b981",
+            "#94a3b8",
+          ] as unknown as never,
+          "circle-stroke-color": "#0f172a",
+          "circle-stroke-width": [
+            "case", ["==", ["get", "highlighted"], 1], 2, 0.6,
+          ] as unknown as never,
+          "circle-opacity": [
+            "case",
+            // With no active drill-down (highlighted=1 for all), keep the
+            // pool visible at moderate opacity; when drilling in, non
+            // -highlighted dots fade way down so the contributor set pops.
+            ["==", ["get", "highlighted"], 1], 0.9, 0.15,
+          ] as unknown as never,
+        },
+      });
 
       // NHC's official cone of uncertainty — the swept-circle envelope of
       // 60-70% forecast-track probability. Sits under the forecast line so it
@@ -674,6 +816,7 @@ export function LiveStormLayer({ map }: Props) {
       //    deterministic stack, bottom → top: wind heatmap → NHC cone →
       //    surge polygons → forecast + observed track lines. ──
       moveToTop(map, LAYER_WIND_MAP_FILL);
+      moveToTop(map, LAYER_WIND_OBS);
       moveToTop(map, LAYER_NHC_CONE_FILL);
       moveToTop(map, LAYER_NHC_CONE_LINE);
       moveToTop(map, LAYER_SURGE_FILL);
@@ -705,6 +848,7 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_SURGE_FILL, showSurge);
       setVis(map, LAYER_SURGE_LINE, showSurge);
       setVis(map, LAYER_WIND_MAP_FILL, showWindMap);
+      setVis(map, LAYER_WIND_OBS, showWindMap);
     };
 
     if (map.isStyleLoaded()) apply();
@@ -713,6 +857,7 @@ export function LiveStormLayer({ map }: Props) {
     map, data,
     showForecastHistory, showAlerts, showBuoys, showLand, showSst,
     showWindField, showForecastCone, showSurge, showWindMap,
+    windMapMode, gfsGrid, ecmwfGrid, highlightObs,
   ]);
 
   // Hover popups for buoys and land stations.
@@ -827,8 +972,8 @@ export function LiveStormLayer({ map }: Props) {
     };
 
     const confBadge = (c: number): string => {
-      if (c >= 0.6) return `<span style="color:#166534;font-weight:600">HIGH</span>`;
-      if (c >= 0.3) return `<span style="color:#a16207;font-weight:600">MED</span>`;
+      if (c >= 0.5) return `<span style="color:#166534;font-weight:600">HIGH</span>`;
+      if (c >= 0.25) return `<span style="color:#a16207;font-weight:600">MED</span>`;
       return `<span style="color:#991b1b;font-weight:600">LOW</span>`;
     };
 
@@ -842,50 +987,119 @@ export function LiveStormLayer({ map }: Props) {
       if (!f) return;
       const p = f.properties as {
         windKt: number;
+        diff: number;
         windDirDeg: number | null;
         sources: number;
         confidence: number;
+        nearestObsKm: number | null;
+        lat: number;
+        lon: number;
       };
+      const mode = useLiveStormStore.getState().windMapMode;
+      const bundleData = useLiveStormStore.getState().data;
       const mb = await import("mapbox-gl");
       popup?.remove();
-      // Skeleton popup — filled in when the model fetch resolves.
       const container = document.createElement("div");
       container.style.cssText =
-        "font-size:11px;line-height:1.5;min-width:240px;max-width:280px";
-      container.innerHTML = renderPopupBody(p, null, false);
-      popup = new mb.default.Popup({ closeButton: true, closeOnClick: true, maxWidth: "320px" })
+        "font-size:11px;line-height:1.5;min-width:260px;max-width:300px";
+      container.innerHTML = renderPopupBody(p, null, false, mode);
+      popup = new mb.default.Popup({ closeButton: true, closeOnClick: true, maxWidth: "340px" })
         .setLngLat(e.lngLat)
         .setDOMContent(container)
         .addTo(map);
+      wireSourcesDrilldown(container, p, bundleData);
+      wireClosePopupClearsHighlight(popup);
 
-      // Fetch GFS + ECMWF in the background; if the popup was closed before
-      // the response lands, dropping the update is harmless.
       try {
         const { fetchWindPointForecast } = await import("../../api/live");
         const forecast = await fetchWindPointForecast(e.lngLat.lat, e.lngLat.lng);
         if (popup && popup.isOpen()) {
-          container.innerHTML = renderPopupBody(p, forecast, true);
+          container.innerHTML = renderPopupBody(p, forecast, true, mode);
+          wireSourcesDrilldown(container, p, bundleData);
         }
       } catch {
         if (popup && popup.isOpen()) {
-          container.innerHTML = renderPopupBody(p, null, true);
+          container.innerHTML = renderPopupBody(p, null, true, mode);
+          wireSourcesDrilldown(container, p, bundleData);
         }
       }
     };
 
+    function wireSourcesDrilldown(
+      container: HTMLElement,
+      cell: { sources: number; lat: number; lon: number },
+      bundleData: import("../../api/live").LiveStormBundle | null,
+    ) {
+      if (!bundleData) return;
+      const link = container.querySelector<HTMLElement>("[data-sources-link]");
+      if (!link) return;
+      link.addEventListener("click", (evt) => {
+        evt.preventDefault();
+        // Filter the shipped obs pool by IDW-radius distance from the
+        // cell — same math as the backend, so the highlighted set matches
+        // what actually contributed.
+        const idwRadiusKm = bundleData.windMapMeta.idwRadiusKm;
+        const idwRadiusDeg = idwRadiusKm / 111;
+        const contributors = bundleData.windObs.filter((o) => {
+          const dlat = o.lat - cell.lat;
+          const cosLat = Math.max(Math.cos((cell.lat * Math.PI) / 180), 0.05);
+          const dlon = (o.lon - cell.lon) * cosLat;
+          const d2 = dlat * dlat + dlon * dlon;
+          return d2 <= idwRadiusDeg * idwRadiusDeg;
+        });
+        useLiveStormStore.getState().setHighlightObs(contributors);
+      });
+    }
+
+    function wireClosePopupClearsHighlight(pop: mapboxgl.Popup) {
+      pop.on("close", () => {
+        useLiveStormStore.getState().setHighlightObs(null);
+      });
+    }
+
     function renderPopupBody(
-      obs: { windKt: number; windDirDeg: number | null; sources: number; confidence: number },
+      obs: { windKt: number; diff: number; windDirDeg: number | null; sources: number; confidence: number; nearestObsKm: number | null },
       forecast: import("../../api/live").PointForecast | null,
       loaded: boolean,
+      mode: import("../../state/liveStorm").WindMapMode,
     ): string {
       const rows: string[] = [];
+      const isDiff = mode.startsWith("diff-");
+      const modeLabel: Record<string, string> = {
+        "observed": "Observed (IDW blend)",
+        "gfs": "GFS forecast",
+        "ecmwf": "ECMWF forecast",
+        "diff-obs-vs-gfs": "Obs − GFS",
+        "diff-obs-vs-ecmwf": "Obs − ECMWF",
+        "diff-gfs-vs-ecmwf": "GFS − ECMWF",
+      };
       rows.push(
-        `<div style="font-weight:700;color:#0f172a;margin-bottom:4px">Wind at point</div>`,
+        `<div style="font-weight:700;color:#0f172a;margin-bottom:4px">Wind at point <span style="color:#64748b;font-weight:400">· ${modeLabel[mode] ?? mode}</span></div>`,
       );
+      if (isDiff) {
+        const sign = obs.diff >= 0 ? "+" : "";
+        rows.push(
+          `<div><b>Δ:</b> ${sign}${obs.diff.toFixed(1)} kt <span style="color:#64748b">(first minus second)</span></div>`,
+        );
+      } else {
+        rows.push(
+          `<div><b>${modeLabel[mode]}:</b> ${speedTriple(obs.windKt)}</div>`,
+          `<div>Direction: ${compass(obs.windDirDeg)}</div>`,
+        );
+      }
+      // Confidence and sources only apply to the observed grid — for model
+      // and diff modes the value comes from an NWP model / arithmetic, not
+      // from local observations, so hide those signals.
+      if (mode === "observed") {
+        const distStr = obs.nearestObsKm == null
+          ? "—"
+          : `${obs.nearestObsKm} km`;
+        rows.push(
+          `<div>Confidence: ${confBadge(obs.confidence)} · ${(obs.confidence * 100).toFixed(0)}% · nearest obs ${distStr}</div>`,
+          `<div>Contributors: <a href="#" data-sources-link style="color:#2563eb;text-decoration:underline">${obs.sources} sources</a> <span style="color:#64748b">(click to highlight on map)</span></div>`,
+        );
+      }
       rows.push(
-        `<div><b>Observed (IDW blend):</b> ${speedTriple(obs.windKt)}</div>`,
-        `<div>Direction: ${compass(obs.windDirDeg)}</div>`,
-        `<div>Confidence: ${confBadge(obs.confidence)} · ${obs.sources} sources · ${(obs.confidence * 100).toFixed(0)}%</div>`,
         `<hr style="border:0;border-top:1px solid #e2e8f0;margin:6px 0"/>`,
       );
       if (!loaded) {
@@ -906,11 +1120,11 @@ export function LiveStormLayer({ map }: Props) {
             `<div style="color:#475569;margin-left:38px">Dir ${compass(m.windDirDeg)}</div>`,
           );
         }
-        // Agreement hint: if obs sits between the two models, that's a
-        // consistent picture. Big gaps flag either an outlier obs or model
-        // error — either way worth a second look.
-        const speeds = forecast.forecasts.map((m) => m.windKt);
-        if (speeds.length >= 1) {
+        // Agreement hint — only meaningful in observed mode where the top
+        // number represents actual obs. In model / diff modes the comparison
+        // is a tautology.
+        if (mode === "observed") {
+          const speeds = forecast.forecasts.map((m) => m.windKt);
           const modelMean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
           const gap = Math.abs(obs.windKt - modelMean);
           const note =

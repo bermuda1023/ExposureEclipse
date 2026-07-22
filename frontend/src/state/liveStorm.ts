@@ -9,7 +9,15 @@
  */
 
 import { create } from "zustand";
-import type { LiveStormBundle } from "../api/live";
+import type { LiveStormBundle, WindModelGrid, WindObs } from "../api/live";
+
+export type WindMapMode =
+  | "observed"
+  | "gfs"
+  | "ecmwf"
+  | "diff-obs-vs-gfs"
+  | "diff-obs-vs-ecmwf"
+  | "diff-gfs-vs-ecmwf";
 
 interface LiveStormState {
   activeStormId: string | null;
@@ -28,11 +36,25 @@ interface LiveStormState {
   showSurge: boolean;         // NHC peak storm surge coastal polygons
   showWindMap: boolean;       // interpolated surface-wind heatmap
 
+  // Mode of the wind-map layer: obs / model / diff. On mode change we lazy
+  // -fetch the required model grid(s) once per storm.
+  windMapMode: WindMapMode;
+  gfsGrid: WindModelGrid | null;
+  ecmwfGrid: WindModelGrid | null;
+
+  // "Show which stations contributed to this cell" drill-down. When set, the
+  // map highlights these obs and dims all others.
+  highlightObs: WindObs[] | null;
+
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
   setError: (msg: string) => void;
   clear: () => void;
   setToggle: (key: ToggleKey, value: boolean) => void;
+  setWindMapMode: (mode: WindMapMode) => void;
+  setGfsGrid: (g: WindModelGrid | null) => void;
+  setEcmwfGrid: (g: WindModelGrid | null) => void;
+  setHighlightObs: (obs: WindObs[] | null) => void;
 }
 
 export type ToggleKey =
@@ -60,11 +82,33 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
   showForecastCone: true,
   showSurge: true,
   showWindMap: true,
+  windMapMode: "observed" as WindMapMode,
+  gfsGrid: null,
+  ecmwfGrid: null,
+  highlightObs: null,
 
   start: (stormId) =>
-    set({ activeStormId: stormId, isLoading: true, error: null, data: null }),
+    set({
+      activeStormId: stormId,
+      isLoading: true,
+      error: null,
+      data: null,
+      // Clear model grids on storm switch — bbox differs.
+      gfsGrid: null,
+      ecmwfGrid: null,
+      highlightObs: null,
+      windMapMode: "observed",
+    }),
   setData: (data) => set({ data, isLoading: false, error: null }),
   setError: (msg) => set({ error: msg, isLoading: false }),
-  clear: () => set({ activeStormId: null, data: null, isLoading: false, error: null }),
+  clear: () => set({
+    activeStormId: null, data: null, isLoading: false, error: null,
+    gfsGrid: null, ecmwfGrid: null, highlightObs: null,
+    windMapMode: "observed",
+  }),
   setToggle: (key, value) => set({ [key]: value } as Partial<LiveStormState>),
+  setWindMapMode: (mode) => set({ windMapMode: mode }),
+  setGfsGrid: (g) => set({ gfsGrid: g }),
+  setEcmwfGrid: (g) => set({ ecmwfGrid: g }),
+  setHighlightObs: (obs) => set({ highlightObs: obs }),
 }));

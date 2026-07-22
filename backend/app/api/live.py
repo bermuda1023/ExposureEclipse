@@ -30,7 +30,7 @@ from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.sea_surface_temp import sst_field
 from ..services.weather_alerts import fetch_active_alerts
 from ..services.wind_field_map import wind_field_grid
-from ..services.wind_forecast import point_forecast
+from ..services.wind_forecast import fetch_model_wind_grid, point_forecast
 
 router = APIRouter(prefix="/live", tags=["live"])
 
@@ -174,9 +174,10 @@ class WindGridPointOut(CamelModel):
 
     ``wind_dir_deg`` uses meteorological FROM convention (0°=N, 90°=E).
     ``sources`` counts contributing observations. ``confidence`` is a 0..1
-    heuristic combining source count and proximity to those sources — high
-    when the cell sits on top of real data, low near the fringe of the
-    interpolation radius. Renderer can dim low-confidence cells."""
+    composite of source count, distance to nearest obs, and speed agreement
+    across contributors. ``nearest_obs_km`` is the raw distance to the
+    closest contributing obs — surfaced in the click popup so the user can
+    see the underlying signal directly."""
 
     lat: float
     lon: float
@@ -184,11 +185,44 @@ class WindGridPointOut(CamelModel):
     wind_dir_deg: float | None
     sources: int
     confidence: float
+    nearest_obs_km: float | None
 
 
 class WindGridMeta(CamelModel):
     step_deg: float
     obs_max_age_hours: float
+    idw_radius_km: float
+
+
+class WindObsOut(CamelModel):
+    """One cleaned surface observation used to build the wind heatmap.
+    Shipped in the bundle so the frontend can drill down from a cell click
+    ('N sources') to the actual contributing stations."""
+
+    lat: float
+    lon: float
+    wind_kt: float
+    wind_dir_deg: float | None
+    source: str          # "buoy" | "land"
+    station_id: str
+    observed_at: str
+
+
+class WindModelCellOut(CamelModel):
+    """One cell of a GFS or ECMWF wind grid, aligned to the observed grid
+    so obs/model diffs are trivial cell-by-cell subtractions."""
+
+    lat: float
+    lon: float
+    wind_kt: float
+    wind_dir_deg: float | None
+
+
+class WindModelGridOut(CamelModel):
+    model: str            # "gfs" | "ecmwf"
+    step_deg: float
+    cells: list[WindModelCellOut]
+    valid_time_utc: str
 
 
 class ModelForecastOut(CamelModel):
@@ -237,6 +271,9 @@ class LiveStormBundle(CamelModel):
     # Empty when include_wind_map is off or no fresh obs are in the bbox.
     wind_map: list[WindGridPointOut]
     wind_map_meta: WindGridMeta
+    # The cleaned obs pool that fed the heatmap. Shipped so the click popup
+    # can show contributor stations for any given cell.
+    wind_obs: list[WindObsOut]
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -560,9 +597,10 @@ def live_storm_bundle(
     # is purely observation-driven; caller can turn it off if the extra land
     # -station fetch is too slow.
     wind_map_out: list[WindGridPointOut] = []
-    wind_step = 0.4
+    wind_obs_out: list[WindObsOut] = []
+    wind_step = 0.5
     if include_wind_map:
-        cells, wind_step = wind_field_grid(*bbox)
+        cells, wind_step, obs_pool = wind_field_grid(*bbox)
         wind_map_out = [
             WindGridPointOut(
                 lat=c.lat,
@@ -571,8 +609,18 @@ def live_storm_bundle(
                 wind_dir_deg=c.wind_dir_deg,
                 sources=c.sources,
                 confidence=c.confidence,
+                nearest_obs_km=c.nearest_obs_km,
             )
             for c in cells
+        ]
+        wind_obs_out = [
+            WindObsOut(
+                lat=o.lat, lon=o.lon,
+                wind_kt=o.wind_kt, wind_dir_deg=o.wind_dir_deg,
+                source=o.source, station_id=o.station_id,
+                observed_at=o.observed_at,
+            )
+            for o in obs_pool
         ]
 
     return LiveStormBundle(
@@ -592,7 +640,39 @@ def live_storm_bundle(
         forecast_cone=forecast_cone_out,
         peak_surge=peak_surge_out,
         wind_map=wind_map_out,
-        wind_map_meta=WindGridMeta(step_deg=wind_step, obs_max_age_hours=4.0),
+        wind_map_meta=WindGridMeta(
+            step_deg=wind_step, obs_max_age_hours=4.0, idw_radius_km=333.0,
+        ),
+        wind_obs=wind_obs_out,
+    )
+
+
+@router.get("/wind-model-grid", response_model=WindModelGridOut)
+def wind_model_grid(
+    west: float = Query(..., ge=-180.0, le=180.0),
+    south: float = Query(..., ge=-90.0, le=90.0),
+    east: float = Query(..., ge=-180.0, le=180.0),
+    north: float = Query(..., ge=-90.0, le=90.0),
+    model: str = Query(..., pattern="^(gfs|ecmwf)$"),
+) -> WindModelGridOut:
+    """GFS or ECMWF surface-wind grid over a bbox at 0.5° resolution.
+
+    Powers the "flip between obs / GFS / ECMWF / diff" mode on the live wind
+    heatmap. Cell step is aligned with the observed grid so diffs are cheap
+    cell-to-cell on the frontend. Fetches from Open-Meteo — degrades to an
+    empty grid on failure rather than 5xx'ing the mode selector."""
+    grid = fetch_model_wind_grid(west, south, east, north, model)
+    return WindModelGridOut(
+        model=grid.model,
+        step_deg=grid.step_deg,
+        valid_time_utc=grid.valid_time_utc,
+        cells=[
+            WindModelCellOut(
+                lat=c.lat, lon=c.lon,
+                wind_kt=c.wind_kt, wind_dir_deg=c.wind_dir_deg,
+            )
+            for c in grid.cells
+        ],
     )
 
 

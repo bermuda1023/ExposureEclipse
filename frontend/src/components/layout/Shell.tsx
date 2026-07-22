@@ -371,6 +371,20 @@ function MapToolbar() {
         <MetricSelector />
         <YoyToggle />
         <ExportButton />
+        <a
+          href="/methodology"
+          style={{
+            fontSize: "0.72rem",
+            color: "var(--ink-600)",
+            textDecoration: "none",
+            padding: "4px 8px",
+            border: "1px solid var(--ink-300)",
+            borderRadius: 4,
+          }}
+          title="How every number on this map is calculated + source list"
+        >
+          Methodology
+        </a>
       </div>
     </div>
   );

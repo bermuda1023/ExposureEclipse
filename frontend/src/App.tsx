@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Shell } from "./components/layout/Shell";
 import { AdminProgrammes } from "./pages/AdminProgrammes";
 import { FundAnalysis } from "./pages/FundAnalysis";
+import { Methodology } from "./pages/Methodology";
 
 /** Tiny path-based router — no react-router dependency for a multi-page app.
  * `/admin/programmes` → admin; `/fund-analysis` → portfolio optimizer;
@@ -21,5 +22,6 @@ export default function App() {
   const path = usePath();
   if (path.startsWith("/admin/programmes")) return <AdminProgrammes />;
   if (path.startsWith("/fund-analysis")) return <FundAnalysis />;
+  if (path.startsWith("/methodology")) return <Methodology />;
   return <Shell />;
 }
