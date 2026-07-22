@@ -1029,7 +1029,7 @@ export function LiveStormLayer({ map }: Props) {
   // so the underwriter can eyeball obs-vs-model agreement.
   useEffect(() => {
     if (!map) return;
-    let popup: mapboxgl.Popup | null = null;
+    let popup: DraggablePopup | null = null;
 
     const kmh = (kt: number | null | undefined) =>
       kt == null ? null : Math.round(kt * 1.852);
@@ -1130,16 +1130,12 @@ export function LiveStormLayer({ map }: Props) {
       const obsAtClick = bundleData
         ? obsIdwAt(e.lngLat.lat, e.lngLat.lng, bundleData.windObs)
         : null;
-      const mb = await import("mapbox-gl");
       popup?.remove();
       const container = document.createElement("div");
       container.style.cssText =
         "font-size:11px;line-height:1.5;min-width:260px;max-width:300px";
       container.innerHTML = renderPopupBody(p, null, false, mode, obsAtClick);
-      popup = new mb.default.Popup({ closeButton: true, closeOnClick: true, maxWidth: "340px" })
-        .setLngLat(e.lngLat)
-        .setDOMContent(container)
-        .addTo(map);
+      popup = new DraggablePopup(map, e.lngLat).setContent(container);
       wireSourcesDrilldown(container, p, bundleData);
       wireClosePopupClearsHighlight(popup);
 
@@ -1184,7 +1180,7 @@ export function LiveStormLayer({ map }: Props) {
       });
     }
 
-    function wireClosePopupClearsHighlight(pop: mapboxgl.Popup) {
+    function wireClosePopupClearsHighlight(pop: DraggablePopup) {
       pop.on("close", () => {
         useLiveStormStore.getState().setHighlightObs(null);
       });
@@ -1376,6 +1372,247 @@ export function LiveStormLayer({ map }: Props) {
   }, [map]);
 
   return null;
+}
+
+// ───────────────────────── draggable popup ─────────────────────────
+
+/**
+ * Mapbox's built-in Popup is anchored to a lat/lon and can't be moved off
+ * the anchor point — which is annoying when the popup covers the very
+ * feature the user is trying to inspect. This lightweight replacement:
+ *
+ *  - anchors a small circle marker to the click's lat/lon (stays put as
+ *    the map pans and zooms)
+ *  - lets the user grab the popup's header and drag it anywhere on the
+ *    map container
+ *  - draws a dashed leader line from the popup's nearest edge back to
+ *    the anchor so the visual connection to the data point is preserved
+ *
+ * DOM-only (no React), same interface shape as the existing Mapbox Popup
+ * usage (open / setContent / isOpen / remove / event 'close') so the
+ * calling code changes minimally.
+ */
+class DraggablePopup {
+  private map: MbMap;
+  private anchor: { lng: number; lat: number };
+  private wrapper: HTMLDivElement;
+  private contentBox: HTMLDivElement;
+  private svg: SVGSVGElement;
+  private line: SVGLineElement;
+  private anchorDot: SVGCircleElement;
+  // Offset from anchor (in screen px). Users drag this delta around.
+  private offset: { dx: number; dy: number };
+  private removed = false;
+  private closeCallbacks: Array<() => void> = [];
+  private mapMoveHandler = () => this.reposition();
+
+  constructor(map: MbMap, lngLat: { lng: number; lat: number }) {
+    this.map = map;
+    this.anchor = { lng: lngLat.lng, lat: lngLat.lat };
+    // Default: popup sits up-and-to-the-right of the anchor so the tail
+    // line comes in from the lower-left. Matches how Mapbox popups
+    // usually float.
+    this.offset = { dx: 24, dy: -140 };
+
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = [
+      "position:absolute",
+      "background:white",
+      "border:1px solid var(--ink-300, #cbd5e1)",
+      "border-radius:4px",
+      "box-shadow:0 4px 14px rgba(0,0,0,0.18)",
+      "z-index:10",
+      "user-select:none",
+      "font-family:inherit",
+    ].join(";");
+
+    const header = document.createElement("div");
+    header.style.cssText = [
+      "display:flex",
+      "justify-content:space-between",
+      "align-items:center",
+      "padding:3px 6px 3px 8px",
+      "background:#f1f5f9",
+      "border-bottom:1px solid #e2e8f0",
+      "cursor:move",
+      "border-radius:4px 4px 0 0",
+      "font-size:11px",
+      "color:#64748b",
+    ].join(";");
+    header.title = "Drag to reposition";
+
+    const dragGrip = document.createElement("span");
+    // Six-dot drag handle glyph — clear affordance without needing an
+    // icon library.
+    dragGrip.textContent = "⋮⋮";
+    dragGrip.style.cssText =
+      "letter-spacing:-3px;color:#94a3b8;font-size:13px;line-height:1;";
+    const dragLabel = document.createElement("span");
+    dragLabel.textContent = "drag";
+    dragLabel.style.cssText = "font-size:10px;color:#94a3b8;margin-left:4px;";
+    const leftSide = document.createElement("span");
+    leftSide.style.cssText = "display:flex;align-items:center";
+    leftSide.appendChild(dragGrip);
+    leftSide.appendChild(dragLabel);
+    header.appendChild(leftSide);
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.textContent = "✕";
+    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.style.cssText = [
+      "all:unset",
+      "cursor:pointer",
+      "padding:0 4px",
+      "color:#64748b",
+      "font-size:13px",
+      "line-height:1",
+    ].join(";");
+    closeBtn.addEventListener("click", () => this.remove());
+    header.appendChild(closeBtn);
+
+    wrapper.appendChild(header);
+
+    const contentBox = document.createElement("div");
+    contentBox.style.cssText = "padding:6px 10px;";
+    wrapper.appendChild(contentBox);
+
+    header.addEventListener("mousedown", (e) => this.startDrag(e));
+    // Clicks inside the popup shouldn't propagate to the map (would
+    // otherwise trip the wind-map-fill click handler and open a new
+    // popup for whatever's under the drag).
+    wrapper.addEventListener("click", (e) => e.stopPropagation());
+    wrapper.addEventListener("mousedown", (e) => e.stopPropagation());
+
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.style.cssText = [
+      "position:absolute",
+      "pointer-events:none",
+      "z-index:9",
+      "left:0", "top:0",
+      "width:100%", "height:100%",
+      "overflow:visible",
+    ].join(";");
+    const line = document.createElementNS(NS, "line");
+    line.setAttribute("stroke", "#475569");
+    line.setAttribute("stroke-width", "1.2");
+    line.setAttribute("stroke-dasharray", "4 3");
+    line.setAttribute("stroke-linecap", "round");
+    svg.appendChild(line);
+    const anchorDot = document.createElementNS(NS, "circle");
+    anchorDot.setAttribute("r", "4");
+    anchorDot.setAttribute("fill", "#0f172a");
+    anchorDot.setAttribute("stroke", "white");
+    anchorDot.setAttribute("stroke-width", "1.5");
+    svg.appendChild(anchorDot);
+
+    const mapContainer = this.map.getContainer();
+    mapContainer.appendChild(svg);
+    mapContainer.appendChild(wrapper);
+
+    this.wrapper = wrapper;
+    this.contentBox = contentBox;
+    this.svg = svg;
+    this.line = line;
+    this.anchorDot = anchorDot;
+
+    this.map.on("move", this.mapMoveHandler);
+    // Position on next frame so the wrapper has a measured size.
+    requestAnimationFrame(() => this.reposition());
+  }
+
+  /** Absolute position in the map container's coordinate space. */
+  private anchorPixel(): { x: number; y: number } {
+    const p = this.map.project([this.anchor.lng, this.anchor.lat]);
+    return { x: p.x, y: p.y };
+  }
+
+  private reposition(): void {
+    if (this.removed) return;
+    const anchor = this.anchorPixel();
+    const px = anchor.x + this.offset.dx;
+    const py = anchor.y + this.offset.dy;
+    this.wrapper.style.left = `${px}px`;
+    this.wrapper.style.top = `${py}px`;
+
+    const w = this.wrapper.offsetWidth;
+    const h = this.wrapper.offsetHeight;
+
+    // Connect the leader line to whichever edge of the popup is closest
+    // to the anchor so the line reads as a natural "come from this
+    // direction" rather than crossing through the popup body.
+    let x2: number, y2: number;
+    if (anchor.x < px) x2 = px;
+    else if (anchor.x > px + w) x2 = px + w;
+    else x2 = anchor.x;
+    if (anchor.y < py) y2 = py;
+    else if (anchor.y > py + h) y2 = py + h;
+    else y2 = anchor.y;
+
+    this.line.setAttribute("x1", String(anchor.x));
+    this.line.setAttribute("y1", String(anchor.y));
+    this.line.setAttribute("x2", String(x2));
+    this.line.setAttribute("y2", String(y2));
+    this.anchorDot.setAttribute("cx", String(anchor.x));
+    this.anchorDot.setAttribute("cy", String(anchor.y));
+  }
+
+  private startDrag(e: MouseEvent): void {
+    e.preventDefault();
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+    const startOffset = { ...this.offset };
+    const onMove = (ev: MouseEvent) => {
+      this.offset.dx = startOffset.dx + (ev.clientX - startClientX);
+      this.offset.dy = startOffset.dy + (ev.clientY - startClientY);
+      this.reposition();
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  setContent(content: HTMLElement | string): this {
+    if (this.removed) return this;
+    if (typeof content === "string") {
+      this.contentBox.innerHTML = content;
+    } else {
+      this.contentBox.innerHTML = "";
+      this.contentBox.appendChild(content);
+    }
+    requestAnimationFrame(() => this.reposition());
+    return this;
+  }
+
+  /** Return the content container so callers can attach event listeners
+   *  or querySelector into it, matching the previous pattern of holding
+   *  a reference to the DOM element passed to setDOMContent. */
+  getContent(): HTMLDivElement {
+    return this.contentBox;
+  }
+
+  on(event: "close", cb: () => void): this {
+    if (event === "close") this.closeCallbacks.push(cb);
+    return this;
+  }
+
+  isOpen(): boolean {
+    return !this.removed;
+  }
+
+  remove(): void {
+    if (this.removed) return;
+    this.removed = true;
+    this.map.off("move", this.mapMoveHandler);
+    try { this.wrapper.remove(); } catch { /* already gone */ }
+    try { this.svg.remove(); } catch { /* already gone */ }
+    this.closeCallbacks.forEach((cb) => { try { cb(); } catch { /* */ } });
+    this.closeCallbacks = [];
+  }
 }
 
 // ───────────────────────── helpers ─────────────────────────
