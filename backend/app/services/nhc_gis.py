@@ -21,6 +21,7 @@ import re
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -293,20 +294,33 @@ def fetch_prior_forecast_tracks(
 
     URL pattern follows the same NHC ``storm_graphics/api`` scheme that
     CurrentStorms.json exposes for the live advisory; we swap the advisory
-    number in the filename. Failed fetches (404 on advisories the storm
-    never issued) are skipped silently."""
-    out: list[tuple[str, list[NHCForecastFix]]] = []
-    for label in _prior_advisory_labels(current_adv_num, n_prior):
-        url = (
-            f"https://www.nhc.noaa.gov/storm_graphics/api/"
-            f"{atcf_id.upper()}_{label}adv_TRACK.kmz"
-        )
-        fixes = fetch_forecast_track(url)
-        if fixes:
-            out.append((label, fixes))
-            if len(out) >= n_prior:
-                break
-    return out
+    number in the filename. All candidate URLs (up to ``n_prior * 2`` to
+    cover both full XXX and intermediate XXXA forms) are fetched in parallel
+    — sequential fetches used to push the bundle endpoint past Vercel's
+    30-second serverless timeout. Failed fetches are skipped silently.
+    """
+    labels = _prior_advisory_labels(current_adv_num, n_prior)
+    if not labels:
+        return []
+    base_url = (
+        f"https://www.nhc.noaa.gov/storm_graphics/api/{atcf_id.upper()}_"
+    )
+    results: dict[str, list[NHCForecastFix]] = {}
+    with ThreadPoolExecutor(max_workers=min(8, len(labels))) as pool:
+        futures = {
+            pool.submit(fetch_forecast_track, f"{base_url}{label}adv_TRACK.kmz"): label
+            for label in labels
+        }
+        for fut in as_completed(futures, timeout=30):
+            label = futures[fut]
+            try:
+                fixes = fut.result()
+            except Exception:  # noqa: BLE001
+                continue
+            if fixes:
+                results[label] = fixes
+    # Preserve the caller's requested ordering (newest first) and cap.
+    return [(lbl, results[lbl]) for lbl in labels if lbl in results][:n_prior]
 
 
 __all__ = [

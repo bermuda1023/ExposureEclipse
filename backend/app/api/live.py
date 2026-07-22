@@ -457,12 +457,16 @@ def live_storm_bundle(
 
     # Wind fields: inner Rmax + outer asymmetric R64, same machinery as
     # historical impact. Built for the OBSERVED track (history) and the
-    # LATEST forecast advisory (projection).
+    # LATEST forecast advisory (projection). For LIVE storms we pass
+    # storm_id="" to disable the IBTrACS Rmax/R64 lookups — those datasets
+    # never contain the current year, and even the failing lookup would
+    # trigger a 70 MB CSV fetch that blew Vercel's cold-start budget.
+    cone_storm_id = "" if is_live else observed_storm.storm_id
     observed_fixes_for_cone = [
         (p.lat, p.lon, p.wind_kt, p.datetime_utc) for p in observed_storm.track
     ]
     obs_fp, obs_inner, obs_outer, obs_rings = build_wind_cones(
-        observed_storm.storm_id, observed_fixes_for_cone
+        cone_storm_id, observed_fixes_for_cone
     )
 
     if forecasts:
@@ -471,7 +475,7 @@ def live_storm_bundle(
             (fp.lat, fp.lon, fp.wind_kt, fp.valid_time) for fp in latest.points
         ]
         _fp_fcst, fcst_inner, fcst_outer, fcst_rings = build_wind_cones(
-            observed_storm.storm_id, forecast_fixes_for_cone
+            cone_storm_id, forecast_fixes_for_cone
         )
     else:
         fcst_inner, fcst_outer, fcst_rings = [], [], []

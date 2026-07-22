@@ -272,27 +272,39 @@ def _normalize_datetime(dt_raw: str) -> str | None:
 
 
 def lookup_rmax_nm(storm_id: str | None, datetime_utc: str | None) -> float | None:
-    """Return IBTrACS-measured Rmax (nautical miles) for one fix, or None."""
+    """Return IBTrACS-measured Rmax (nautical miles) for one fix, or None.
+
+    Degrades to None on any IBTrACS fetch/parse failure — the caller (rmax_nm
+    in hurricane_impact) falls back to the Willoughby estimate. Prevents the
+    live-storm bundle from 5xx'ing when NCEI is slow or the Vercel cold-start
+    parse times out."""
     if not storm_id or not datetime_utc:
         return None
     key_dt = _normalize_datetime(datetime_utc)
     if key_dt is None:
         return None
-    return _rmax_index().get((storm_id.upper(), key_dt))
+    try:
+        return _rmax_index().get((storm_id.upper(), key_dt))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def lookup_r64_nm(storm_id: str | None, datetime_utc: str | None) -> float | None:
     """Return IBTrACS-measured MEAN R64 (nautical miles) for one fix, or None.
 
     Convenience wrapper that averages the non-zero quadrants. Use
-    ``lookup_r64_quads_nm`` if you need the per-quadrant detail.
+    ``lookup_r64_quads_nm`` if you need the per-quadrant detail. Degrades to
+    None on IBTrACS unavailability (same rationale as ``lookup_rmax_nm``).
     """
     if not storm_id or not datetime_utc:
         return None
     key_dt = _normalize_datetime(datetime_utc)
     if key_dt is None:
         return None
-    return _r64_index().get((storm_id.upper(), key_dt))
+    try:
+        return _r64_index().get((storm_id.upper(), key_dt))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def lookup_r64_quads_nm(
@@ -310,7 +322,10 @@ def lookup_r64_quads_nm(
     key_dt = _normalize_datetime(datetime_utc)
     if key_dt is None:
         return None
-    return _r64_quads_index().get((storm_id.upper(), key_dt))
+    try:
+        return _r64_quads_index().get((storm_id.upper(), key_dt))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def warm_cache() -> tuple[int, int, int]:
