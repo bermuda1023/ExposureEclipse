@@ -33,6 +33,8 @@ import { HazardOverlayLayer } from "./HazardOverlayLayer";
 import { HazardOverlayLegend } from "./HazardOverlayLegend";
 import { LiveStormLayer } from "./LiveStormLayer";
 import { LiveStormPanel } from "./LiveStormPanel";
+import { WildfireLayer } from "./WildfireLayer";
+import { WildfirePanel } from "./WildfirePanel";
 import { WindMapLegend } from "./WindMapLegend";
 import { WindParticleLayer } from "./WindParticleLayer";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
@@ -558,7 +560,9 @@ export function MapView({ data, isLoading, error }: Props) {
       <HazardOverlayLegend />
       <LiveStormLayer map={mapInstance} />
       <WindParticleLayer map={mapInstance} />
+      <WildfireLayer map={mapInstance} />
       <LiveStormPanel />
+      <WildfirePanel />
       <WindMapLegend />
       {isLoading && (
         <Pill>

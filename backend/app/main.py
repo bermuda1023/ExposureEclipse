@@ -36,6 +36,7 @@ from .api import (
     hazards,
     hurricanes,
     live,
+    wildfire,
 )
 from .config import get_settings
 from .models.enums import ErrorCode
@@ -108,6 +109,7 @@ app.include_router(exports.router, prefix="/api")
 app.include_router(hurricanes.router, prefix="/api")
 app.include_router(hazards.router, prefix="/api")
 app.include_router(live.router, prefix="/api")
+app.include_router(wildfire.router, prefix="/api")
 app.include_router(fund_analysis.router, prefix="/api")
 
 

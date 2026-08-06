@@ -33,6 +33,12 @@ class Settings(BaseSettings):
 
     export_max_rows: int = 100_000
 
+    # Live wildfire overlay — NASA FIRMS satellite active-fire heat layer.
+    # Free key: https://firms.modaps.eosdis.nasa.gov/api/map_key/
+    # When unset, /api/wildfire/active still returns WFIGS burn-area
+    # perimeters; only the satellite-heat layer is disabled (with a note).
+    firms_map_key: str | None = None
+
     # Vite dev :5173 (proxied), Vite preview :4173 (direct, needs CORS).
     cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
 

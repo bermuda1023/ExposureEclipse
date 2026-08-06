@@ -29,6 +29,7 @@ const MapView = lazy(() =>
 );
 import { HurricaneControls } from "../Map/HurricaneControls";
 import { HazardOverlayControls } from "../Map/HazardOverlayControls";
+import { WildfireControls } from "../Map/WildfireControls";
 import { MetricSelector } from "../Map/MetricSelector";
 import { PerilSelector } from "../Map/PerilSelector";
 import { YoyToggle } from "../Map/YoyToggle";
@@ -384,6 +385,7 @@ function MapToolbar() {
         <PerilSelector />
         <HurricaneControls />
         <HazardOverlayControls />
+        <WildfireControls />
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", rowGap: 6 }}>
         <MetricSelector />
