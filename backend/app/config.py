@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve .env against the backend package, NOT the process CWD — so the app
+# picks up backend/.env whether uvicorn is launched from backend/, the repo
+# root, or a launcher. (On Vercel the file is absent and real env vars win.)
+_BACKEND_DIR = Path(__file__).resolve().parent.parent  # backend/
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_BACKEND_DIR / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
