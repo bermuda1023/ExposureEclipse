@@ -112,6 +112,10 @@ def get_active_wildfire(
     bbox: str | None = Query(default=None, description="west,south,east,north (lon/lat)"),
     day_range: int = Query(default=1, ge=1, le=10, alias="dayRange"),
     include_heat: bool = Query(default=True, alias="includeHeat"),
+    simplify: float = Query(
+        default=0.005, ge=0.0, le=0.05,
+        description="Perimeter generalisation in degrees (0 = full resolution).",
+    ),
 ) -> WildfireResponse:
     box = _parse_bbox(bbox)
     settings = get_settings()
@@ -120,6 +124,7 @@ def get_active_wildfire(
         bbox=box,
         day_range=day_range,
         include_heat=include_heat,
+        simplify_deg=simplify,
     )
 
     features = [

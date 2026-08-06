@@ -75,6 +75,12 @@ _PERIM_FIELDS = ",".join(
     ]
 )
 
+# Raw WFIGS perimeters are IR-mapped at extreme resolution (a single fire can
+# carry 60k+ vertices → tens of MB). We ask ArcGIS to generalise server-side
+# via maxAllowableOffset (in outSR degrees) so an overview overlay stays light.
+# ~0.005° ≈ 550 m: shapes stay faithful, payload drops ~70×.
+DEFAULT_SIMPLIFY_DEG = 0.005
+
 # TTL caches. WFIGS updates through the day; FIRMS NRT ~ every 3 h.
 _PERIM_CACHE: dict[str, tuple[float, list["FirePerimeter"]]] = {}
 _PERIM_TTL_S = 10 * 60
@@ -156,10 +162,12 @@ def _bbox_key(bbox: tuple[float, float, float, float] | None) -> str:
 
 def fetch_perimeters(
     bbox: tuple[float, float, float, float] | None = None,
+    simplify_deg: float = DEFAULT_SIMPLIFY_DEG,
 ) -> list[FirePerimeter]:
     """Current WFIGS burn-area polygons, optionally clipped to a lon/lat bbox.
-    Filters to wildfire incidents (drops prescribed burns). Fails soft."""
-    key = _bbox_key(bbox)
+    Geometry is generalised server-side by ``simplify_deg`` (outSR degrees;
+    0 = full resolution). Filters to wildfire incidents. Fails soft."""
+    key = f"{_bbox_key(bbox)}@{simplify_deg}"
     now = time.monotonic()
     hit = _PERIM_CACHE.get(key)
     if hit is not None and (now - hit[0]) < _PERIM_TTL_S:
@@ -171,7 +179,10 @@ def fetch_perimeters(
         "outSR": "4326",
         "f": "geojson",
         "returnGeometry": "true",
+        "geometryPrecision": "5",
     }
+    if simplify_deg and simplify_deg > 0:
+        params["maxAllowableOffset"] = str(simplify_deg)
     if bbox is not None:
         west, south, east, north = bbox
         params["geometry"] = f"{west},{south},{east},{north}"
@@ -299,10 +310,11 @@ def build_wildfire_bundle(
     bbox: tuple[float, float, float, float] | None = None,
     day_range: int = 1,
     include_heat: bool = True,
+    simplify_deg: float = DEFAULT_SIMPLIFY_DEG,
 ) -> WildfireBundle:
     """Assemble perimeters + satellite heat + affected-state roll-up."""
     bundle = WildfireBundle()
-    bundle.perimeters = fetch_perimeters(bbox)
+    bundle.perimeters = fetch_perimeters(bbox, simplify_deg=simplify_deg)
 
     if include_heat:
         fires, note = fetch_active_fires(map_key=map_key, bbox=bbox, day_range=day_range)
