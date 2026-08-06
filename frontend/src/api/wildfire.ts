@@ -35,6 +35,16 @@ export interface ActiveFire {
   acquiredAt: string;
 }
 
+export interface HeatShapeProps {
+  detectionCount: number;
+  maxFrpMw: number | null;
+  sumFrpMw: number | null;
+  firstDetectedAt: string | null;
+  lastDetectedAt: string | null;
+}
+
+export type HeatShapeFC = GeoJSON.FeatureCollection<GeoJSON.Polygon, HeatShapeProps>;
+
 export interface AffectedState {
   state: string;
   fireCount: number;
@@ -53,9 +63,15 @@ export interface WildfireResponse {
   bbox: [number, number, number, number] | null;
   dayRange: number;
   perimeters: WildfirePerimeterFC;
+  heatShapes: HeatShapeFC;
   activeFires: ActiveFire[];
   affectedStates: AffectedState[];
-  counts: { perimeters: number; activeFires: number };
+  counts: {
+    perimeters: number;
+    activeFires: number;
+    activeFiresTotal: number;
+    heatShapes: number;
+  };
   notes: string[];
   attribution: WildfireAttribution;
 }
@@ -69,6 +85,6 @@ export const fetchLiveWildfire = (
 ) =>
   apiGet<WildfireResponse>("/wildfire/active", {
     bbox: options.bbox ? options.bbox.join(",") : undefined,
-    dayRange: options.dayRange ?? 1,
+    dayRange: options.dayRange ?? 3,
     includeHeat: options.includeHeat ?? true,
   });

@@ -52,6 +52,8 @@ class AffectedStateOut(CamelModel):
 class WildfireCounts(CamelModel):
     perimeters: int
     active_fires: int
+    active_fires_total: int
+    heat_shapes: int
 
 
 class WildfireAttribution(CamelModel):
@@ -67,7 +69,8 @@ class WildfireResponse(CamelModel):
     generated_at: str
     bbox: list[float] | None
     day_range: int
-    perimeters: dict  # GeoJSON FeatureCollection
+    perimeters: dict     # GeoJSON FeatureCollection (official WFIGS)
+    heat_shapes: dict    # GeoJSON FeatureCollection (built from FIRMS clusters)
     active_fires: list[ActiveFireOut]
     affected_states: list[AffectedStateOut]
     counts: WildfireCounts
@@ -110,7 +113,7 @@ def _parse_bbox(raw: str | None) -> tuple[float, float, float, float] | None:
 @router.get("/active", response_model=WildfireResponse)
 def get_active_wildfire(
     bbox: str | None = Query(default=None, description="west,south,east,north (lon/lat)"),
-    day_range: int = Query(default=1, ge=1, le=10, alias="dayRange"),
+    day_range: int = Query(default=3, ge=1, le=5, alias="dayRange"),  # FIRMS NRT caps at 5
     include_heat: bool = Query(default=True, alias="includeHeat"),
     simplify: float = Query(
         default=0.005, ge=0.0, le=0.05,
@@ -147,11 +150,27 @@ def get_active_wildfire(
         for fp in bundle.perimeters
     ]
 
+    heat_features = [
+        {
+            "type": "Feature",
+            "geometry": hs.geometry,
+            "properties": {
+                "detectionCount": hs.detection_count,
+                "maxFrpMw": hs.max_frp_mw,
+                "sumFrpMw": hs.sum_frp_mw,
+                "firstDetectedAt": hs.first_detected_at,
+                "lastDetectedAt": hs.last_detected_at,
+            },
+        }
+        for hs in bundle.heat_shapes
+    ]
+
     return WildfireResponse(
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         bbox=list(box) if box else None,
         day_range=day_range,
         perimeters={"type": "FeatureCollection", "features": features},
+        heat_shapes={"type": "FeatureCollection", "features": heat_features},
         active_fires=[
             ActiveFireOut(
                 lat=a.lat, lon=a.lon, brightness_k=a.brightness_k, frp_mw=a.frp_mw,
@@ -167,6 +186,8 @@ def get_active_wildfire(
         counts=WildfireCounts(
             perimeters=len(bundle.perimeters),
             active_fires=len(bundle.active_fires),
+            active_fires_total=bundle.detections_total,
+            heat_shapes=len(bundle.heat_shapes),
         ),
         notes=bundle.notes,
         attribution=WildfireAttribution(),

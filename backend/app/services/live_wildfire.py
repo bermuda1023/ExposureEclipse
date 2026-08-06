@@ -121,11 +121,26 @@ class ActiveFire:
     acquired_at: str            # ISO-8601 (UTC)
 
 
+@dataclass(slots=True, frozen=True)
+class HeatShape:
+    """A burn footprint we build ourselves by clustering FIRMS detections
+    over a multi-day window (convex hull per spatial cluster)."""
+
+    geometry: dict            # GeoJSON Polygon (EPSG:4326)
+    detection_count: int
+    max_frp_mw: float | None
+    sum_frp_mw: float | None
+    first_detected_at: str | None
+    last_detected_at: str | None
+
+
 @dataclass(slots=True)
 class WildfireBundle:
     perimeters: list[FirePerimeter] = field(default_factory=list)
     active_fires: list[ActiveFire] = field(default_factory=list)
+    heat_shapes: list[HeatShape] = field(default_factory=list)
     affected_states: list[tuple[str, int, float]] = field(default_factory=list)  # (state, #fires, acres)
+    detections_total: int = 0   # before any display thinning
     notes: list[str] = field(default_factory=list)
 
 
@@ -253,7 +268,7 @@ def fetch_active_fires(
             "VIIRS/MODIS active-fire detections."
         )
     box = bbox or CONUS_BBOX
-    day_range = max(1, min(day_range, 10))  # FIRMS caps at 10 days
+    day_range = max(1, min(day_range, 5))  # FIRMS NRT area API caps at 5 days
     area = ",".join(f"{c:.4f}" for c in box)  # west,south,east,north
 
     key = f"{map_key[:6]}:{_bbox_key(box)}:{day_range}"
@@ -301,6 +316,108 @@ def fetch_active_fires(
     return out, None
 
 
+# ─────────────────── heat-derived shapes (our own) ───────────────────
+
+# Display cap for raw heat points — a 10-day CONUS pull can be 50k+ pixels,
+# which bogs the map. Shapes are built from the FULL set first; only the
+# returned point list is thinned (evenly strided) past this.
+HEAT_POINT_DISPLAY_CAP = 8000
+# Grid for clustering detections into footprints (~2.2 km); VIIRS pixels are
+# ~375 m so this groups a fire's pixels without merging distant fires.
+HEAT_CLUSTER_GRID_DEG = 0.02
+HEAT_CLUSTER_MIN_POINTS = 5
+
+
+def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Andrew's monotone chain. Returns CCW hull (no repeat of first point)."""
+    pts = sorted(set(points))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b) -> float:
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list[tuple[float, float]] = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper: list[tuple[float, float]] = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def cluster_heat_shapes(
+    fires: list[ActiveFire],
+    *,
+    grid_deg: float = HEAT_CLUSTER_GRID_DEG,
+    min_points: int = HEAT_CLUSTER_MIN_POINTS,
+) -> list[HeatShape]:
+    """Bin detections to a grid, connect adjacent occupied cells (8-way) into
+    clusters, and emit a convex-hull polygon per cluster. Pure Python — no
+    shapely/scipy. Small clusters are dropped as noise (they still show as
+    points)."""
+    if not fires:
+        return []
+    import math
+
+    cells: dict[tuple[int, int], list[ActiveFire]] = {}
+    for a in fires:
+        ix = math.floor(a.lon / grid_deg)
+        iy = math.floor(a.lat / grid_deg)
+        cells.setdefault((ix, iy), []).append(a)
+
+    seen: set[tuple[int, int]] = set()
+    shapes: list[HeatShape] = []
+    for start in cells:
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        comp: list[tuple[int, int]] = []
+        while stack:
+            c = stack.pop()
+            comp.append(c)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    n = (c[0] + dx, c[1] + dy)
+                    if n in cells and n not in seen:
+                        seen.add(n)
+                        stack.append(n)
+        pts = [a for c in comp for a in cells[c]]
+        if len(pts) < min_points:
+            continue
+        hull = _convex_hull([(a.lon, a.lat) for a in pts])
+        if len(hull) < 3:
+            continue
+        ring = [[x, y] for (x, y) in hull]
+        ring.append(ring[0])
+        frps = [a.frp_mw for a in pts if a.frp_mw is not None]
+        acqs = sorted(a.acquired_at for a in pts if a.acquired_at)
+        shapes.append(
+            HeatShape(
+                geometry={"type": "Polygon", "coordinates": [ring]},
+                detection_count=len(pts),
+                max_frp_mw=max(frps) if frps else None,
+                sum_frp_mw=sum(frps) if frps else None,
+                first_detected_at=acqs[0] if acqs else None,
+                last_detected_at=acqs[-1] if acqs else None,
+            )
+        )
+    shapes.sort(key=lambda s: -s.detection_count)
+    return shapes
+
+
+def _thin(fires: list[ActiveFire], cap: int) -> list[ActiveFire]:
+    if len(fires) <= cap:
+        return fires
+    stride = len(fires) / cap
+    return [fires[int(i * stride)] for i in range(cap)]
+
+
 # ─────────────────────────── bundle ───────────────────────────
 
 
@@ -318,7 +435,16 @@ def build_wildfire_bundle(
 
     if include_heat:
         fires, note = fetch_active_fires(map_key=map_key, bbox=bbox, day_range=day_range)
-        bundle.active_fires = fires
+        # Build footprints from the FULL detection set, then thin the raw
+        # points for display so a 10-day CONUS pull doesn't choke the map.
+        bundle.heat_shapes = cluster_heat_shapes(fires)
+        bundle.detections_total = len(fires)
+        bundle.active_fires = _thin(fires, HEAT_POINT_DISPLAY_CAP)
+        if len(bundle.active_fires) < len(fires):
+            bundle.notes.append(
+                f"Showing {len(bundle.active_fires):,} of {len(fires):,} satellite "
+                f"detections (thinned for display); heat shapes use all of them."
+            )
         if note:
             bundle.notes.append(note)
 
@@ -346,9 +472,11 @@ def build_wildfire_bundle(
 __all__ = [
     "FirePerimeter",
     "ActiveFire",
+    "HeatShape",
     "WildfireBundle",
     "fetch_perimeters",
     "fetch_active_fires",
+    "cluster_heat_shapes",
     "build_wildfire_bundle",
     "CONUS_BBOX",
 ]

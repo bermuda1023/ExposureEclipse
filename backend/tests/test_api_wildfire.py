@@ -133,6 +133,40 @@ def test_endpoint_shape_and_rollup(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "generatedAt" in j and "attribution" in j
 
 
+def test_cluster_heat_shapes_builds_hulls() -> None:
+    from app.services.live_wildfire import ActiveFire, cluster_heat_shapes
+
+    def fire(lat: float, lon: float, frp: float) -> ActiveFire:
+        return ActiveFire(lat=lat, lon=lon, brightness_k=330.0, frp_mw=frp,
+                          confidence="h", satellite="N", source="VIIRS_SNPP_NRT",
+                          acquired_at="2026-08-05T21:00:00Z")
+
+    # One dense cluster (>= min points, spread over a few cells) + one isolated
+    # point that must NOT form a shape.
+    fires = [fire(39.0 + i * 0.01, -120.0 + j * 0.01, 10.0 + i)
+             for i in range(4) for j in range(4)]
+    fires.append(fire(45.0, -110.0, 5.0))  # loner
+    shapes = cluster_heat_shapes(fires, grid_deg=0.02, min_points=5)
+    assert len(shapes) == 1
+    s = shapes[0]
+    assert s.detection_count == 16
+    assert s.geometry["type"] == "Polygon"
+    assert len(s.geometry["coordinates"][0]) >= 4  # closed ring
+    assert s.max_frp_mw is not None
+
+
+def test_endpoint_exposes_heat_shapes_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        live_wildfire.urllib.request,
+        "urlopen",
+        lambda req, timeout=0: _FakeResp(json.dumps(_FAKE_PERIMETER_GEOJSON).encode()),
+    )
+    r = client.get("/api/wildfire/active", params={"bbox": "-125,32,-114,42", "includeHeat": "false"})
+    j = r.json()
+    assert j["heatShapes"]["type"] == "FeatureCollection"
+    assert "heatShapes" in j["counts"] and "activeFiresTotal" in j["counts"]
+
+
 def test_endpoint_rejects_bad_bbox() -> None:
     r = client.get("/api/wildfire/active", params={"bbox": "1,2,3"})
     assert r.status_code == 422
