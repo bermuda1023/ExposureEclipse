@@ -150,8 +150,7 @@ def test_cluster_heat_shapes_builds_hulls() -> None:
     assert len(shapes) == 1
     s = shapes[0]
     assert s.detection_count == 16
-    assert s.geometry["type"] == "Polygon"
-    assert len(s.geometry["coordinates"][0]) >= 4  # closed ring
+    assert s.geometry["type"] in ("Polygon", "MultiPolygon")  # occupied-cell footprint
     assert s.max_frp_mw is not None
 
 

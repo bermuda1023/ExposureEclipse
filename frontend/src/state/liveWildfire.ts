@@ -33,17 +33,22 @@ interface LiveWildfireState {
   showPerimeters: boolean;
   showHeat: boolean;
   showHeatShapes: boolean;
+  hideExposures: boolean;
   heatDays: number;
   minSize: MinSize;
-  selectedFire: SelectedFire | null;
+  // Multi-select: click a few shapes to combine them into one "fire" for the
+  // exposed-TIV rollup + layer calc.
+  selectedFires: SelectedFire[];
   toggle: () => void;
   setActive: (v: boolean) => void;
   setShowPerimeters: (v: boolean) => void;
   setShowHeat: (v: boolean) => void;
   setShowHeatShapes: (v: boolean) => void;
+  setHideExposures: (v: boolean) => void;
   setHeatDays: (d: number) => void;
   setMinSize: (m: MinSize) => void;
-  selectFire: (f: SelectedFire | null) => void;
+  toggleFire: (f: SelectedFire) => void;
+  clearFires: () => void;
 }
 
 export const useLiveWildfireStore = create<LiveWildfireState>((set, get) => ({
@@ -51,15 +56,22 @@ export const useLiveWildfireStore = create<LiveWildfireState>((set, get) => ({
   showPerimeters: true,
   showHeat: true,
   showHeatShapes: false,
+  hideExposures: false,
   heatDays: 3,
   minSize: "small",
-  selectedFire: null,
-  toggle: () => set({ active: !get().active, selectedFire: null }),
+  selectedFires: [],
+  toggle: () => set({ active: !get().active, selectedFires: [] }),
   setActive: (v) => set({ active: v }),
   setShowPerimeters: (v) => set({ showPerimeters: v }),
   setShowHeat: (v) => set({ showHeat: v }),
   setShowHeatShapes: (v) => set({ showHeatShapes: v }),
+  setHideExposures: (v) => set({ hideExposures: v }),
   setHeatDays: (d) => set({ heatDays: d }),
   setMinSize: (m) => set({ minSize: m }),
-  selectFire: (f) => set({ selectedFire: f }),
+  toggleFire: (f) => {
+    const cur = get().selectedFires;
+    const exists = cur.some((x) => x.id === f.id);
+    set({ selectedFires: exists ? cur.filter((x) => x.id !== f.id) : [...cur, f] });
+  },
+  clearFires: () => set({ selectedFires: [] }),
 }));

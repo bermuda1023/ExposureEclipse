@@ -1,26 +1,24 @@
 /**
- * Control + summary for the live wildfire overlay: three independent layer
- * toggles, a FIRMS day-window selector (up to 14d), a min-fire-size cleanup
- * selector, affected states, largest burn areas, and — when a fire is
- * selected — the exposed TIV by client inside that polygon.
+ * Control + summary for the live wildfire overlay. Layer toggles, hide-
+ * exposures, FIRMS day window (up to 30d) + min-size cleanup, affected states,
+ * largest burn areas, and — when fires are selected — the COMBINED exposed TIV
+ * by client across the selection, feedable into the XOL layer calc.
  */
 
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  fetchLiveWildfire,
-  fetchWildfireExposure,
-  type WildfirePerimeterProps,
+  fetchLiveWildfire, fetchWildfireExposure, type WildfirePerimeterProps,
 } from "../../api/wildfire";
+import { runLayerCalc, type LayerCalcResponse } from "../../api/calc";
 import {
   useLiveWildfireStore, MIN_SIZE_PARAMS, type MinSize,
 } from "../../state/liveWildfire";
 
-const DAY_OPTIONS = [3, 7, 14];
+const DAY_OPTIONS = [3, 7, 14, 30];
 const SIZE_OPTIONS: { id: MinSize; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "small", label: "Small+" },
-  { id: "medium", label: "Med+" },
-  { id: "large", label: "Large+" },
+  { id: "all", label: "All" }, { id: "small", label: "Small+" },
+  { id: "medium", label: "Med+" }, { id: "large", label: "Large+" },
 ];
 
 function tiv(n: number): string {
@@ -60,6 +58,79 @@ function Pills<T extends string | number>({ options, value, onPick, fmt }: {
   );
 }
 
+interface LayerRow { deductible: number; limit: number; share: number; }
+
+function LayerCalc({ combinedTiv }: { combinedTiv: number }) {
+  const [layers, setLayers] = useState<LayerRow[]>([{ deductible: 0, limit: 500_000_000, share: 1 }]);
+  const [result, setResult] = useState<LayerCalcResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const upd = (i: number, k: keyof LayerRow, v: number) =>
+    setLayers((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
+
+  async function run() {
+    setRunning(true); setErr(null);
+    try {
+      const r = await runLayerCalc({
+        layers: layers.map((l, i) => ({ ...l, name: `Layer ${i + 1}` })),
+        sweepTiv: combinedTiv,
+      });
+      setResult(r);
+    } catch (e) {
+      setErr((e as Error)?.message ?? "calc failed");
+    } finally { setRunning(false); }
+  }
+
+  const numStyle: React.CSSProperties = {
+    width: 62, fontSize: "0.62rem", padding: "1px 3px",
+    border: "1px solid var(--ink-300)", borderRadius: 4,
+  };
+
+  return (
+    <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--ink-200)" }}>
+      <div style={{ fontWeight: 700, color: "var(--ink-600)", fontSize: "0.64rem", marginBottom: 4 }}>
+        Layer calc (XOL) on {tiv(combinedTiv)}
+      </div>
+      {layers.map((l, i) => (
+        <div key={i} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 3, fontSize: "0.6rem" }}>
+          <span style={{ color: "var(--ink-500)" }}>xs</span>
+          <input type="number" style={numStyle} value={l.deductible} onChange={(e) => upd(i, "deductible", +e.target.value)} title="Deductible / attachment" />
+          <span style={{ color: "var(--ink-500)" }}>lim</span>
+          <input type="number" style={numStyle} value={l.limit} onChange={(e) => upd(i, "limit", +e.target.value)} title="Limit" />
+          <span style={{ color: "var(--ink-500)" }}>shr</span>
+          <input type="number" step="0.05" min="0" max="1" style={{ ...numStyle, width: 44 }} value={l.share} onChange={(e) => upd(i, "share", +e.target.value)} title="Share 0-1" />
+          {layers.length > 1 && (
+            <button type="button" onClick={() => setLayers((ls) => ls.filter((_, j) => j !== i))} style={{ all: "unset", cursor: "pointer", color: "var(--ink-400)" }}>✕</button>
+          )}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+        <button type="button" onClick={() => setLayers((ls) => [...ls, { deductible: ls.at(-1)!.deductible + ls.at(-1)!.limit, limit: 500_000_000, share: 1 }])}
+          style={{ all: "unset", cursor: "pointer", fontSize: "0.6rem", color: "var(--brand-600, #0369a1)" }}>+ layer</button>
+        <button type="button" onClick={run} disabled={running}
+          style={{ all: "unset", cursor: "pointer", fontSize: "0.62rem", fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "var(--brand-500, #0284c7)", color: "white" }}>
+          {running ? "Running…" : "Run layer calc"}
+        </button>
+      </div>
+      {err && <div style={{ color: "#b91c1c", fontSize: "0.6rem" }}>{err}</div>}
+      {result && (
+        <div style={{ fontSize: "0.6rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", color: "var(--ink-500)", fontWeight: 700 }}>
+            <span>Damage ratio</span><span>Ceded loss</span>
+          </div>
+          {result.scenarios.map((sc) => (
+            <div key={sc.label} style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>{sc.damageRatio != null ? `${(sc.damageRatio * 100).toFixed(0)}%` : sc.label}</span>
+              <span style={{ fontWeight: 600 }}>{tiv(sc.totalCeded)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WildfirePanel() {
   const s = useLiveWildfireStore();
 
@@ -70,25 +141,35 @@ export function WildfirePanel() {
     staleTime: 5 * 60_000,
   });
 
-  const sel = s.selectedFire;
+  const selIds = s.selectedFires.map((f) => f.id).sort().join("|");
   const exposure = useQuery({
-    queryKey: ["wildfire-exposure", sel?.source, sel?.id],
-    queryFn: () => fetchWildfireExposure([{ id: sel!.id, name: sel!.name, geometry: sel!.geometry }]),
-    enabled: !!sel,
+    queryKey: ["wildfire-exposure", selIds],
+    queryFn: () => fetchWildfireExposure(s.selectedFires.map((f) => ({ id: f.id, name: f.name, geometry: f.geometry }))),
+    enabled: s.selectedFires.length > 0,
     staleTime: 5 * 60_000,
   });
 
-  if (!s.active) return null;
+  // Combine exposure across selected fires.
+  const combined = useMemo(() => {
+    const res = exposure.data?.results ?? [];
+    const byClient = new Map<string, number>();
+    let total = 0, locs = 0;
+    for (const r of res) {
+      total += r.totalTiv; locs += r.locationCount;
+      for (const c of r.byClient) byClient.set(c.client, (byClient.get(c.client) ?? 0) + c.tiv);
+    }
+    return { total, locs, byClient: [...byClient.entries()].sort((a, b) => b[1] - a[1]) };
+  }, [exposure.data]);
 
+  if (!s.active) return null;
   const data = query.data;
   const top = data
     ? [...data.perimeters.features].sort((a, b) => (b.properties.gisAcres ?? 0) - (a.properties.gisAcres ?? 0)).slice(0, 8)
     : [];
-  const exp = exposure.data?.results[0];
 
   return (
     <div style={{
-      position: "absolute", top: 12, right: 12, width: 300,
+      position: "absolute", top: 12, right: 12, width: 304,
       maxHeight: "calc(100% - 24px)", overflowY: "auto",
       background: "var(--surface, #fff)", border: "1px solid var(--ink-200)",
       borderRadius: 10, boxShadow: "0 6px 24px rgba(0,0,0,0.14)",
@@ -100,14 +181,15 @@ export function WildfirePanel() {
       </div>
 
       <div style={{ padding: "8px 10px" }}>
-        {/* Layer toggles */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>
           <Toggle on={s.showPerimeters} label="⬡ Perimeters" tint="#ea580c" onClick={() => s.setShowPerimeters(!s.showPerimeters)} />
           <Toggle on={s.showHeatShapes} label="◇ Heat shapes" tint="#b91c1c" onClick={() => s.setShowHeatShapes(!s.showHeatShapes)} />
           <Toggle on={s.showHeat} label="🛰 Heat points" tint="#dc2626" onClick={() => s.setShowHeat(!s.showHeat)} />
         </div>
+        <div style={{ marginBottom: 6 }}>
+          <Toggle on={s.hideExposures} label={s.hideExposures ? "Exposures hidden" : "Hide exposures"} tint="#334155" onClick={() => s.setHideExposures(!s.hideExposures)} />
+        </div>
 
-        {/* Heat window + cleanup */}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
           <span style={{ color: "var(--ink-500)", fontSize: "0.62rem" }}>Window:</span>
           <Pills options={DAY_OPTIONS} value={s.heatDays} onPick={s.setHeatDays} fmt={(d) => `${d}d`} />
@@ -134,35 +216,37 @@ export function WildfirePanel() {
               <div key={n} style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 6, padding: "5px 7px", marginBottom: 6, fontSize: "0.64rem", lineHeight: 1.35 }}>{n}</div>
             ))}
 
-            {/* Selected-fire exposure rollup */}
-            {sel && (
+            {/* Combined selection */}
+            {s.selectedFires.length > 0 && (
               <div style={{ border: "1px solid #fdba74", background: "#fff7ed", borderRadius: 8, padding: "7px 8px", marginBottom: 8 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                  <strong style={{ fontSize: "0.72rem" }}>💰 Exposed TIV — {sel.name}</strong>
-                  <button type="button" onClick={() => s.selectFire(null)} style={{ all: "unset", cursor: "pointer", color: "var(--ink-500)" }} title="Clear selection">✕</button>
+                  <strong style={{ fontSize: "0.72rem" }}>💰 Combined — {s.selectedFires.length} fire{s.selectedFires.length > 1 ? "s" : ""}</strong>
+                  <button type="button" onClick={s.clearFires} style={{ all: "unset", cursor: "pointer", color: "var(--ink-500)", fontSize: "0.62rem" }}>clear</button>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 4 }}>
+                  {s.selectedFires.map((f) => (
+                    <span key={f.id} onClick={() => s.toggleFire(f)} style={{ cursor: "pointer", background: "white", border: "1px solid var(--ink-300)", borderRadius: 999, padding: "0 6px", fontSize: "0.6rem" }} title="Remove">
+                      {f.source === "heat" ? "◇" : "⬡"} {f.name.length > 16 ? f.name.slice(0, 15) + "…" : f.name} ✕
+                    </span>
+                  ))}
                 </div>
                 {exposure.isLoading && <div style={{ color: "var(--ink-500)" }}>Computing…</div>}
-                {exp && (
+                {exposure.data && (
                   <>
-                    <div style={{ marginBottom: 4 }}>
-                      Total <strong>{tiv(exp.totalTiv)}</strong>{" "}
-                      <span style={{ color: "var(--ink-500)" }}>· {exp.locationCount} locations</span>
-                    </div>
-                    {exp.byClient.length === 0 ? (
-                      <div style={{ color: "var(--ink-500)", fontSize: "0.64rem" }}>No exposure inside this perimeter.</div>
-                    ) : (
-                      exp.byClient.map((c) => (
-                        <div key={c.client} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.66rem" }}>
-                          <span>{c.client}</span>
-                          <span style={{ fontWeight: 600 }}>{tiv(c.tiv)}</span>
+                    <div style={{ marginBottom: 3 }}>Total exposed <strong>{tiv(combined.total)}</strong> <span style={{ color: "var(--ink-500)" }}>· {combined.locs} locations</span></div>
+                    {combined.byClient.length === 0
+                      ? <div style={{ color: "var(--ink-500)", fontSize: "0.64rem" }}>No exposure inside the selected fire(s).</div>
+                      : combined.byClient.map(([c, t]) => (
+                        <div key={c} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.66rem" }}>
+                          <span>{c}</span><span style={{ fontWeight: 600 }}>{tiv(t)}</span>
                         </div>
-                      ))
-                    )}
-                    {exposure.data?.synthetic && (
+                      ))}
+                    {exposure.data.synthetic && (
                       <div style={{ marginTop: 4, color: "#92400e", fontSize: "0.58rem", lineHeight: 1.35 }}>
                         Estimated — synthetic locations from county aggregates (not location-level data).
                       </div>
                     )}
+                    {combined.total > 0 && <LayerCalc combinedTiv={combined.total} />}
                   </>
                 )}
               </div>
@@ -186,19 +270,15 @@ export function WildfirePanel() {
                 <div style={{ fontWeight: 700, color: "var(--ink-500)", fontSize: "0.62rem", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 3 }}>Largest active burn areas</div>
                 {top.map((f) => {
                   const p = f.properties as WildfirePerimeterProps;
-                  const on = sel?.id === p.incidentId;
+                  const on = s.selectedFires.some((x) => x.id === p.incidentId);
                   return (
                     <button key={p.incidentId} type="button"
-                      onClick={() => s.selectFire(on ? null : {
-                        id: p.incidentId, name: p.name, source: "perimeter",
-                        geometry: f.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
-                      })}
+                      onClick={() => s.toggleFire({ id: p.incidentId, name: p.name, source: "perimeter", geometry: f.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon })}
                       style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", boxSizing: "border-box", padding: "5px 7px", marginBottom: 3, borderRadius: 6, background: on ? "#fff7ed" : "transparent", border: `1px solid ${on ? "#fdba74" : "transparent"}` }}>
-                      <div style={{ fontWeight: 600 }}>{p.name}</div>
+                      <div style={{ fontWeight: 600 }}>{on ? "✓ " : ""}{p.name}</div>
                       <div style={{ color: "var(--ink-500)", fontSize: "0.64rem" }}>
                         {p.gisAcres != null ? `${Math.round(p.gisAcres).toLocaleString()} ac` : "—"}
-                        {" · "}
-                        {p.percentContained != null ? `${p.percentContained}% contained` : "containment n/a"}
+                        {" · "}{p.percentContained != null ? `${p.percentContained}% contained` : "containment n/a"}
                         {p.state ? ` · ${p.state}` : ""}
                       </div>
                     </button>
@@ -208,7 +288,7 @@ export function WildfirePanel() {
             )}
 
             <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid var(--ink-100)", color: "var(--ink-400)", fontSize: "0.6rem", lineHeight: 1.4 }}>
-              Click any perimeter or heat shape to see exposed TIV by client. Perimeters: {data.attribution.perimeters}. Heat: {data.attribution.activeFires}.
+              Click perimeters/heat shapes to combine them. Perimeters: {data.attribution.perimeters}. Heat: {data.attribution.activeFires}.
             </div>
           </>
         )}

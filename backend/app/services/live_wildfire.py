@@ -257,7 +257,9 @@ def fetch_perimeters(
 # The FIRMS NRT area API caps a single request at 5 days. We chain dated
 # ≤5-day windows to reach longer look-backs (NRT retention easily covers 2 wk).
 FIRMS_MAX_WINDOW_DAYS = 5
-FIRMS_MAX_DAYS = 14
+# NRT retention is ~2 months; we chain windows up to this. Long look-backs are
+# for the "total burned this season" footprint, at the cost of latency + volume.
+FIRMS_MAX_DAYS = 30
 
 # Confidence ranking (VIIRS: l/n/h; MODIS: 0-100). Used to drop marginal
 # detections (a lot of the "is that a factory?" noise sits in low confidence).
@@ -384,6 +386,10 @@ HEAT_POINT_DISPLAY_CAP = 8000
 # ~375 m so this groups a fire's pixels without merging distant fires.
 HEAT_CLUSTER_GRID_DEG = 0.02
 HEAT_CLUSTER_MIN_POINTS = 5
+# Finer grid for the actual footprint outline. We trace the UNION of occupied
+# cells (not a convex hull), so unburned interior/concavities are NOT filled —
+# a far truer "what burned" shape. ~0.01° ≈ 1.1 km ≈ sensor pixel scale.
+FOOTPRINT_GRID_DEG = 0.01
 
 
 def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -443,16 +449,84 @@ def _cluster_components(
     return comps
 
 
-def _shape_from_points(pts: list[ActiveFire]) -> HeatShape | None:
-    hull = _convex_hull([(a.lon, a.lat) for a in pts])
-    if len(hull) < 3:
+def _footprint_geometry(pts: list[ActiveFire], g: float = FOOTPRINT_GRID_DEG) -> dict | None:
+    """Trace the outline of the UNION of occupied grid cells (marching edges).
+    Respects concavities and gaps — no convex-hull over-fill. Returns a GeoJSON
+    Polygon/MultiPolygon, or None if degenerate."""
+    import math
+
+    cells = {(math.floor(a.lon / g), math.floor(a.lat / g)) for a in pts}
+    if not cells:
         return None
-    ring = [[x, y] for (x, y) in hull]
-    ring.append(ring[0])
+
+    # Directed boundary edges so the burned area sits on the left (CCW outer).
+    edges: dict[tuple[int, int], list[tuple[int, int]]] = {}
+
+    def add(a: tuple[int, int], b: tuple[int, int]) -> None:
+        edges.setdefault(a, []).append(b)
+
+    for (x, y) in cells:
+        if (x, y - 1) not in cells: add((x, y), (x + 1, y))          # bottom → right
+        if (x + 1, y) not in cells: add((x + 1, y), (x + 1, y + 1))  # right → up
+        if (x, y + 1) not in cells: add((x + 1, y + 1), (x, y + 1))  # top → left
+        if (x - 1, y) not in cells: add((x, y + 1), (x, y))          # left → down
+
+    def simplify(ring: list[tuple[int, int]]) -> list[list[float]]:
+        # Drop collinear staircase vertices, then scale to lon/lat.
+        out = []
+        n = len(ring)
+        for i in range(n):
+            a, b, c = ring[(i - 1) % n], ring[i], ring[(i + 1) % n]
+            if (b[0] - a[0]) * (c[1] - a[1]) != (b[1] - a[1]) * (c[0] - a[0]):
+                out.append(b)
+        pts_ll = [[vx * g, vy * g] for (vx, vy) in (out or ring)]
+        if pts_ll and pts_ll[0] != pts_ll[-1]:
+            pts_ll.append(pts_ll[0])
+        return pts_ll
+
+    rings: list[list[list[float]]] = []
+    while edges:
+        start = next(iter(edges))
+        ring = [start]
+        cur = start
+        guard = 0
+        while True:
+            nxts = edges.get(cur)
+            if not nxts:
+                break
+            nxt = nxts.pop()
+            if not nxts:
+                edges.pop(cur, None)
+            ring.append(nxt)
+            cur = nxt
+            guard += 1
+            if cur == start or guard > 200_000:
+                break
+        if len(ring) >= 4:
+            r = simplify(ring[:-1] if ring[0] == ring[-1] else ring)
+            if len(r) >= 4:
+                rings.append(r)
+
+    if not rings:
+        return None
+    if len(rings) == 1:
+        return {"type": "Polygon", "coordinates": [rings[0]]}
+    return {"type": "MultiPolygon", "coordinates": [[r] for r in rings]}
+
+
+def _shape_from_points(pts: list[ActiveFire]) -> HeatShape | None:
+    geom = _footprint_geometry(pts)
+    if geom is None:
+        hull = _convex_hull([(a.lon, a.lat) for a in pts])
+        if len(hull) < 3:
+            return None
+        ring = [[x, y] for (x, y) in hull]
+        ring.append(ring[0])
+        geom = {"type": "Polygon", "coordinates": [ring]}
     frps = [a.frp_mw for a in pts if a.frp_mw is not None]
     acqs = sorted(a.acquired_at for a in pts if a.acquired_at)
     return HeatShape(
-        geometry={"type": "Polygon", "coordinates": [ring]},
+        geometry=geom,
         detection_count=len(pts),
         max_frp_mw=max(frps) if frps else None,
         sum_frp_mw=sum(frps) if frps else None,

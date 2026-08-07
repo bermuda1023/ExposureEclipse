@@ -114,7 +114,7 @@ def _parse_bbox(raw: str | None) -> tuple[float, float, float, float] | None:
 @router.get("/active", response_model=WildfireResponse)
 def get_active_wildfire(
     bbox: str | None = Query(default=None, description="west,south,east,north (lon/lat)"),
-    day_range: int = Query(default=3, ge=1, le=14, alias="dayRange"),  # chained ≤5d FIRMS windows
+    day_range: int = Query(default=3, ge=1, le=30, alias="dayRange"),  # chained ≤5d FIRMS windows
     include_heat: bool = Query(default=True, alias="includeHeat"),
     simplify: float = Query(
         default=0.005, ge=0.0, le=0.05,
