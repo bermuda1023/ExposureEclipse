@@ -6,7 +6,7 @@
  * HurricaneImpactPanel which lives bottom-left.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchLiveStormBundle,
@@ -24,7 +24,8 @@ import { useEffectiveScope } from "../../state/useEffectiveScope";
 import { useViewStore } from "../../state/view";
 
 export function LiveStormPanel() {
-  const [open, setOpen] = useState(false);
+  const open = useLiveStormStore((s) => s.pickerOpen);
+  const setPickerOpen = useLiveStormStore((s) => s.setPickerOpen);
   const list = useQuery({
     queryKey: ["live-storms-list"],
     queryFn: fetchLiveStormList,
@@ -148,13 +149,15 @@ export function LiveStormPanel() {
     store.showSurge, store.showWindMap,
   ]);
 
+  if (!open) return null;
+
   return (
     <div
       style={{
         position: "absolute",
         top: 14,
-        right: 14,
-        width: open ? 360 : 130,
+        left: 14,
+        width: 360,
         zIndex: 7,
         background: "rgba(255,255,255,0.97)",
         border: "1px solid var(--ink-300)",
@@ -164,31 +167,31 @@ export function LiveStormPanel() {
         overflow: "hidden",
       }}
     >
-      <button
-        onClick={() => setOpen((v) => !v)}
+      <div
         style={{
-          all: "unset",
-          cursor: "pointer",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: 6,
-          width: "100%",
           padding: "8px 12px",
           background: "var(--ink-50)",
-          borderBottom: open ? "1px solid var(--ink-200)" : undefined,
-          boxSizing: "border-box",
+          borderBottom: "1px solid var(--ink-200)",
           fontWeight: 700,
           color: "var(--ink-900)",
           fontSize: "0.72rem",
           textTransform: "uppercase",
           letterSpacing: "0.05em",
         }}
-        title="Live + replay hurricane overlay"
       >
         <span>● Live storm</span>
-        <span style={{ color: "var(--ink-500)" }}>{open ? "▴" : "▾"}</span>
-      </button>
+        <button
+          onClick={() => setPickerOpen(false)}
+          style={{ all: "unset", cursor: "pointer", color: "var(--ink-500)", fontWeight: 700 }}
+          title="Close"
+        >
+          ✕
+        </button>
+      </div>
       {open && (
         <div style={{ padding: 10, display: "grid", gap: 10, maxHeight: "70vh", overflow: "auto" }}>
           {list.isLoading && <div>Loading storms…</div>}

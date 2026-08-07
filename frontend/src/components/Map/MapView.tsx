@@ -35,6 +35,7 @@ import { LiveStormLayer } from "./LiveStormLayer";
 import { LiveStormPanel } from "./LiveStormPanel";
 import { WildfireLayer } from "./WildfireLayer";
 import { WildfirePanel } from "./WildfirePanel";
+import { WildfireLegend } from "./WildfireLegend";
 import { WindMapLegend } from "./WindMapLegend";
 import { WindParticleLayer } from "./WindParticleLayer";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
@@ -563,6 +564,7 @@ export function MapView({ data, isLoading, error }: Props) {
       <WildfireLayer map={mapInstance} />
       <LiveStormPanel />
       <WildfirePanel />
+      <WildfireLegend />
       <WindMapLegend />
       {isLoading && (
         <Pill>

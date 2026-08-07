@@ -31,6 +31,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 # ─────────────────────────── sources ───────────────────────────
 
@@ -253,14 +254,62 @@ def fetch_perimeters(
 # ─────────────────────────── satellite heat (FIRMS) ───────────────────────────
 
 
+# The FIRMS NRT area API caps a single request at 5 days. We chain dated
+# ≤5-day windows to reach longer look-backs (NRT retention easily covers 2 wk).
+FIRMS_MAX_WINDOW_DAYS = 5
+FIRMS_MAX_DAYS = 14
+
+# Confidence ranking (VIIRS: l/n/h; MODIS: 0-100). Used to drop marginal
+# detections (a lot of the "is that a factory?" noise sits in low confidence).
+_CONF_RANK = {"low": 0, "nominal": 1, "high": 2}
+
+
+def _confidence_rank(raw: str | None) -> int:
+    if raw is None:
+        return 1
+    v = raw.strip().lower()
+    if v in ("l", "low"):
+        return 0
+    if v in ("n", "nominal"):
+        return 1
+    if v in ("h", "high"):
+        return 2
+    # MODIS numeric 0-100.
+    try:
+        n = float(v)
+        return 0 if n < 30 else (1 if n < 80 else 2)
+    except ValueError:
+        return 1
+
+
+def _firms_windows(total_days: int) -> list[tuple[int, str | None]]:
+    """Split a look-back into consecutive ≤5-day (chunk, start_date) windows
+    ending today. Most-recent window omits the date (FIRMS 'last N days')."""
+    total_days = max(1, min(total_days, FIRMS_MAX_DAYS))
+    today = datetime.now(timezone.utc).date()
+    windows: list[tuple[int, str | None]] = []
+    remaining = total_days
+    end = today
+    while remaining > 0:
+        chunk = min(FIRMS_MAX_WINDOW_DAYS, remaining)
+        start = end - timedelta(days=chunk - 1)
+        windows.append((chunk, None if end == today else start.isoformat()))
+        end = start - timedelta(days=1)
+        remaining -= chunk
+    return windows
+
+
 def fetch_active_fires(
     *,
     map_key: str | None,
     bbox: tuple[float, float, float, float] | None = None,
     day_range: int = 1,
+    min_confidence: str = "nominal",
+    min_frp: float = 0.0,
 ) -> tuple[list[ActiveFire], str | None]:
-    """NASA FIRMS thermal anomalies for the bbox. Returns (fires, note).
-    ``note`` is non-None when the layer is degraded (no key / fetch failed)."""
+    """NASA FIRMS thermal anomalies for the bbox over ``day_range`` days
+    (chained ≤5-day windows). Drops detections below ``min_confidence`` /
+    ``min_frp``. Returns (fires, note); note is set when degraded."""
     if not map_key:
         return [], (
             "Satellite heat layer disabled: set FIRMS_MAP_KEY (free key at "
@@ -268,10 +317,11 @@ def fetch_active_fires(
             "VIIRS/MODIS active-fire detections."
         )
     box = bbox or CONUS_BBOX
-    day_range = max(1, min(day_range, 5))  # FIRMS NRT area API caps at 5 days
+    day_range = max(1, min(day_range, FIRMS_MAX_DAYS))
     area = ",".join(f"{c:.4f}" for c in box)  # west,south,east,north
+    min_rank = _CONF_RANK.get(min_confidence, 1)
 
-    key = f"{map_key[:6]}:{_bbox_key(box)}:{day_range}"
+    key = f"{map_key[:6]}:{_bbox_key(box)}:{day_range}:{min_confidence}:{min_frp}"
     now = time.monotonic()
     hit = _FIRMS_CACHE.get(key)
     if hit is not None and (now - hit[0]) < _FIRMS_TTL_S:
@@ -280,36 +330,44 @@ def fetch_active_fires(
     out: list[ActiveFire] = []
     any_ok = False
     for source in FIRMS_SOURCES:
-        url = f"{FIRMS_AREA_URL}/{map_key}/{source}/{area}/{day_range}"
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        try:
-            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
-                text = r.read().decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            continue
-        if not text or text.lstrip().lower().startswith(("invalid", "<!doctype", "<html")):
-            continue
-        any_ok = True
-        for row in csv.DictReader(io.StringIO(text)):
-            lat, lon = _as_float(row.get("latitude")), _as_float(row.get("longitude"))
-            if lat is None or lon is None:
+        for chunk, start_date in _firms_windows(day_range):
+            url = f"{FIRMS_AREA_URL}/{map_key}/{source}/{area}/{chunk}"
+            if start_date:
+                url += f"/{start_date}"
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            try:
+                with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
+                    text = r.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
                 continue
-            acq_date = row.get("acq_date") or ""
-            acq_time = (row.get("acq_time") or "0000").zfill(4)
-            out.append(
-                ActiveFire(
-                    lat=lat,
-                    lon=lon,
-                    brightness_k=_as_float(row.get("bright_ti4") or row.get("brightness")),
-                    frp_mw=_as_float(row.get("frp")),
-                    confidence=(row.get("confidence") or None),
-                    satellite=row.get("satellite") or source,
-                    source=source,
-                    acquired_at=f"{acq_date}T{acq_time[:2]}:{acq_time[2:]}:00Z"
-                    if acq_date
-                    else "",
+            if not text or text.lstrip().lower().startswith(("invalid", "<!doctype", "<html")):
+                continue
+            any_ok = True
+            for row in csv.DictReader(io.StringIO(text)):
+                lat, lon = _as_float(row.get("latitude")), _as_float(row.get("longitude"))
+                if lat is None or lon is None:
+                    continue
+                if _confidence_rank(row.get("confidence")) < min_rank:
+                    continue
+                frp = _as_float(row.get("frp"))
+                if min_frp > 0 and (frp is None or frp < min_frp):
+                    continue
+                acq_date = row.get("acq_date") or ""
+                acq_time = (row.get("acq_time") or "0000").zfill(4)
+                out.append(
+                    ActiveFire(
+                        lat=lat,
+                        lon=lon,
+                        brightness_k=_as_float(row.get("bright_ti4") or row.get("brightness")),
+                        frp_mw=frp,
+                        confidence=(row.get("confidence") or None),
+                        satellite=row.get("satellite") or source,
+                        source=source,
+                        acquired_at=f"{acq_date}T{acq_time[:2]}:{acq_time[2:]}:00Z"
+                        if acq_date
+                        else "",
+                    )
                 )
-            )
     if not any_ok:
         return [], "Satellite heat layer unavailable: FIRMS did not respond (check FIRMS_MAP_KEY / quota)."
     _FIRMS_CACHE[key] = (now, out)
@@ -350,63 +408,78 @@ def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]
     return lower[:-1] + upper[:-1]
 
 
-def cluster_heat_shapes(
-    fires: list[ActiveFire],
-    *,
-    grid_deg: float = HEAT_CLUSTER_GRID_DEG,
-    min_points: int = HEAT_CLUSTER_MIN_POINTS,
-) -> list[HeatShape]:
-    """Bin detections to a grid, connect adjacent occupied cells (8-way) into
-    clusters, and emit a convex-hull polygon per cluster. Pure Python — no
-    shapely/scipy. Small clusters are dropped as noise (they still show as
-    points)."""
-    if not fires:
-        return []
+def _cluster_components(
+    fires: list[ActiveFire], grid_deg: float,
+) -> list[tuple[set[tuple[int, int]], list[ActiveFire]]]:
+    """Grid-bin detections and return connected components (8-way) as
+    (cell-set, member-points). A component's cell count is its spatial extent —
+    a persistent point source (factory/flare) stays 1 cell no matter how many
+    detections; a spreading fire fills many cells."""
     import math
 
     cells: dict[tuple[int, int], list[ActiveFire]] = {}
     for a in fires:
-        ix = math.floor(a.lon / grid_deg)
-        iy = math.floor(a.lat / grid_deg)
-        cells.setdefault((ix, iy), []).append(a)
+        cells.setdefault((math.floor(a.lon / grid_deg), math.floor(a.lat / grid_deg)), []).append(a)
 
     seen: set[tuple[int, int]] = set()
-    shapes: list[HeatShape] = []
+    comps: list[tuple[set[tuple[int, int]], list[ActiveFire]]] = []
     for start in cells:
         if start in seen:
             continue
         stack = [start]
         seen.add(start)
-        comp: list[tuple[int, int]] = []
+        comp_cells: set[tuple[int, int]] = set()
         while stack:
             c = stack.pop()
-            comp.append(c)
+            comp_cells.add(c)
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     n = (c[0] + dx, c[1] + dy)
                     if n in cells and n not in seen:
                         seen.add(n)
                         stack.append(n)
-        pts = [a for c in comp for a in cells[c]]
-        if len(pts) < min_points:
+        pts = [a for c in comp_cells for a in cells[c]]
+        comps.append((comp_cells, pts))
+    return comps
+
+
+def _shape_from_points(pts: list[ActiveFire]) -> HeatShape | None:
+    hull = _convex_hull([(a.lon, a.lat) for a in pts])
+    if len(hull) < 3:
+        return None
+    ring = [[x, y] for (x, y) in hull]
+    ring.append(ring[0])
+    frps = [a.frp_mw for a in pts if a.frp_mw is not None]
+    acqs = sorted(a.acquired_at for a in pts if a.acquired_at)
+    return HeatShape(
+        geometry={"type": "Polygon", "coordinates": [ring]},
+        detection_count=len(pts),
+        max_frp_mw=max(frps) if frps else None,
+        sum_frp_mw=sum(frps) if frps else None,
+        first_detected_at=acqs[0] if acqs else None,
+        last_detected_at=acqs[-1] if acqs else None,
+    )
+
+
+def cluster_heat_shapes(
+    fires: list[ActiveFire],
+    *,
+    grid_deg: float = HEAT_CLUSTER_GRID_DEG,
+    min_points: int = HEAT_CLUSTER_MIN_POINTS,
+    min_cells: int = 1,
+) -> list[HeatShape]:
+    """Convex-hull footprint per qualifying cluster. Clusters below
+    ``min_points`` detections or ``min_cells`` spatial extent are dropped
+    (removes factories/flares and one-off tiny detections). Pure Python."""
+    if not fires:
+        return []
+    shapes: list[HeatShape] = []
+    for comp_cells, pts in _cluster_components(fires, grid_deg):
+        if len(pts) < min_points or len(comp_cells) < min_cells:
             continue
-        hull = _convex_hull([(a.lon, a.lat) for a in pts])
-        if len(hull) < 3:
-            continue
-        ring = [[x, y] for (x, y) in hull]
-        ring.append(ring[0])
-        frps = [a.frp_mw for a in pts if a.frp_mw is not None]
-        acqs = sorted(a.acquired_at for a in pts if a.acquired_at)
-        shapes.append(
-            HeatShape(
-                geometry={"type": "Polygon", "coordinates": [ring]},
-                detection_count=len(pts),
-                max_frp_mw=max(frps) if frps else None,
-                sum_frp_mw=sum(frps) if frps else None,
-                first_detected_at=acqs[0] if acqs else None,
-                last_detected_at=acqs[-1] if acqs else None,
-            )
-        )
+        s = _shape_from_points(pts)
+        if s is not None:
+            shapes.append(s)
     shapes.sort(key=lambda s: -s.detection_count)
     return shapes
 
@@ -428,22 +501,51 @@ def build_wildfire_bundle(
     day_range: int = 1,
     include_heat: bool = True,
     simplify_deg: float = DEFAULT_SIMPLIFY_DEG,
+    min_cells: int = 1,
+    min_detections: int = 1,
+    min_confidence: str = "nominal",
+    min_frp: float = 0.0,
 ) -> WildfireBundle:
-    """Assemble perimeters + satellite heat + affected-state roll-up."""
+    """Assemble perimeters + satellite heat + affected-state roll-up.
+
+    Small-hotspot cleanup: detections below ``min_confidence``/``min_frp`` are
+    dropped up front; then clusters below ``min_cells`` (spatial extent) or
+    ``min_detections`` are discarded — this removes factories/flares (1 cell,
+    high count) and one-off tiny fires. Both the returned points and the heat
+    shapes come from the surviving clusters."""
     bundle = WildfireBundle()
     bundle.perimeters = fetch_perimeters(bbox, simplify_deg=simplify_deg)
 
     if include_heat:
-        fires, note = fetch_active_fires(map_key=map_key, bbox=bbox, day_range=day_range)
-        # Build footprints from the FULL detection set, then thin the raw
-        # points for display so a 10-day CONUS pull doesn't choke the map.
-        bundle.heat_shapes = cluster_heat_shapes(fires)
+        fires, note = fetch_active_fires(
+            map_key=map_key, bbox=bbox, day_range=day_range,
+            min_confidence=min_confidence, min_frp=min_frp,
+        )
         bundle.detections_total = len(fires)
-        bundle.active_fires = _thin(fires, HEAT_POINT_DISPLAY_CAP)
-        if len(bundle.active_fires) < len(fires):
+        # Cluster once; keep only qualifying clusters. Shapes + displayed
+        # points both derive from them, so "cleaning" applies consistently.
+        kept_points: list[ActiveFire] = []
+        shapes: list[HeatShape] = []
+        for comp_cells, pts in _cluster_components(fires, HEAT_CLUSTER_GRID_DEG):
+            if len(pts) < min_detections or len(comp_cells) < min_cells:
+                continue
+            kept_points.extend(pts)
+            s = _shape_from_points(pts)
+            if s is not None:
+                shapes.append(s)
+        shapes.sort(key=lambda s: -s.detection_count)
+        bundle.heat_shapes = shapes
+        bundle.active_fires = _thin(kept_points, HEAT_POINT_DISPLAY_CAP)
+        dropped = len(fires) - len(kept_points)
+        if dropped > 0:
             bundle.notes.append(
-                f"Showing {len(bundle.active_fires):,} of {len(fires):,} satellite "
-                f"detections (thinned for display); heat shapes use all of them."
+                f"Cleaned {dropped:,} small/low-confidence detections "
+                f"(factories, one-off hotspots); kept {len(kept_points):,}."
+            )
+        if len(bundle.active_fires) < len(kept_points):
+            bundle.notes.append(
+                f"Showing {len(bundle.active_fires):,} of {len(kept_points):,} "
+                f"detections (thinned for display); shapes use all of them."
             )
         if note:
             bundle.notes.append(note)

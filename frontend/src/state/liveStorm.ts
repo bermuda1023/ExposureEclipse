@@ -24,6 +24,8 @@ interface LiveStormState {
   data: LiveStormBundle | null;
   isLoading: boolean;
   error: string | null;
+  // Picker panel open/closed — driven by the toolbar chip (LiveStormControls).
+  pickerOpen: boolean;
   // Layer toggles for the overlay — start with everything on except land
   // stations (NWS API is the slowest source).
   showForecastHistory: boolean;
@@ -58,6 +60,8 @@ interface LiveStormState {
   setData: (data: LiveStormBundle) => void;
   setError: (msg: string) => void;
   clear: () => void;
+  setPickerOpen: (v: boolean) => void;
+  togglePicker: () => void;
   setToggle: (key: ToggleKey, value: boolean) => void;
   setWindMapMode: (mode: WindMapMode) => void;
   setGfsGrid: (g: WindModelGrid | null) => void;
@@ -80,11 +84,12 @@ export type ToggleKey =
   | "showWindMap"
   | "showWindParticles";
 
-export const useLiveStormStore = create<LiveStormState>((set) => ({
+export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   activeStormId: null,
   data: null,
   isLoading: false,
   error: null,
+  pickerOpen: false,
   showForecastHistory: true,
   showAlerts: true,
   // NDBC buoys, wind-field cone, and NHC peak-surge polygons all default
@@ -122,6 +127,8 @@ export const useLiveStormStore = create<LiveStormState>((set) => ({
     }),
   setData: (data) => set({ data, isLoading: false, error: null }),
   setError: (msg) => set({ error: msg, isLoading: false }),
+  setPickerOpen: (v) => set({ pickerOpen: v }),
+  togglePicker: () => set({ pickerOpen: !get().pickerOpen }),
   clear: () => set({
     activeStormId: null, data: null, isLoading: false, error: null,
     gfsGrid: null, ecmwfGrid: null,

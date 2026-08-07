@@ -167,6 +167,60 @@ def test_endpoint_exposes_heat_shapes_collection(monkeypatch: pytest.MonkeyPatch
     assert "heatShapes" in j["counts"] and "activeFiresTotal" in j["counts"]
 
 
+def test_small_hotspots_cleaned_by_cell_and_count() -> None:
+    """A persistent single-cell source (factory) and an isolated one-off must
+    be dropped; a spreading multi-cell cluster survives."""
+    from app.services.live_wildfire import ActiveFire, cluster_heat_shapes
+
+    def f(lat: float, lon: float) -> ActiveFire:
+        return ActiveFire(lat=lat, lon=lon, brightness_k=330.0, frp_mw=20.0,
+                          confidence="h", satellite="N", source="VIIRS_SNPP_NRT",
+                          acquired_at="2026-08-05T21:00:00Z")
+
+    fires = [f(39.0 + i * 0.01, -120.0 + j * 0.01) for i in range(4) for j in range(4)]  # spread
+    fires += [f(45.0, -110.0)] * 30          # factory: 30 hits, ONE cell
+    fires += [f(30.0, -95.0)]                 # lone one-off
+    shapes = cluster_heat_shapes(fires, grid_deg=0.02, min_points=4, min_cells=2)
+    assert len(shapes) == 1  # only the spread cluster; factory (1 cell) + loner dropped
+
+
+def test_confidence_rank() -> None:
+    from app.services.live_wildfire import _confidence_rank
+    assert _confidence_rank("l") == 0
+    assert _confidence_rank("nominal") == 1
+    assert _confidence_rank("h") == 2
+    assert _confidence_rank("85") == 2   # MODIS numeric
+    assert _confidence_rank("10") == 0
+
+
+def test_firms_windows_chain_beyond_5_days() -> None:
+    from app.services.live_wildfire import _firms_windows
+    w = _firms_windows(12)
+    assert sum(chunk for chunk, _ in w) == 12
+    assert all(chunk <= 5 for chunk, _ in w)
+    assert w[0][1] is None  # most-recent window omits the date
+
+
+def test_point_in_geometry() -> None:
+    from app.services.wildfire_exposure import point_in_geometry
+    sq = {"type": "Polygon", "coordinates": [[[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]]]}
+    assert point_in_geometry(0, 0, sq) is True
+    assert point_in_geometry(5, 5, sq) is False
+
+
+def test_exposure_endpoint_rolls_up_by_client() -> None:
+    # Big box over Florida — synthetic locations from county TIV should roll up.
+    fl = {"type": "Polygon", "coordinates": [[[-82.5, 26.5], [-80.0, 26.5], [-80.0, 28.5], [-82.5, 28.5], [-82.5, 26.5]]]}
+    r = client.post("/api/wildfire/exposure", json={"polygons": [{"id": "t1", "name": "Test", "geometry": fl}]})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["synthetic"] is True and "synthetic" in j["note"].lower()
+    res = j["results"][0]
+    assert res["totalTiv"] > 0
+    assert len(res["byClient"]) >= 1
+    assert res["byClient"][0]["tiv"] >= res["byClient"][-1]["tiv"]  # sorted desc
+
+
 def test_endpoint_rejects_bad_bbox() -> None:
     r = client.get("/api/wildfire/active", params={"bbox": "1,2,3"})
     assert r.status_code == 422

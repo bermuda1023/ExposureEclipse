@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Query
 from ..config import get_settings
 from ..models.common import CamelModel
 from ..services.live_wildfire import build_wildfire_bundle
+from ..services import wildfire_exposure
 
 router = APIRouter(prefix="/wildfire", tags=["wildfire"])
 
@@ -113,14 +114,23 @@ def _parse_bbox(raw: str | None) -> tuple[float, float, float, float] | None:
 @router.get("/active", response_model=WildfireResponse)
 def get_active_wildfire(
     bbox: str | None = Query(default=None, description="west,south,east,north (lon/lat)"),
-    day_range: int = Query(default=3, ge=1, le=5, alias="dayRange"),  # FIRMS NRT caps at 5
+    day_range: int = Query(default=3, ge=1, le=14, alias="dayRange"),  # chained ≤5d FIRMS windows
     include_heat: bool = Query(default=True, alias="includeHeat"),
     simplify: float = Query(
         default=0.005, ge=0.0, le=0.05,
         description="Perimeter generalisation in degrees (0 = full resolution).",
     ),
+    min_cells: int = Query(default=2, ge=1, le=20, alias="minCells"),
+    min_detections: int = Query(default=4, ge=1, le=200, alias="minDetections"),
+    min_confidence: str = Query(default="nominal", alias="minConfidence"),
+    min_frp: float = Query(default=0.0, ge=0.0, alias="minFrp"),
 ) -> WildfireResponse:
     box = _parse_bbox(bbox)
+    if min_confidence not in ("low", "nominal", "high"):
+        raise HTTPException(status_code=422, detail={
+            "code": "VALIDATION_ERROR",
+            "message": "minConfidence must be low, nominal, or high.",
+        })
     settings = get_settings()
     bundle = build_wildfire_bundle(
         map_key=settings.firms_map_key,
@@ -128,6 +138,10 @@ def get_active_wildfire(
         day_range=day_range,
         include_heat=include_heat,
         simplify_deg=simplify,
+        min_cells=min_cells,
+        min_detections=min_detections,
+        min_confidence=min_confidence,
+        min_frp=min_frp,
     )
 
     features = [
@@ -191,6 +205,74 @@ def get_active_wildfire(
         ),
         notes=bundle.notes,
         attribution=WildfireAttribution(),
+    )
+
+
+# ─────────────────── exposed TIV inside fire polygons ───────────────────
+
+
+class PolygonIn(CamelModel):
+    id: str
+    name: str | None = None
+    geometry: dict  # GeoJSON Polygon / MultiPolygon
+
+
+class ExposureRequest(CamelModel):
+    polygons: list[PolygonIn]
+
+
+class ClientExposureOut(CamelModel):
+    client: str
+    tiv: float
+    location_count: int
+
+
+class PolygonExposureOut(CamelModel):
+    id: str
+    name: str | None
+    total_tiv: float
+    location_count: int
+    by_client: list[ClientExposureOut]
+
+
+class WildfireExposureResponse(CamelModel):
+    currency: str
+    synthetic: bool
+    note: str
+    results: list[PolygonExposureOut]
+
+
+@router.post("/exposure", response_model=WildfireExposureResponse)
+def post_wildfire_exposure(req: ExposureRequest) -> WildfireExposureResponse:
+    """Roll up exposed TIV by client for each supplied fire polygon (official
+    perimeter or heat-derived shape). v1 uses synthetic location points derived
+    from county-aggregated TIV — see `synthetic`/`note`."""
+    if len(req.polygons) > 50:
+        raise HTTPException(status_code=422, detail={
+            "code": "VALIDATION_ERROR",
+            "message": "At most 50 polygons per request.",
+        })
+    results: list[PolygonExposureOut] = []
+    for poly in req.polygons:
+        total, count, by_client = wildfire_exposure.exposure_in_polygon(poly.geometry)
+        results.append(PolygonExposureOut(
+            id=poly.id,
+            name=poly.name,
+            total_tiv=round(total, 2),
+            location_count=count,
+            by_client=sorted(
+                [ClientExposureOut(client=c, tiv=round(t, 2), location_count=n)
+                 for c, (t, n) in by_client.items()],
+                key=lambda x: -x.tiv,
+            ),
+        ))
+    return WildfireExposureResponse(
+        currency=wildfire_exposure.currency(),
+        synthetic=True,
+        note=("Estimated from synthetic location points distributed within counties "
+              "from aggregate TIV — not real location-level data. Replace the location "
+              "source with individual-location exposure for exact in-perimeter TIV."),
+        results=results,
     )
 
 

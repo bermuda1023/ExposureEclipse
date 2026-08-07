@@ -16,7 +16,7 @@ import mapboxgl, { type GeoJSONSource, type Map as MbMap } from "mapbox-gl";
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLiveWildfire, type WildfireResponse } from "../../api/wildfire";
-import { useLiveWildfireStore } from "../../state/liveWildfire";
+import { useLiveWildfireStore, MIN_SIZE_PARAMS } from "../../state/liveWildfire";
 
 const SRC_PERIM = "wildfire-perimeters";
 const L_FILL = "wildfire-perimeter-fill";
@@ -66,13 +66,16 @@ export function WildfireLayer({ map }: Props) {
   const showHeat = useLiveWildfireStore((s) => s.showHeat);
   const showHeatShapes = useLiveWildfireStore((s) => s.showHeatShapes);
   const heatDays = useLiveWildfireStore((s) => s.heatDays);
-  const selectedId = useLiveWildfireStore((s) => s.selectedIncidentId);
+  const minSize = useLiveWildfireStore((s) => s.minSize);
+  const selectedFire = useLiveWildfireStore((s) => s.selectedFire);
+  const selectedId = selectedFire?.source === "perimeter" ? selectedFire.id : null;
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const wiredRef = useRef(false);
 
   const query = useQuery({
-    queryKey: ["wildfire-live", heatDays],
-    queryFn: () => fetchLiveWildfire({ includeHeat: true, dayRange: heatDays }),
+    queryKey: ["wildfire-live", heatDays, minSize],
+    queryFn: () =>
+      fetchLiveWildfire({ includeHeat: true, dayRange: heatDays, ...MIN_SIZE_PARAMS[minSize] }),
     enabled: active,
     staleTime: 5 * 60_000,
     refetchInterval: active ? 5 * 60_000 : false,
@@ -140,8 +143,15 @@ export function WildfireLayer({ map }: Props) {
       });
       map.on("mouseleave", L_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
       map.on("click", L_FILL, (e) => {
-        const id = (e.features?.[0]?.properties as Record<string, unknown> | undefined)?.incidentId;
-        if (typeof id === "string") useLiveWildfireStore.getState().selectIncident(id);
+        const f = e.features?.[0];
+        const p = f?.properties as Record<string, unknown> | undefined;
+        if (!f || typeof p?.incidentId !== "string") return;
+        useLiveWildfireStore.getState().selectFire({
+          id: p.incidentId as string,
+          name: (p.name as string) ?? "Fire",
+          source: "perimeter",
+          geometry: f.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
+        });
       });
 
       map.on("mousemove", L_SHAPE_FILL, (e) => {
@@ -155,6 +165,16 @@ export function WildfireLayer({ map }: Props) {
         ).addTo(map);
       });
       map.on("mouseleave", L_SHAPE_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
+      map.on("click", L_SHAPE_FILL, (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        useLiveWildfireStore.getState().selectFire({
+          id: `heat-${e.lngLat.lng.toFixed(3)},${e.lngLat.lat.toFixed(3)}`,
+          name: "Heat-derived cluster",
+          source: "heat",
+          geometry: f.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
+        });
+      });
 
       wiredRef.current = true;
     };
@@ -186,6 +206,14 @@ export function WildfireLayer({ map }: Props) {
       set(L_SEL, active && showPerimeters && selectedId ? "visible" : "none");
       if (map.getLayer(L_SEL)) {
         map.setFilter(L_SEL, ["==", ["get", "incidentId"], selectedId ?? "___none___"]);
+      }
+
+      // Keep wildfire layers ABOVE the TIV choropleth fills but BELOW map
+      // labels — move them just under the first symbol layer.
+      const layers = map.getStyle()?.layers ?? [];
+      const firstSymbol = layers.find((l) => l.type === "symbol")?.id;
+      for (const id of [L_SHAPE_FILL, L_SHAPE_LINE, L_FILL, L_LINE, L_SEL, L_HEAT]) {
+        if (map.getLayer(id)) map.moveLayer(id, firstSymbol);
       }
     };
     if (map.isStyleLoaded()) apply();

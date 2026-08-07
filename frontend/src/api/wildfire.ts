@@ -5,7 +5,7 @@
  * roll-up. Live layer, like the storm bundle — not part of the mock plane.
  */
 
-import { apiGet } from "./client";
+import { apiGet, apiPost } from "./client";
 
 export interface WildfirePerimeterProps {
   incidentId: string;
@@ -81,10 +81,43 @@ export const fetchLiveWildfire = (
     bbox?: [number, number, number, number];
     dayRange?: number;
     includeHeat?: boolean;
+    minCells?: number;
+    minDetections?: number;
+    minConfidence?: "low" | "nominal" | "high";
   } = {},
 ) =>
   apiGet<WildfireResponse>("/wildfire/active", {
     bbox: options.bbox ? options.bbox.join(",") : undefined,
     dayRange: options.dayRange ?? 3,
     includeHeat: options.includeHeat ?? true,
+    minCells: options.minCells,
+    minDetections: options.minDetections,
+    minConfidence: options.minConfidence,
   });
+
+// ── Exposed TIV inside a fire polygon, by client ──
+
+export interface ClientExposure {
+  client: string;
+  tiv: number;
+  locationCount: number;
+}
+
+export interface PolygonExposure {
+  id: string;
+  name: string | null;
+  totalTiv: number;
+  locationCount: number;
+  byClient: ClientExposure[];
+}
+
+export interface WildfireExposureResponse {
+  currency: string;
+  synthetic: boolean;
+  note: string;
+  results: PolygonExposure[];
+}
+
+export const fetchWildfireExposure = (
+  polygons: { id: string; name?: string; geometry: GeoJSON.Geometry }[],
+) => apiPost<WildfireExposureResponse>("/wildfire/exposure", { polygons });
