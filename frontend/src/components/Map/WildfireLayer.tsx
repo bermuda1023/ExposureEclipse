@@ -78,12 +78,22 @@ export function WildfireLayer({ map }: Props) {
   const wiredRef = useRef(false);
   const hidRef = useRef(false);
 
-  const query = useQuery({
-    queryKey: ["wildfire-live", heatDays, minSize],
-    queryFn: () => fetchLiveWildfire({ includeHeat: true, dayRange: heatDays, ...MIN_SIZE_PARAMS[minSize] }),
+  // Perimeters (fast) and heat (slow) are fetched separately so the burn
+  // polygons paint in ~2s instead of waiting on the FIRMS pull.
+  const perimQuery = useQuery({
+    queryKey: ["wildfire-perimeters"],
+    queryFn: () => fetchLiveWildfire({ includeHeat: false, includePerimeters: true }),
     enabled: active,
+    staleTime: 10 * 60_000,
+    retry: 2,
+  });
+  const heatQuery = useQuery({
+    queryKey: ["wildfire-heat", heatDays, minSize],
+    queryFn: () =>
+      fetchLiveWildfire({ includeHeat: true, includePerimeters: false, dayRange: heatDays, ...MIN_SIZE_PARAMS[minSize] }),
+    enabled: active && (showHeat || showHeatShapes),
     staleTime: 5 * 60_000,
-    refetchInterval: active ? 5 * 60_000 : false,
+    refetchInterval: active && (showHeat || showHeatShapes) ? 5 * 60_000 : false,
   });
 
   useEffect(() => {
@@ -164,20 +174,21 @@ export function WildfireLayer({ map }: Props) {
       const heatSrc = map.getSource(SRC_HEAT) as GeoJSONSource | undefined;
       const selSrc = map.getSource(SRC_SELECTED) as GeoJSONSource | undefined;
       if (!perimSrc || !shapeSrc || !heatSrc || !selSrc) return;
-      const d = active ? query.data : undefined;
+      const perim = active ? perimQuery.data : undefined;
+      const heat = active ? heatQuery.data : undefined;
 
-      perimSrc.setData((d ? d.perimeters : EMPTY_FC) as never);
-      shapeSrc.setData((d ? d.heatShapes : EMPTY_FC) as never);
-      heatSrc.setData((d ? heatFC(d) : EMPTY_FC) as never);
+      perimSrc.setData((perim ? perim.perimeters : EMPTY_FC) as never);
+      shapeSrc.setData((heat ? heat.heatShapes : EMPTY_FC) as never);
+      heatSrc.setData((heat ? heatFC(heat) : EMPTY_FC) as never);
       selSrc.setData(selectedFC(active ? selectedFires : []) as never);
 
-      const vis = (on: boolean): "visible" | "none" => (active && on && d ? "visible" : "none");
+      const vis = (on: boolean, ready: boolean): "visible" | "none" => (active && on && ready ? "visible" : "none");
       const set = (id: string, v: "visible" | "none") => { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", v); };
-      set(L_FILL, vis(showPerimeters));
-      set(L_LINE, vis(showPerimeters));
-      set(L_SHAPE_FILL, vis(showHeatShapes));
-      set(L_SHAPE_LINE, vis(showHeatShapes));
-      set(L_HEAT, vis(showHeat));
+      set(L_FILL, vis(showPerimeters, !!perim));
+      set(L_LINE, vis(showPerimeters, !!perim));
+      set(L_SHAPE_FILL, vis(showHeatShapes, !!heat));
+      set(L_SHAPE_LINE, vis(showHeatShapes, !!heat));
+      set(L_HEAT, vis(showHeat, !!heat));
       set(L_SELECTED, active && selectedFires.length > 0 ? "visible" : "none");
 
       // Optionally hide the TIV choropleth so sparse fire shapes read clearly.
@@ -198,7 +209,7 @@ export function WildfireLayer({ map }: Props) {
     };
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, active, showPerimeters, showHeat, showHeatShapes, hideExposures, selectedFires, query.data]);
+  }, [map, active, showPerimeters, showHeat, showHeatShapes, hideExposures, selectedFires, perimQuery.data, heatQuery.data]);
 
   return null;
 }

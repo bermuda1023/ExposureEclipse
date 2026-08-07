@@ -579,8 +579,11 @@ def build_wildfire_bundle(
     min_detections: int = 1,
     min_confidence: str = "nominal",
     min_frp: float = 0.0,
+    include_perimeters: bool = True,
 ) -> WildfireBundle:
     """Assemble perimeters + satellite heat + affected-state roll-up.
+    Perimeters and heat are independent so callers can fetch the fast layer
+    (perimeters) without waiting on the slow one (FIRMS).
 
     Small-hotspot cleanup: detections below ``min_confidence``/``min_frp`` are
     dropped up front; then clusters below ``min_cells`` (spatial extent) or
@@ -588,7 +591,8 @@ def build_wildfire_bundle(
     high count) and one-off tiny fires. Both the returned points and the heat
     shapes come from the surviving clusters."""
     bundle = WildfireBundle()
-    bundle.perimeters = fetch_perimeters(bbox, simplify_deg=simplify_deg)
+    if include_perimeters:
+        bundle.perimeters = fetch_perimeters(bbox, simplify_deg=simplify_deg)
 
     if include_heat:
         fires, note = fetch_active_fires(
@@ -638,7 +642,7 @@ def build_wildfire_bundle(
         key=lambda t: -t[2],
     )
 
-    if not bundle.perimeters:
+    if include_perimeters and not bundle.perimeters:
         bundle.notes.append(
             "No current WFIGS perimeters returned (upstream empty or unreachable)."
         )

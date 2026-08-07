@@ -116,6 +116,7 @@ def get_active_wildfire(
     bbox: str | None = Query(default=None, description="west,south,east,north (lon/lat)"),
     day_range: int = Query(default=3, ge=1, le=30, alias="dayRange"),  # chained ≤5d FIRMS windows
     include_heat: bool = Query(default=True, alias="includeHeat"),
+    include_perimeters: bool = Query(default=True, alias="includePerimeters"),
     simplify: float = Query(
         default=0.005, ge=0.0, le=0.05,
         description="Perimeter generalisation in degrees (0 = full resolution).",
@@ -142,6 +143,7 @@ def get_active_wildfire(
         min_detections=min_detections,
         min_confidence=min_confidence,
         min_frp=min_frp,
+        include_perimeters=include_perimeters,
     )
 
     features = [

@@ -81,6 +81,7 @@ export const fetchLiveWildfire = (
     bbox?: [number, number, number, number];
     dayRange?: number;
     includeHeat?: boolean;
+    includePerimeters?: boolean;
     minCells?: number;
     minDetections?: number;
     minConfidence?: "low" | "nominal" | "high";
@@ -90,6 +91,7 @@ export const fetchLiveWildfire = (
     bbox: options.bbox ? options.bbox.join(",") : undefined,
     dayRange: options.dayRange ?? 3,
     includeHeat: options.includeHeat ?? true,
+    includePerimeters: options.includePerimeters ?? true,
     minCells: options.minCells,
     minDetections: options.minDetections,
     minConfidence: options.minConfidence,

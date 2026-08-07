@@ -134,10 +134,18 @@ function LayerCalc({ combinedTiv }: { combinedTiv: number }) {
 export function WildfirePanel() {
   const s = useLiveWildfireStore();
 
-  const query = useQuery({
-    queryKey: ["wildfire-live", s.heatDays, s.minSize],
-    queryFn: () => fetchLiveWildfire({ includeHeat: true, dayRange: s.heatDays, ...MIN_SIZE_PARAMS[s.minSize] }),
+  const perimQuery = useQuery({
+    queryKey: ["wildfire-perimeters"],
+    queryFn: () => fetchLiveWildfire({ includeHeat: false, includePerimeters: true }),
     enabled: s.active,
+    staleTime: 10 * 60_000,
+    retry: 2,
+  });
+  const heatOn = s.showHeat || s.showHeatShapes;
+  const heatQuery = useQuery({
+    queryKey: ["wildfire-heat", s.heatDays, s.minSize],
+    queryFn: () => fetchLiveWildfire({ includeHeat: true, includePerimeters: false, dayRange: s.heatDays, ...MIN_SIZE_PARAMS[s.minSize] }),
+    enabled: s.active && heatOn,
     staleTime: 5 * 60_000,
   });
 
@@ -162,10 +170,14 @@ export function WildfirePanel() {
   }, [exposure.data]);
 
   if (!s.active) return null;
-  const data = query.data;
-  const top = data
-    ? [...data.perimeters.features].sort((a, b) => (b.properties.gisAcres ?? 0) - (a.properties.gisAcres ?? 0)).slice(0, 8)
+  const perim = perimQuery.data;
+  const heat = heatQuery.data;
+  const notes = [...(perim?.notes ?? []), ...(heat?.notes ?? [])];
+  const top = perim
+    ? [...perim.perimeters.features].sort((a, b) => (b.properties.gisAcres ?? 0) - (a.properties.gisAcres ?? 0)).slice(0, 8)
     : [];
+  const perimLoading = perimQuery.isLoading;
+  const heatLoading = heatOn && heatQuery.isFetching;
 
   return (
     <div style={{
@@ -200,19 +212,25 @@ export function WildfirePanel() {
             fmt={(id) => SIZE_OPTIONS.find((o) => o.id === id)!.label} />
         </div>
 
-        {query.isLoading && <div style={{ color: "var(--ink-500)" }}>Loading current fires…</div>}
-        {query.isError && <div style={{ color: "#b91c1c" }}>Couldn’t load live wildfire data.</div>}
+        {(perimLoading || heatLoading) && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", borderRadius: 6, padding: "5px 8px", marginBottom: 6, fontSize: "0.66rem" }}>
+            <span className="ee-spin" style={{ width: 11, height: 11, border: "2px solid #bfdbfe", borderTopColor: "#1e40af", borderRadius: "50%", display: "inline-block", animation: "ee-spin 0.8s linear infinite" }} />
+            {perimLoading ? "Loading fire perimeters…" : `Loading satellite heat (${s.heatDays}d)…`}
+            <style>{"@keyframes ee-spin{to{transform:rotate(360deg)}}"}</style>
+          </div>
+        )}
+        {perimQuery.isError && <div style={{ color: "#b91c1c", marginBottom: 6 }}>Couldn’t load perimeters — retrying…</div>}
 
-        {data && (
+        {(perim || heat) && (
           <>
             <div style={{ color: "var(--ink-600)", marginBottom: 6 }}>
-              <strong>{data.counts.perimeters}</strong> perimeters ·{" "}
-              <strong>{data.counts.heatShapes}</strong> heat shapes ·{" "}
-              <strong>{data.counts.activeFiresTotal.toLocaleString()}</strong> detections
+              <strong>{perim ? perim.counts.perimeters : "…"}</strong> perimeters ·{" "}
+              <strong>{heat ? heat.counts.heatShapes : (heatOn ? "…" : "—")}</strong> heat shapes ·{" "}
+              <strong>{heat ? heat.counts.activeFiresTotal.toLocaleString() : (heatOn ? "…" : "—")}</strong> detections
               <span style={{ color: "var(--ink-400)" }}> ({s.heatDays}d)</span>
             </div>
 
-            {data.notes.map((n) => (
+            {notes.map((n) => (
               <div key={n} style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 6, padding: "5px 7px", marginBottom: 6, fontSize: "0.64rem", lineHeight: 1.35 }}>{n}</div>
             ))}
 
@@ -252,11 +270,11 @@ export function WildfirePanel() {
               </div>
             )}
 
-            {data.affectedStates.length > 0 && (
+            {perim && perim.affectedStates.length > 0 && (
               <div style={{ marginBottom: 8 }}>
                 <div style={{ fontWeight: 700, color: "var(--ink-500)", fontSize: "0.62rem", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 3 }}>Affected states</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {data.affectedStates.slice(0, 6).map((st) => (
+                  {perim.affectedStates.slice(0, 6).map((st) => (
                     <span key={st.state} style={{ background: "var(--ink-50)", border: "1px solid var(--ink-200)", borderRadius: 999, padding: "1px 7px", fontSize: "0.64rem" }} title={`${st.fireCount} fires · ${Math.round(st.acres).toLocaleString()} acres`}>
                       {st.state} · {Math.round(st.acres).toLocaleString()} ac
                     </span>
@@ -288,7 +306,7 @@ export function WildfirePanel() {
             )}
 
             <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid var(--ink-100)", color: "var(--ink-400)", fontSize: "0.6rem", lineHeight: 1.4 }}>
-              Click perimeters/heat shapes to combine them. Perimeters: {data.attribution.perimeters}. Heat: {data.attribution.activeFires}.
+              Click perimeters/heat shapes to combine them.{perim ? ` Perimeters: ${perim.attribution.perimeters}.` : ""}{heat ? ` Heat: ${heat.attribution.activeFires}.` : ""}
             </div>
           </>
         )}
