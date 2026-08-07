@@ -509,9 +509,59 @@ def _footprint_geometry(pts: list[ActiveFire], g: float = FOOTPRINT_GRID_DEG) ->
 
     if not rings:
         return None
-    if len(rings) == 1:
-        return {"type": "Polygon", "coordinates": [rings[0]]}
-    return {"type": "MultiPolygon", "coordinates": [[r] for r in rings]}
+
+    # Nest interior rings as HOLES (unburned pockets) rather than filled
+    # polygons. A ring contained by an odd number of others is a hole; assign
+    # it to the smallest ring that contains it. Outers keep their holes.
+    def area(r: list[list[float]]) -> float:
+        s = 0.0
+        for i in range(len(r) - 1):
+            s += r[i][0] * r[i + 1][1] - r[i + 1][0] * r[i][1]
+        return abs(s) / 2.0
+
+    def contains(outer: list[list[float]], pt: list[float]) -> bool:
+        x, y = pt
+        inside = False
+        n = len(outer)
+        j = n - 1
+        for i in range(n):
+            xi, yi = outer[i]
+            xj, yj = outer[j]
+            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-15) + xi):
+                inside = not inside
+            j = i
+        return inside
+
+    n = len(rings)
+    depth = [0] * n            # how many other rings contain this one
+    parent = [-1] * n          # smallest containing ring
+    for i in range(n):
+        pt = rings[i][0]
+        best_area = float("inf")
+        for k in range(n):
+            if k == i:
+                continue
+            if contains(rings[k], pt):
+                depth[i] += 1
+                a = area(rings[k])
+                if a < best_area:
+                    best_area = a
+                    parent[i] = k
+
+    polys: dict[int, list[list[list[float]]]] = {}
+    for i in range(n):
+        if depth[i] % 2 == 0:            # outer ring
+            polys.setdefault(i, [rings[i]])
+    for i in range(n):
+        if depth[i] % 2 == 1 and parent[i] in polys:  # hole → its outer
+            polys[parent[i]].append(rings[i])
+
+    coords = list(polys.values())
+    if not coords:
+        return None
+    if len(coords) == 1:
+        return {"type": "Polygon", "coordinates": coords[0]}
+    return {"type": "MultiPolygon", "coordinates": coords}
 
 
 def _shape_from_points(pts: list[ActiveFire]) -> HeatShape | None:
