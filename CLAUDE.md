@@ -59,16 +59,26 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
   on the wire and surfaced in the UI. See `docs/CALCULATIONS.md §Wildfire
   exposed TIV (synthetic point method)`. Requires `FIRMS_MAP_KEY` env var
   (free) for the heat layer; perimeters work without it.
-- **Live flood overlay** — `/api/flood/active` and `/api/flood/exposure`.
-  Active NWS flood watches / warnings / advisories as polygons, filtered by CAP
-  severity floor (`Severe` is the practical "major flooding" cut, and the UI
-  default). Underwriters multi-select alert areas and run exposed-TIV-by-client
-  through the same XOL layer-calc engine as wildfire. Zone-coded alerts
-  (Coastal, Lakeshore, most Watches) carry no polygon — they are counted in
-  `counts.zoneOnly` and explained in `notes[]`, never silently dropped. Two
-  stacked caveats: exposure is **synthetic** (as wildfire) *and* alert polygons
-  are warning areas rather than observed water, so the TIV is an **upper
-  bound**. Keyless — no API key needed. See `docs/API.md §Live flood overlay`.
+- **Live flood overlay** — two stacked, additive layers, both keyless.
+  **(1) NWS alerts** (`/api/flood/active`, `/api/flood/exposure`): active flood
+  watches / warnings / advisories as polygons, filtered by CAP severity floor
+  (`Severe` is the practical "major flooding" cut, and the UI default).
+  Underwriters multi-select alert areas and run exposed-TIV-by-client through
+  the same XOL layer-calc engine as wildfire. Zone-coded alerts (Coastal,
+  Lakeshore, most Watches) carry no polygon — counted in `counts.zoneOnly` and
+  explained in `notes[]`, never silently dropped. Two stacked caveats: exposure
+  is **synthetic** (as wildfire) *and* alert polygons are warning areas rather
+  than observed water, so the TIV is an **upper bound**.
+  **(2) NWM modelled inundation** (`/api/flood/inundation`,
+  `/api/flood/inundation/exposure`): NOAA National Water Model water extent at
+  river-reach resolution — "where is the water" rather than "where has a warning
+  been issued". Viewport-scoped (bbox required, capped at 25 deg², because the
+  upstream service truncates at 2,000 features). It **supplements and never
+  replaces** the alert layer: EXPERIMENTAL, ~30% population coverage, riverine
+  only, so an empty extent is never evidence that there is no flooding. Its
+  exposure route reports `belowResolution` when the extent is narrower than the
+  synthetic locations are spaced, so a structural zero is never shown as "no
+  exposure". See `docs/API.md §Live flood overlay`.
 - **Admin programmes** (`/admin/programmes`) — treaty-metadata table that
   maps each FS-display treaty ID → its EDM server + database, with CSV
   import and auto-suggest. Not linked from the header nav.

@@ -467,6 +467,31 @@ Because county TIV is distributed as 4 points within the county bounding area:
 appropriate for preliminary triage of fire exposure; it is not a substitute
 for running a real location-level accumulation query.
 
+### Resolution floor — when a zero means "unmeasurable"
+
+4 points scattered over a ±0.10° box put one synthetic location every
+
+```
+resolution_deg2 = (2 × 0.10)² / 4 = 0.01 deg²
+```
+
+so a polygon smaller than roughly 0.01 deg² expects **fewer than one point**
+even when it sits directly over dense exposure. Its result is structurally zero,
+and that zero carries no information about the exposure underneath it.
+
+This bites the flood inundation layer specifically. A modelled extent is river
+corridors, not areas: measured on a Houston bbox, the whole extent was
+8×10⁻⁵ deg² against a 0.72 deg² viewport — roughly 1/100th of the floor.
+`POST /api/flood/inundation/exposure` therefore compares the dissolved extent
+area against `wildfire_exposure.resolution_deg2()` and sets `belowResolution` on
+the response; the UI renders "not measurable" in place of the `$0` an
+underwriter would otherwise read as "no exposure here". Wildfire perimeters and
+NWS alert polygons are both well above the floor, so they are unaffected.
+
+The floor is computed from `_POINTS_PER_COUNTY` and `_JITTER_DEG` rather than
+written down, so it follows the generator automatically. Real location-level
+data (see *Upgrade path*) removes the floor entirely.
+
 ### Upgrade path
 
 `_load_locations()` in `backend/app/services/wildfire_exposure.py` is the

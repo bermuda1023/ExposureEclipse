@@ -563,6 +563,8 @@ and wildfire bundles — not part of the mock data plane.
 |---|---|---|
 | GET | `/api/flood/active` | polygon-bearing NWS flood alerts + affected-state roll-up |
 | POST | `/api/flood/exposure` | Exposed TIV by client inside submitted alert polygon(s) |
+| GET | `/api/flood/inundation` | NWM modelled water extent for a bbox (additive to the alerts) |
+| POST | `/api/flood/inundation/exposure` | Exposed TIV by client inside the modelled extent |
 
 Source: NOAA / National Weather Service `api.weather.gov/alerts/active`
 (keyless). Results are cached for 60 s per (bbox, states, severity floor,
@@ -657,6 +659,96 @@ synthetic points). On top of that, **alert polygons are warning areas**, often
 drawn to county or zone boundaries rather than observed water extent, so the
 exposed TIV is an **upper bound** on the affected area. Both are stated in the
 response `note` and surfaced in the UI.
+
+### `GET /api/flood/inundation`
+
+Modelled water extent from the NOAA **National Water Model** — a second,
+additive layer under the alerts. Alerts are warning areas drawn to county and
+zone boundaries; this is modelled water at river-reach resolution, so it answers
+"where is the water" rather than "where has a warning been issued". The two are
+stacked, never merged.
+
+**It cannot replace the alert layer**, for reasons that are properties of the
+source rather than of our code: NOAA flags the service EXPERIMENTAL, it covers
+roughly 30% of the US population, and it models riverine flooding only — storm
+surge and other coastal processes are absent. **Silence here never means "no
+flooding"**, which is why the coverage caveat rides on every response.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `bbox` | `west,south,east,north` | **required** | `422` if absent, malformed, or larger than 25 deg². |
+| `simplify` | float, 0–0.05 | `0.001` | `maxAllowableOffset` in degrees. `0` requests full resolution. |
+
+`bbox` is required and capped because the upstream service truncates at 2,000
+features: a 12°×11° request returned exactly 2,000 features and 5.6 MB with
+`exceededTransferLimit`, which would draw a partial extent as if it were all the
+water there is. `simplify=0.001` cut a Houston bbox from 4,146 vertices to 787
+(9×) with no visible change at mapping scales.
+
+```json
+{
+  "generatedAt": "2026-08-08T21:15:39Z",
+  "bbox": [-95.8, 29.4, -94.9, 30.2],
+  "referenceTime": "2026-08-08 20:00:00",
+  "truncated": false,
+  "inundation": {
+    "type": "FeatureCollection",
+    "features": [{
+      "type": "Feature",
+      "geometry": { "type": "MultiPolygon", "coordinates": [...] },
+      "properties": { "reachId": 5781231, "streamflowCfs": 1234.5 }
+    }]
+  },
+  "counts": { "reaches": 16 },
+  "notes": ["Modelled inundation is EXPERIMENTAL, covers roughly 30% …"],
+  "attribution": { "model": "NOAA/NWS National Water Model …", "modelUrl": "…" }
+}
+```
+
+`referenceTime` is hoisted onto the response rather than repeated per feature —
+it is identical on every one, and at 2,000 features repeating it is pure payload.
+`truncated` is cached **with** the features: caching the payload and recomputing
+the caveat would serve a partial extent as complete for the rest of the 10-minute
+TTL.
+
+We read `MapServer/0` with `f=geojson` and take NOAA's own conversion.
+`FeatureServer/0` returns HTTP 500 for `f=geojson` (reproduced 2026-08-08), and
+converting Esri rings ourselves was built, tested and measured against the same
+data: it recovered only 10 of the 35 holes NOAA emits, because ring winding
+alone cannot always recover which outer a hole belongs to.
+
+This route **fails soft**. If the model service is unreachable the response is an
+empty extent with an explicit note that this is *not* a statement that there is
+no flooding. An outage is never cached.
+
+### `POST /api/flood/inundation/exposure`
+
+```json
+{ "bbox": [-95.8, 29.4, -94.9, 30.2], "simplify": 0.001 }
+```
+
+Takes a bbox rather than geometry: a flood event is thousands of per-reach
+polygons, well past the 50-polygon cap on the other exposure routes, and posting
+them back up would be a multi-megabyte round trip. The reaches are combined
+server-side into one multipart geometry before the rollup, which keeps the work
+budget meaningful and matches how an underwriter thinks about one flood event.
+Overlapping reaches do not double-count — the rollup collects location indices
+into a set.
+
+Unlike the map route this **does not fail soft**: `503 UPSTREAM_UNAVAILABLE` if
+the model is unreachable. A zero exposed TIV would be indistinguishable from a
+genuine zero, and that number feeds the XOL layer calc.
+
+**`belowResolution` — read this before reading `totalTiv`.** Exposure is
+computed against synthetic locations (4 per client-county, scattered ±0.10°
+around the centroid), so the method can only resolve areas of roughly
+0.01 deg² and up. A real modelled extent is river corridors: a Houston bbox
+measured 8×10⁻⁵ deg² against a 0.72 deg² viewport. Below that floor the answer
+is structurally zero no matter how much exposure sits nearby, so the response
+sets `belowResolution: true` and the UI renders "not measurable" instead of a
+bare `$0` an underwriter would read as "no exposure here". The floor is derived
+from the exposure engine's own constants (`wildfire_exposure.resolution_deg2`)
+so the two cannot drift apart.
 
 ## Hazard overlays (tornado / hail / wildfire)
 

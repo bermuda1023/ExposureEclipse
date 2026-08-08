@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { bboxAreaDeg2, inundationBbox, MAX_INUNDATION_BBOX_DEG2 } from "../../api/flood";
 import { useLiveFloodStore, type SelectedAlert } from "../liveFlood";
 
 const alert = (id: string): SelectedAlert => ({
@@ -10,7 +11,9 @@ const alert = (id: string): SelectedAlert => ({
 
 describe("live flood store", () => {
   beforeEach(() => {
-    useLiveFloodStore.setState({ active: false, minSeverity: "Severe", selectedAlerts: [] });
+    useLiveFloodStore.setState({
+      active: false, minSeverity: "Severe", selectedAlerts: [], viewBbox: null,
+    });
   });
 
   it("defaults the floor to Severe — the practical major-flooding cut", () => {
@@ -48,6 +51,42 @@ describe("live flood store", () => {
     useLiveFloodStore.getState().toggleAlert(alert("urn:oid:live"));
     useLiveFloodStore.getState().retainAlerts(new Set(["urn:oid:live"]));
     expect(useLiveFloodStore.getState().selectedAlerts.map((a) => a.id)).toEqual(["urn:oid:live"]);
+  });
+
+  it("setViewBbox snaps outward to 0.05° and holds the tuple across a sub-snap pan", () => {
+    // moveend fires continuously while panning and the bbox keys the inundation
+    // query, so an unsnapped tuple would refetch the extent on every nudge.
+    // Outward, never to nearest: snapping in would drop water along the edge of
+    // a map the underwriter is looking straight at.
+    useLiveFloodStore.getState().setViewBbox([-95.812, 29.437, -94.888, 30.213]);
+    const first = useLiveFloodStore.getState().viewBbox;
+    expect(first).toEqual([-95.85, 29.4, -94.85, 30.25]);
+    useLiveFloodStore.getState().setViewBbox([-95.809, 29.441, -94.891, 30.209]);
+    expect(useLiveFloodStore.getState().viewBbox).toBe(first);
+  });
+
+  it("setViewBbox does update once the view really moves", () => {
+    useLiveFloodStore.getState().setViewBbox([-95.8, 29.45, -94.9, 30.2]);
+    useLiveFloodStore.getState().setViewBbox([-90.0, 29.45, -89.0, 30.2]);
+    expect(useLiveFloodStore.getState().viewBbox?.[0]).toBe(-90);
+  });
+
+  it("a continental view is past the inundation bbox cap", () => {
+    // Guarded client-side because past the cap the request can only 422; the
+    // panel has to say "zoom in" rather than fire and fail.
+    expect(bboxAreaDeg2([-125, 24, -66, 50])).toBeGreaterThan(MAX_INUNDATION_BBOX_DEG2);
+    expect(bboxAreaDeg2([-95.8, 29.4, -94.9, 30.2])).toBeLessThan(MAX_INUNDATION_BBOX_DEG2);
+  });
+
+  it("inundationBbox rejects an over-cap or antimeridian-wrapped view", () => {
+    // Rejects rather than clamps: mapbox returns west > east once the view
+    // crosses ±180, and there is no single honest bbox for that view — drawing
+    // a substituted one would put modelled water on ground the user isn't
+    // looking at.
+    expect(inundationBbox([-95.85, 29.4, -94.85, 30.25])).toEqual([-95.85, 29.4, -94.85, 30.25]);
+    expect(inundationBbox([-125, 24, -66, 50])).toBeNull();
+    expect(inundationBbox([179.5, 51, -179.5, 52])).toBeNull();
+    expect(inundationBbox(null)).toBeNull();
   });
 
   it("retainAlerts keeps the same array when nothing expired", () => {

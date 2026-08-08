@@ -353,6 +353,19 @@ def exposure_in_polygons(
     return [_rollup(s) for s in per], _rollup(union)
 
 
+def resolution_deg2() -> float:
+    """Smallest area a query can resolve, in square degrees.
+
+    The synthetic locations are ``_POINTS_PER_COUNTY`` points scattered over a
+    ``2 × _JITTER_DEG`` box, so one point stands for roughly this much area.
+    A polygon smaller than this expects fewer than one point even where it sits
+    directly over exposure, which makes a zero result a sampling artifact rather
+    than a finding. Callers with sub-resolution geometry (modelled river
+    reaches, say) must say so instead of reporting the zero as exposure.
+    """
+    return (2.0 * _JITTER_DEG) ** 2 / _POINTS_PER_COUNTY
+
+
 def currency() -> str:
     return _load_locations().currency
 
@@ -364,6 +377,7 @@ def load_warnings() -> tuple[str, ...]:
 __all__ = [
     "exposure_in_polygons",
     "point_in_geometry",
+    "resolution_deg2",
     "currency",
     "load_warnings",
     "Location",

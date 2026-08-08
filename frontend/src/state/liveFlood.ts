@@ -18,14 +18,22 @@ export interface SelectedAlert {
 interface LiveFloodState {
   active: boolean;
   showAlerts: boolean;
+  /** Modelled water extent (NWM) — additive to the alert layer, never a
+   *  replacement: it is EXPERIMENTAL, riverine-only, and partial-coverage. */
+  showInundation: boolean;
   hideExposures: boolean;
   minSeverity: FloodSeverity;
+  /** Current map viewport, rounded. The inundation extent is fetched per-view
+   *  because a nationwide request truncates upstream. */
+  viewBbox: [number, number, number, number] | null;
   selectedAlerts: SelectedAlert[];
   toggle: () => void;
   setActive: (v: boolean) => void;
   setShowAlerts: (v: boolean) => void;
+  setShowInundation: (v: boolean) => void;
   setHideExposures: (v: boolean) => void;
   setMinSeverity: (v: FloodSeverity) => void;
+  setViewBbox: (b: [number, number, number, number]) => void;
   toggleAlert: (a: SelectedAlert) => void;
   clearAlerts: () => void;
   /** Drop selections no longer present upstream. */
@@ -35,18 +43,40 @@ interface LiveFloodState {
 export const useLiveFloodStore = create<LiveFloodState>((set, get) => ({
   active: false,
   showAlerts: true,
+  // Off by default: it is viewport-scoped and costs a fetch on every pan, and
+  // the alert layer is the one that covers the whole country.
+  showInundation: false,
   hideExposures: false,
   // Severe is the practical "major flooding" floor; anything below is mostly
   // advisories, which would bury the warnings an underwriter cares about.
   minSeverity: "Severe",
+  viewBbox: null,
   selectedAlerts: [],
   toggle: () => set({ active: !get().active, selectedAlerts: [] }),
   setActive: (v) => set({ active: v }),
   setShowAlerts: (v) => set({ showAlerts: v }),
+  setShowInundation: (v) => set({ showInundation: v }),
   setHideExposures: (v) => set({ hideExposures: v }),
   // Raising the floor drops alerts from the map; keeping them selected would
   // leave invisible polygons contributing to the combined TIV.
   setMinSeverity: (v) => set({ minSeverity: v, selectedAlerts: [] }),
+  // Snapped to 0.05° and only stored on a real change: this fires on every pan,
+  // and a fresh tuple each time would re-key the inundation query and refetch
+  // when nothing meaningful moved.
+  //
+  // Snapped OUTWARD, not to nearest: rounding all four edges would shrink the
+  // box by up to 0.025° a side, so water along the edge of the map would be
+  // missing from an extent the user is looking straight at.
+  setViewBbox: (b) => {
+    const q = 20; // 1/0.05°
+    const next: [number, number, number, number] = [
+      Math.floor(b[0] * q) / q, Math.floor(b[1] * q) / q,
+      Math.ceil(b[2] * q) / q, Math.ceil(b[3] * q) / q,
+    ];
+    const cur = get().viewBbox;
+    if (cur && cur.every((v, i) => v === next[i])) return;
+    set({ viewBbox: next });
+  },
   toggleAlert: (a) => {
     const cur = get().selectedAlerts;
     const exists = cur.some((x) => x.id === a.id);

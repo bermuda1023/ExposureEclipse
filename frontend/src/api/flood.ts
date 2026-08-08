@@ -94,3 +94,81 @@ export interface FloodExposureResponse {
 export const fetchFloodExposure = (
   polygons: { id: string; name?: string; geometry: GeoJSON.Geometry }[],
 ) => apiPost<FloodExposureResponse>("/flood/exposure", { polygons });
+
+// ── Modelled inundation extent (NOAA National Water Model) ──
+
+/**
+ * Mirrors `MAX_BBOX_DEG2` in backend/app/services/nwm_inundation.py. Checked
+ * here as well so a wide viewport shows "zoom in" instead of firing a request
+ * that can only 422 — the extent is reach-resolution and a wider box is
+ * truncated upstream.
+ */
+export const MAX_INUNDATION_BBOX_DEG2 = 25;
+
+export const bboxAreaDeg2 = (b: [number, number, number, number]) =>
+  Math.abs(b[2] - b[0]) * Math.abs(b[3] - b[1]);
+
+/**
+ * The viewport as an inundation-fetchable bbox, or `null` if it isn't one.
+ *
+ * Shared by FloodLayer and FloodPanel so their TanStack query keys are
+ * identical and one fetch serves both. Rejects rather than clamps: a viewport
+ * that wraps the antimeridian, or one wider than the cap, has no single honest
+ * bbox, and quietly substituting a different one would draw an extent for
+ * ground the user isn't looking at.
+ */
+export function inundationBbox(
+  view: [number, number, number, number] | null,
+): [number, number, number, number] | null {
+  if (!view) return null;
+  const [w, s, e, n] = view;
+  if (!(w < e && s < n)) return null;               // wrapped past ±180
+  if (w < -180 || e > 180 || s < -90 || n > 90) return null;
+  return bboxAreaDeg2(view) <= MAX_INUNDATION_BBOX_DEG2 ? view : null;
+}
+
+export interface InundationProps {
+  reachId: number | null;
+  streamflowCfs: number | null;
+}
+
+export type InundationFC = GeoJSON.FeatureCollection<
+  GeoJSON.Polygon | GeoJSON.MultiPolygon,
+  InundationProps
+>;
+
+export interface InundationResponse {
+  generatedAt: string;
+  bbox: [number, number, number, number];
+  /** Model run the extent came from; null when the service was unreachable. */
+  referenceTime: string | null;
+  /** Upstream hit its feature cap — water is missing from this view. */
+  truncated: boolean;
+  inundation: InundationFC;
+  counts: { reaches: number };
+  notes: string[];
+  attribution: { model: string; modelUrl: string };
+}
+
+export const fetchInundation = (bbox: [number, number, number, number]) =>
+  apiGet<InundationResponse>("/flood/inundation", { bbox: bbox.join(",") });
+
+export interface InundationExposureResponse {
+  currency: string;
+  synthetic: boolean;
+  note: string;
+  reaches: number;
+  truncated: boolean;
+  /**
+   * The extent is narrower than the synthetic locations are spaced, so a zero
+   * means "too small to sample", not "no exposure". Render the caveat, never a
+   * bare $0.
+   */
+  belowResolution: boolean;
+  combined: FloodPolygonExposure;
+  warnings: string[];
+  notes: string[];
+}
+
+export const fetchInundationExposure = (bbox: [number, number, number, number]) =>
+  apiPost<InundationExposureResponse>("/flood/inundation/exposure", { bbox });

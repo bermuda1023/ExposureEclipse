@@ -11,8 +11,23 @@ POST /api/flood/exposure
     Exposed TIV by client for a set of selected alert polygons — same engine
     and the same rules-3+4 rollup the wildfire overlay uses.
 
+GET /api/flood/inundation
+    ?bbox=west,south,east,north   (required — a nationwide request truncates)
+    &simplify=0.001               (generalisation in degrees; 0 = full)
+
+POST /api/flood/inundation/exposure
+    Exposed TIV inside the modelled extent for a bbox. Takes the bbox rather
+    than geometry: the extent is thousands of reach polygons, so posting it
+    back would mean shipping megabytes to the browser and straight back again.
+
+Two stacked layers, deliberately not merged. Alerts are *warning areas* issued
+by forecasters; inundation is *modelled water* from the National Water Model.
+Neither is a superset of the other — the model covers ~30% of the US
+population and no coastal processes, and alerts exist where the model is
+silent — so they are served separately and drawn separately.
+
 Live overlay, like /live/storms and /wildfire/active — not part of the mock
-data plane. Source: NWS api.weather.gov.
+data plane. Sources: NWS api.weather.gov, NOAA maps.water.noaa.gov.
 """
 
 from __future__ import annotations
@@ -20,10 +35,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import Field
 
 from ..models.common import CamelModel
-from ..services import wildfire_exposure
+from ..services import nwm_inundation, wildfire_exposure
 from ..services.live_flood import SEVERITY_ORDER, SEVERITY_RANK, fetch_flood_alerts
+from ..services.nwm_inundation import (
+    DEFAULT_SIMPLIFY_DEG,
+    InundationUnavailable,
+    NWM_ATTRIBUTION,
+    NWM_ATTRIBUTION_URL,
+)
 from .geometry_input import ExposureRequest, PolygonExposureOut, exposure_out
 
 router = APIRouter(prefix="/flood", tags=["flood"])
@@ -65,6 +87,49 @@ class FloodExposureResponse(CamelModel):
     results: list[PolygonExposureOut]
     combined: PolygonExposureOut
     warnings: list[str]
+
+
+class InundationCounts(CamelModel):
+    reaches: int
+
+
+class InundationAttribution(CamelModel):
+    model: str = NWM_ATTRIBUTION
+    model_url: str = NWM_ATTRIBUTION_URL
+
+
+class InundationResponse(CamelModel):
+    generated_at: str
+    bbox: list[float]
+    reference_time: str | None
+    # True whenever the upstream cut the extent short. Callers must not read a
+    # truncated extent as the full picture, so it rides on the response rather
+    # than only appearing in prose.
+    truncated: bool
+    inundation: dict  # GeoJSON FeatureCollection
+    counts: InundationCounts
+    notes: list[str]
+    attribution: InundationAttribution
+
+
+class InundationExposureRequest(CamelModel):
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    simplify: float = Field(default=DEFAULT_SIMPLIFY_DEG, ge=0.0, le=0.05)
+
+
+class InundationExposureResponse(CamelModel):
+    currency: str
+    synthetic: bool
+    note: str
+    reaches: int
+    truncated: bool
+    # The extent is narrower than the synthetic method can resolve, so a zero
+    # here means "too small to sample", not "no exposure". See
+    # `wildfire_exposure.resolution_deg2`.
+    below_resolution: bool
+    combined: PolygonExposureOut
+    warnings: list[str]
+    notes: list[str]
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -223,6 +288,189 @@ def post_flood_exposure(req: ExposureRequest) -> FloodExposureResponse:
         results=results,
         combined=combined,
         warnings=warnings,
+    )
+
+
+# ─────────────── modelled inundation extent (NWM) ───────────────
+
+
+def _require_bbox(raw: str | None) -> tuple[float, float, float, float]:
+    box = _parse_bbox(raw)
+    if box is None:
+        raise HTTPException(status_code=422, detail={
+            "code": "VALIDATION_ERROR",
+            "message": "bbox is required for inundation — a nationwide request "
+                       "is truncated upstream and would under-report the extent.",
+        })
+    return box
+
+
+@router.get("/inundation", response_model=InundationResponse)
+def get_flood_inundation(
+    bbox: str | None = Query(default=None, description="west,south,east,north (lon/lat)"),
+    simplify: float = Query(default=DEFAULT_SIMPLIFY_DEG, ge=0.0, le=0.05),
+) -> InundationResponse:
+    """Modelled flood inundation extent from the National Water Model.
+
+    This is modelled water at reach resolution, not a warning area, so it is
+    far more precise than the alert layer — but it is EXPERIMENTAL, covers
+    roughly 30% of the US population, and models riverine flooding only. An
+    empty extent is therefore never evidence that there is no flooding, and
+    this layer supplements the alert layer rather than replacing it.
+
+    Fails soft: if the model service cannot be reached the response is empty
+    with an explanatory note, never an implied all-clear.
+
+    Args:
+        bbox: Required bounding box ``"west,south,east,north"`` (lon/lat).
+            Capped at ``MAX_BBOX_DEG2`` square degrees.
+        simplify: ``maxAllowableOffset`` in degrees. The 0.001 default cuts
+            vertices ~9× with no visible change at mapping scales.
+
+    Returns:
+        InundationResponse with the reach FeatureCollection, the model
+        reference time, a ``truncated`` flag and notes.
+
+    Raises:
+        HTTPException 422: If ``bbox`` is missing, malformed, or too large.
+    """
+    box = _require_bbox(bbox)
+    try:
+        bundle = nwm_inundation.fetch_inundation(bbox=box, simplify_deg=simplify)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "VALIDATION_ERROR", "message": str(exc),
+        }) from exc
+    except InundationUnavailable:
+        # An empty map during a flood must not be mistaken for a dry one.
+        return InundationResponse(
+            generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            bbox=list(box),
+            reference_time=None,
+            truncated=False,
+            inundation={"type": "FeatureCollection", "features": []},
+            counts=InundationCounts(reaches=0),
+            notes=["The National Water Model service could not be reached, so no "
+                   "modelled inundation could be loaded. This is NOT a statement "
+                   "that there is no flooding — treat the layer as empty, not "
+                   "clear, and retry."],
+            attribution=InundationAttribution(),
+        )
+
+    return InundationResponse(
+        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        bbox=list(box),
+        reference_time=bundle.reference_time,
+        truncated=bundle.truncated,
+        inundation={"type": "FeatureCollection", "features": bundle.features},
+        counts=InundationCounts(reaches=len(bundle.features)),
+        notes=bundle.notes,
+        attribution=InundationAttribution(),
+    )
+
+
+@router.post("/inundation/exposure", response_model=InundationExposureResponse)
+def post_inundation_exposure(req: InundationExposureRequest) -> InundationExposureResponse:
+    """Exposed TIV by client inside the modelled inundation extent for a bbox.
+
+    The extent arrives as thousands of per-reach polygons — far past the
+    50-polygon cap on ``/flood/exposure`` — so they are combined here into a
+    single multipart geometry before the rollup. That keeps the work budget
+    meaningful and matches how an underwriter thinks about one flood event.
+    Overlapping reaches do not double-count: the rollup collects location
+    indices into a set.
+
+    Unlike the map route this does NOT fail soft. Returning zero exposed TIV
+    because the model was unreachable would be indistinguishable from a genuine
+    zero, and that number feeds a layer calc.
+
+    Raises:
+        HTTPException 422: bbox malformed, too large, or the extent too complex.
+        HTTPException 503: the model service or the exposure plane is unavailable.
+    """
+    box = (req.bbox[0], req.bbox[1], req.bbox[2], req.bbox[3])
+    if not (box[0] < box[2] and box[1] < box[3]):
+        raise HTTPException(status_code=422, detail={
+            "code": "VALIDATION_ERROR",
+            "message": "bbox must satisfy west<east and south<north.",
+        })
+
+    try:
+        bundle = nwm_inundation.fetch_inundation(bbox=box, simplify_deg=req.simplify)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "VALIDATION_ERROR", "message": str(exc),
+        }) from exc
+    except InundationUnavailable as exc:
+        raise HTTPException(status_code=503, detail={
+            "code": "UPSTREAM_UNAVAILABLE",
+            "message": f"The National Water Model service is unavailable: {exc}",
+        }) from exc
+
+    dissolved = nwm_inundation.dissolved_geometry(bundle.features)
+    if dissolved is None:
+        empty = exposure_out("inundation", "Modelled inundation", (0.0, 0, {}))
+        return InundationExposureResponse(
+            currency=wildfire_exposure.currency(),
+            synthetic=True,
+            note="The model shows no inundation in this view.",
+            reaches=0,
+            truncated=bundle.truncated,
+            below_resolution=False,
+            combined=empty,
+            warnings=list(wildfire_exposure.load_warnings()),
+            notes=bundle.notes,
+        )
+
+    try:
+        _, union = wildfire_exposure.exposure_in_polygons([dissolved])
+        currency = wildfire_exposure.currency()
+        warnings = list(wildfire_exposure.load_warnings())
+        # Only ever qualifies a zero, and only when the extent really is too
+        # small to sample. Dropping the first conjunct would suppress a real
+        # non-zero TIV behind an "unmeasurable" label; dropping the second
+        # would call a genuine absence of exposure unmeasurable.
+        # `extent_area_deg2` sums parts without a topological union, so it
+        # overstates when reaches overlap — measured at 1.046× on a live
+        # Houston extent, against a 133× margin to the floor.
+        below_resolution = (
+            union[1] == 0
+            and nwm_inundation.extent_area_deg2(dissolved)
+            < wildfire_exposure.resolution_deg2()
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail={
+            "code": "UPSTREAM_UNAVAILABLE",
+            "message": f"Exposure data could not be loaded: {exc}",
+        }) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "GEOMETRY_TOO_COMPLEX",
+            "message": str(exc),
+        }) from exc
+
+    return InundationExposureResponse(
+        currency=currency,
+        synthetic=True,
+        note=("Estimated from synthetic location points distributed within counties "
+              "from aggregate TIV — not real location-level data. The extent is "
+              "modelled water rather than a warning area, so it is more precise than "
+              "the alert layer, but the model is EXPERIMENTAL and excludes coastal "
+              "flooding."),
+        reaches=len(bundle.features),
+        truncated=bundle.truncated,
+        below_resolution=below_resolution,
+        combined=exposure_out("inundation", "Modelled inundation", union),
+        warnings=warnings,
+        notes=(
+            bundle.notes + [
+                "The modelled extent is narrower than the synthetic location "
+                "spacing, so this figure is below the resolution of the method: "
+                "read it as unmeasurable, not as an absence of exposure. Use the "
+                "alert layer for a bounded estimate here."
+            ]
+            if below_resolution else bundle.notes
+        ),
     )
 
 

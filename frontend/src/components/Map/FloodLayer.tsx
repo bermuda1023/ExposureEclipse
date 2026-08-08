@@ -5,12 +5,19 @@
  *
  * Click a polygon to multi-select and combine alerts (see FloodPanel).
  * Selected alerts get a white highlight outline.
+ *
+ * A second, additive layer draws the NWM modelled inundation extent beneath the
+ * alerts. Alerts are warning areas drawn to county and zone boundaries; the
+ * extent is modelled water at reach resolution, so it answers a different
+ * question and is stacked rather than merged. It is viewport-scoped — a
+ * nationwide request truncates upstream — and not clickable, because a single
+ * reach is not a unit an underwriter selects.
  */
 
 import mapboxgl, { type GeoJSONSource, type Map as MbMap } from "mapbox-gl";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchLiveFlood, type FloodAlertProps } from "../../api/flood";
+import { fetchInundation, fetchLiveFlood, inundationBbox, type FloodAlertProps } from "../../api/flood";
 import { useLiveFloodStore } from "../../state/liveFlood";
 
 const SRC_ALERTS = "flood-alerts";
@@ -18,6 +25,8 @@ const L_FILL = "flood-alert-fill";
 const L_LINE = "flood-alert-line";
 const SRC_SELECTED = "flood-selected";
 const L_SELECTED = "flood-selected-line";
+const SRC_INUNDATION = "flood-inundation";
+const L_INUNDATION = "flood-inundation-fill";
 
 interface Props { map: MbMap | null; }
 
@@ -39,8 +48,10 @@ function selectedFC(ids: { id: string; geometry: GeoJSON.Geometry }[]): GeoJSON.
 export function FloodLayer({ map }: Props) {
   const active = useLiveFloodStore((s) => s.active);
   const showAlerts = useLiveFloodStore((s) => s.showAlerts);
+  const showInundation = useLiveFloodStore((s) => s.showInundation);
   const minSeverity = useLiveFloodStore((s) => s.minSeverity);
   const selectedAlerts = useLiveFloodStore((s) => s.selectedAlerts);
+  const viewBbox = useLiveFloodStore((s) => s.viewBbox);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   // Source geometry by alertId. `e.features[].geometry` is rebuilt from the
   // vector tile under the cursor, so it is clipped to that tile and simplified
@@ -61,6 +72,18 @@ export function FloodLayer({ map }: Props) {
     retry: 2,
   });
 
+  // Guarded rather than left to the server: past the cap the request can only
+  // 422, and the panel tells the user to zoom in instead.
+  const bbox = inundationBbox(viewBbox);
+  const inundationQuery = useQuery({
+    queryKey: ["flood-inundation", bbox?.join(",")],
+    queryFn: () => fetchInundation(bbox!),
+    enabled: active && showInundation && bbox !== null,
+    // The model runs hourly, so a shorter window only adds load.
+    staleTime: 10 * 60_000,
+    retry: 1,
+  });
+
   useEffect(() => {
     if (!map) return;
     const setup = () => {
@@ -70,6 +93,13 @@ export function FloodLayer({ map }: Props) {
       if (map.getSource(SRC_ALERTS)) return;
       map.addSource(SRC_ALERTS, { type: "geojson", data: EMPTY_FC as never });
       map.addSource(SRC_SELECTED, { type: "geojson", data: EMPTY_FC as never });
+      map.addSource(SRC_INUNDATION, { type: "geojson", data: EMPTY_FC as never });
+
+      // Added first so it sits under the alert fills: modelled water is the
+      // detail inside the warning area, not a competing reading of it.
+      map.addLayer({ id: L_INUNDATION, type: "fill", source: SRC_INUNDATION,
+        paint: { "fill-color": "#0ea5e9", "fill-opacity": 0.75, "fill-outline-color": "#0369a1" },
+        layout: { visibility: "none" } });
 
       map.addLayer({ id: L_FILL, type: "fill", source: SRC_ALERTS,
         paint: { "fill-color": SEVERITY_COLOR as never, "fill-opacity": 0.3 }, layout: { visibility: "none" } });
@@ -117,7 +147,7 @@ export function FloodLayer({ map }: Props) {
   useEffect(() => {
     if (!map || !wired) return;
     const firstSymbol = (map.getStyle()?.layers ?? []).find((l) => l.type === "symbol")?.id;
-    for (const id of [L_FILL, L_LINE, L_SELECTED]) {
+    for (const id of [L_INUNDATION, L_FILL, L_LINE, L_SELECTED]) {
       if (map.getLayer(id)) map.moveLayer(id, firstSymbol);
     }
   }, [map, wired]);
@@ -152,6 +182,38 @@ export function FloodLayer({ map }: Props) {
     // `hideExposures` is deliberately absent: MapView owns the exposure-fill
     // visibility so the hazard, wildfire and flood overlays can't fight over it.
   }, [map, wired, active, showAlerts, alertQuery.data]);
+
+  // Viewport → store, so the panel can read the same box the layer fetches for.
+  // Only while the extent is on: otherwise every pan of the exposure map would
+  // write state and re-render both flood components for nothing.
+  useEffect(() => {
+    if (!map || !wired || !active || !showInundation) return;
+    const push = () => {
+      const b = map.getBounds();
+      if (!b) return;
+      useLiveFloodStore.getState().setViewBbox([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+    };
+    push();
+    map.on("moveend", push);
+    return () => { map.off("moveend", push); };
+  }, [map, wired, active, showInundation]);
+
+  useEffect(() => {
+    if (!map || !wired) return;
+    const on = active && showInundation;
+    const apply = () => {
+      const src = map.getSource(SRC_INUNDATION) as GeoJSONSource | undefined;
+      if (!src) return;
+      const fc = on ? inundationQuery.data?.inundation : undefined;
+      src.setData((fc ?? EMPTY_FC) as never);
+      if (map.getLayer(L_INUNDATION)) {
+        map.setLayoutProperty(L_INUNDATION, "visibility", on && fc ? "visible" : "none");
+      }
+    };
+    if (map.isStyleLoaded()) apply();
+    else map.once("style.load", apply);
+    return () => { map.off("style.load", apply); };
+  }, [map, wired, active, showInundation, inundationQuery.data]);
 
   useEffect(() => {
     if (!map || !wired) return;

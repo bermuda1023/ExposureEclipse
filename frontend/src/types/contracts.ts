@@ -159,6 +159,7 @@ export const ErrorCode = {
   JOB_NOT_FOUND: "JOB_NOT_FOUND",
   EXPORT_TOO_LARGE: "EXPORT_TOO_LARGE",
   GEOMETRY_TOO_COMPLEX: "GEOMETRY_TOO_COMPLEX",
+  UPSTREAM_UNAVAILABLE: "UPSTREAM_UNAVAILABLE",
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

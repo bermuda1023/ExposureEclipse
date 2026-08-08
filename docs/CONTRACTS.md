@@ -199,6 +199,7 @@ Warning object shape:
 | `JOB_NOT_FOUND` | 404 | yes |
 | `EXPORT_TOO_LARGE` | 413 | yes |
 | `GEOMETRY_TOO_COMPLEX` | 422 | yes (polygon exposure requests priced above the work budget) |
+| `UPSTREAM_UNAVAILABLE` | 503 | yes (a live overlay's upstream could not be reached) |
 | `INTERNAL_ERROR` | 500 | yes (generic) |
 
 \* These are domain outcomes, not transport failures — they ride in the response body.

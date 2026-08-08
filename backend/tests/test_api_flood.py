@@ -12,8 +12,10 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+import json
+
 from app.main import app
-from app.services import live_flood
+from app.services import live_flood, nwm_inundation
 from app.services.weather_alerts import AlertFeedUnavailable, WeatherAlert
 
 client = TestClient(app)
@@ -239,6 +241,208 @@ def test_exposure_budget_is_charged_per_request_not_per_polygon() -> None:
     r = client.post("/api/flood/exposure", json=many)
     assert r.status_code == 422
     assert "GEOMETRY_TOO_COMPLEX" in r.text
+
+
+# ─────────────────── modelled inundation (NWM) ───────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_inundation_cache():
+    nwm_inundation._CACHE.clear()
+    yield
+    nwm_inundation._CACHE.clear()
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+def _reach(coords: list, *, fid: int = 1, ref: str = "2026-08-08 20:00:00") -> dict:
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Polygon", "coordinates": coords},
+        "properties": {"feature_id": fid, "streamflow_cfs": 1234.5, "reference_time": ref},
+    }
+
+
+def _patch_nwm(monkeypatch, payload: dict) -> dict[str, int]:
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=None):
+        calls["n"] += 1
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(nwm_inundation.urllib.request, "urlopen", fake_urlopen)
+    return calls
+
+
+def _ring(w: float, s: float, e: float, n: float) -> list:
+    return [[w, s], [e, s], [e, n], [w, n], [w, s]]
+
+
+def test_inundation_requires_a_bbox_and_caps_its_size() -> None:
+    """A nationwide request truncates upstream, so an uncapped one would draw a
+    partial extent and read as if that were all the water there is."""
+    assert client.get("/api/flood/inundation").status_code == 422
+    assert client.get("/api/flood/inundation?bbox=1,2,3").status_code == 422
+    too_big = "-106,26,-88,36"  # 180 deg², well past MAX_BBOX_DEG2
+    r = client.get(f"/api/flood/inundation?bbox={too_big}")
+    assert r.status_code == 422
+    assert "square degrees" in r.text
+
+
+def test_inundation_truncation_warning_is_cached_with_the_payload(monkeypatch) -> None:
+    """Caching the features but recomputing the caveat would serve a partial
+    extent as complete for the rest of the TTL — the bug fixed in 6932561."""
+    payload = {
+        "type": "FeatureCollection",
+        "features": [_reach([_ring(-95.5, 29.5, -95.4, 29.6)])],
+        "exceededTransferLimit": True,
+    }
+    calls = _patch_nwm(monkeypatch, payload)
+
+    first = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+    second = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+
+    assert calls["n"] == 1, "second identical request should not re-hit NOAA"
+    assert first["truncated"] is second["truncated"] is True
+    assert any("cut off" in n for n in second["notes"])
+
+
+def test_inundation_hoists_reference_time_and_strips_repeated_fields(monkeypatch) -> None:
+    """`reference_time` is identical on every feature; at 2000 features
+    repeating it is pure payload, so it belongs on the bundle."""
+    _patch_nwm(monkeypatch, {
+        "type": "FeatureCollection",
+        "features": [_reach([_ring(-95.5, 29.5, -95.4, 29.6)], fid=7)],
+    })
+    j = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+    assert j["referenceTime"] == "2026-08-08 20:00:00"
+    props = j["inundation"]["features"][0]["properties"]
+    assert props == {"reachId": 7, "streamflowCfs": 1234.5}
+
+
+def test_inundation_drops_features_without_usable_geometry(monkeypatch) -> None:
+    _patch_nwm(monkeypatch, {
+        "type": "FeatureCollection",
+        "features": [
+            _reach([_ring(-95.5, 29.5, -95.4, 29.6)]),
+            {"type": "Feature", "geometry": None, "properties": {}},
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [0, 0]},
+             "properties": {}},
+            {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": []},
+             "properties": {}},
+        ],
+    })
+    j = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+    assert j["counts"]["reaches"] == 1
+
+
+def test_inundation_outage_is_not_reported_as_dry(monkeypatch) -> None:
+    """Same reasoning as the alert feed: an empty map during a flood must not
+    read as an all-clear."""
+    def boom(req, timeout=None):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(nwm_inundation.urllib.request, "urlopen", boom)
+    j = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+    assert j["counts"]["reaches"] == 0
+    assert any("NOT a statement" in n for n in j["notes"])
+    assert nwm_inundation._CACHE == {}, "an outage must not be cached"
+
+
+def test_arcgis_error_inside_a_200_body_is_treated_as_an_outage(monkeypatch) -> None:
+    """ArcGIS reports failures in the body as well as by status code; parsing
+    that as zero features would invent a dry map out of a server error."""
+    _patch_nwm(monkeypatch, {"error": {"code": 500, "message": "Unable to complete"}})
+    j = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+    assert j["counts"]["reaches"] == 0
+    assert any("NOT a statement" in n for n in j["notes"])
+
+
+def test_inundation_exposure_fails_hard_when_the_model_is_down(monkeypatch) -> None:
+    """The map route fails soft, this one must not: a zero exposed TIV feeds the
+    XOL layer calc and is indistinguishable from a genuine zero."""
+    def boom(req, timeout=None):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(nwm_inundation.urllib.request, "urlopen", boom)
+    r = client.post("/api/flood/inundation/exposure",
+                    json={"bbox": [-95.8, 29.4, -94.9, 30.2]})
+    assert r.status_code == 503
+    assert "UPSTREAM_UNAVAILABLE" in r.text
+
+
+def test_inundation_exposure_dissolves_reaches_without_double_counting(monkeypatch) -> None:
+    """A flood event is thousands of per-reach polygons, past the 50-polygon cap,
+    and neighbouring reaches overlap. Combining them must count each location
+    once or the TIV feeding the layer calc is inflated."""
+    big = _ring(-83.0, 25.0, -80.0, 28.0)  # over Florida, hits synthetic locations
+    _patch_nwm(monkeypatch, {
+        "type": "FeatureCollection",
+        "features": [_reach([big], fid=1), _reach([big], fid=2)],
+    })
+    j = client.post("/api/flood/inundation/exposure",
+                    json={"bbox": [-83.0, 25.0, -80.0, 28.0]}).json()
+    assert j["reaches"] == 2
+
+    single = client.post("/api/flood/exposure", json={
+        "polygons": [{"id": "a", "geometry": {"type": "Polygon", "coordinates": [big]}}]
+    }).json()["combined"]
+    assert single["totalTiv"] > 0, "fixture bbox no longer covers synthetic locations"
+    assert j["combined"]["totalTiv"] == pytest.approx(single["totalTiv"], rel=1e-9)
+    assert j["combined"]["locationCount"] == single["locationCount"]
+
+
+def test_sub_resolution_extent_reports_zero_as_unmeasurable(monkeypatch) -> None:
+    """Real reaches are river corridors ~1e-4 deg² while the synthetic locations
+    sit ~0.1° apart, so a zero is a sampling artifact. Left unflagged an
+    underwriter would read it as "no exposure here"."""
+    from app.services import wildfire_exposure
+
+    sliver = _ring(-82.0, 26.0, -81.999, 26.001)  # 1e-6 deg², far below the floor
+    _patch_nwm(monkeypatch, {
+        "type": "FeatureCollection", "features": [_reach([sliver])],
+    })
+    j = client.post("/api/flood/inundation/exposure",
+                    json={"bbox": [-83.0, 25.0, -80.0, 28.0]}).json()
+    assert j["combined"]["totalTiv"] == 0.0
+    assert j["belowResolution"] is True
+    assert any("below the resolution" in n for n in j["notes"])
+
+    nwm_inundation._CACHE.clear()
+    _patch_nwm(monkeypatch, {
+        "type": "FeatureCollection",
+        "features": [_reach([_ring(-83.0, 25.0, -80.0, 28.0)])],
+    })
+    wide = client.post("/api/flood/inundation/exposure",
+                       json={"bbox": [-83.0, 25.0, -80.0, 28.0]}).json()
+    assert wide["belowResolution"] is False
+    assert wide["combined"]["totalTiv"] > 0
+    # The floor is derived from the engine's own constants so the two can't drift.
+    assert nwm_inundation.extent_area_deg2(
+        {"type": "Polygon", "coordinates": [sliver]}
+    ) < wildfire_exposure.resolution_deg2()
+
+
+def test_extent_area_subtracts_holes() -> None:
+    """NOAA emits interior gaps as holes. Counting them as water would inflate
+    the extent and, with it, the resolution judgement built on top of it."""
+    donut = {"type": "Polygon", "coordinates": [
+        _ring(0.0, 0.0, 1.0, 1.0), _ring(0.25, 0.25, 0.75, 0.75),
+    ]}
+    assert nwm_inundation.extent_area_deg2(donut) == pytest.approx(1.0 - 0.25)
+    assert nwm_inundation.extent_area_deg2(None) == 0.0
 
 
 def test_flood_events_exclude_non_flood_products() -> None:
