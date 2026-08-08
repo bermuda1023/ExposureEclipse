@@ -78,6 +78,24 @@ describe("live flood store", () => {
     expect(bboxAreaDeg2([-95.8, 29.4, -94.9, 30.2])).toBeLessThan(MAX_INUNDATION_BBOX_DEG2);
   });
 
+  it("clears viewBbox whenever the extent stops tracking the map", () => {
+    // The layer only pushes the viewport while the extent is on. A box that
+    // survives an off-pan-on cycle is still inside its 10-minute staleTime and
+    // still carries the user's consent to price it, so the panel would show the
+    // previous city's exposed TIV over the new one.
+    for (const stop of [
+      () => useLiveFloodStore.getState().setShowInundation(false),
+      () => useLiveFloodStore.getState().setShowInundation(true),
+      () => useLiveFloodStore.getState().toggle(),
+      () => useLiveFloodStore.getState().setActive(false),
+    ]) {
+      useLiveFloodStore.getState().setViewBbox([-95.85, 29.4, -94.85, 30.25]);
+      expect(useLiveFloodStore.getState().viewBbox).not.toBeNull();
+      stop();
+      expect(useLiveFloodStore.getState().viewBbox).toBeNull();
+    }
+  });
+
   it("inundationBbox rejects an over-cap or antimeridian-wrapped view", () => {
     // Rejects rather than clamps: mapbox returns west > east once the view
     // crosses ±180, and there is no single honest bbox for that view — drawing

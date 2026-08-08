@@ -353,6 +353,31 @@ def exposure_in_polygons(
     return [_rollup(s) for s in per], _rollup(union)
 
 
+def geometries_with_candidates(geoms: list[dict]) -> list[dict]:
+    """The subset of ``geoms`` whose bounding box holds at least one location.
+
+    Answer-preserving, not an approximation: a geometry containing no synthetic
+    location cannot contribute an index to the rollup, so dropping it leaves
+    every total unchanged.
+
+    It exists because :func:`_cost` charges (candidates × *total* vertices),
+    which is the honest worst case for one big ring but wildly pessimistic for
+    many small disjoint ones. A modelled flood extent is thousands of separate
+    river reaches whose vertices sum past the budget while almost none of them
+    lie near exposure. Measured on a live 25 deg² mid-Atlantic extent: 1,871
+    reaches costing 86M charged operations collapse to 1 reach and 96.
+    """
+    ls = _load_locations()
+    if not ls.locations:
+        return []
+    out: list[dict] = []
+    for g in geoms:
+        bb = _bbox(g)
+        if bb is not None and _candidates(ls, bb):
+            out.append(g)
+    return out
+
+
 def resolution_deg2() -> float:
     """Smallest area a query can resolve, in square degrees.
 
@@ -376,6 +401,7 @@ def load_warnings() -> tuple[str, ...]:
 
 __all__ = [
     "exposure_in_polygons",
+    "geometries_with_candidates",
     "point_in_geometry",
     "resolution_deg2",
     "currency",

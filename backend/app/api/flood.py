@@ -106,6 +106,11 @@ class InundationResponse(CamelModel):
     # truncated extent as the full picture, so it rides on the response rather
     # than only appearing in prose.
     truncated: bool
+    # The model could not be reached. Without this an outage and a genuinely dry
+    # view are the same response — zero reaches, null reference time — and the
+    # only thing separating them is prose in `notes`, which a caller cannot
+    # branch on.
+    unavailable: bool = False
     inundation: dict  # GeoJSON FeatureCollection
     counts: InundationCounts
     notes: list[str]
@@ -348,6 +353,7 @@ def get_flood_inundation(
             bbox=list(box),
             reference_time=None,
             truncated=False,
+            unavailable=True,
             inundation={"type": "FeatureCollection", "features": []},
             counts=InundationCounts(reaches=0),
             notes=["The National Water Model service could not be reached, so no "
@@ -407,7 +413,8 @@ def post_inundation_exposure(req: InundationExposureRequest) -> InundationExposu
             "message": f"The National Water Model service is unavailable: {exc}",
         }) from exc
 
-    dissolved = nwm_inundation.dissolved_geometry(bundle.features)
+    geoms = [g for f in bundle.features if (g := f.get("geometry"))]
+    dissolved = nwm_inundation.dissolve(geoms)
     if dissolved is None:
         empty = exposure_out("inundation", "Modelled inundation", (0.0, 0, {}))
         return InundationExposureResponse(
@@ -423,9 +430,26 @@ def post_inundation_exposure(req: InundationExposureRequest) -> InundationExposu
         )
 
     try:
-        _, union = wildfire_exposure.exposure_in_polygons([dissolved])
+        # Price only the reaches that could hold a location. The work budget
+        # charges (candidates × total vertices), and an ordinary 25 deg² extent
+        # is ~1,900 reaches carrying ~200k vertices — 86M charged operations
+        # against a budget of 8M — so without this the button 422s on exactly
+        # the widespread floods it exists for. Dropping the rest cannot move the
+        # answer; see `wildfire_exposure.geometries_with_candidates`.
+        scoreable = nwm_inundation.dissolve(
+            wildfire_exposure.geometries_with_candidates(geoms)
+        )
+        _, union = (
+            wildfire_exposure.exposure_in_polygons([scoreable])
+            if scoreable is not None
+            else ([], (0.0, 0, {}))
+        )
         currency = wildfire_exposure.currency()
         warnings = list(wildfire_exposure.load_warnings())
+        # Measured on the FULL extent, not the priced subset: this describes how
+        # big the modelled water actually is against what the method can sample,
+        # which is a property of the water rather than of the optimisation.
+        #
         # Only ever qualifies a zero, and only when the extent really is too
         # small to sample. Dropping the first conjunct would suppress a real
         # non-zero TIV behind an "unmeasurable" label; dropping the second
@@ -444,9 +468,13 @@ def post_inundation_exposure(req: InundationExposureRequest) -> InundationExposu
             "message": f"Exposure data could not be loaded: {exc}",
         }) from exc
     except ValueError as exc:
+        # The caller supplied a bbox, not geometry, so "simplify it or submit
+        # fewer polygons" is advice they cannot act on. Zooming in is: it cuts
+        # the reach count and the candidate sweep at the same time.
         raise HTTPException(status_code=422, detail={
             "code": "GEOMETRY_TOO_COMPLEX",
-            "message": str(exc),
+            "message": f"The modelled extent in this view is too detailed to "
+                       f"price ({exc}). Zoom in and try again.",
         }) from exc
 
     return InundationExposureResponse(

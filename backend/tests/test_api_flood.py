@@ -249,6 +249,12 @@ def test_exposure_budget_is_charged_per_request_not_per_polygon() -> None:
 @pytest.fixture(autouse=True)
 def _clear_inundation_cache():
     nwm_inundation._CACHE.clear()
+    # `_patch_nwm` replaces urlopen on the shared `urllib.request` module, which
+    # is also how the county centroids behind the synthetic locations are
+    # fetched. Warm them first so a cold cache doesn't try to parse an NWM
+    # payload as TopoJSON — a failure that depends on test ordering.
+    from app.services import wildfire_exposure
+    wildfire_exposure._load_locations()
     yield
     nwm_inundation._CACHE.clear()
 
@@ -257,8 +263,8 @@ class _FakeResponse:
     def __init__(self, payload: dict) -> None:
         self._body = json.dumps(payload).encode("utf-8")
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, size: int | None = None) -> bytes:
+        return self._body if size is None else self._body[:size]
 
     def __enter__(self):
         return self
@@ -288,6 +294,19 @@ def _patch_nwm(monkeypatch, payload: dict) -> dict[str, int]:
 
 def _ring(w: float, s: float, e: float, n: float) -> list:
     return [[w, s], [e, s], [e, n], [w, n], [w, s]]
+
+
+def _sliver(w: float, s: float, vertices: int) -> list:
+    """A thin, vertex-heavy ring standing in for one real river reach.
+
+    Live reaches carry 50–400 vertices each at the default generalisation, which
+    is what makes a wide extent expensive; a 5-point box would not reproduce it.
+    """
+    half = max(2, vertices // 2)
+    step = 0.0006 / half
+    top = [[w + i * step, s + 0.0004] for i in range(half)]
+    bottom = [[w + i * step, s] for i in range(half - 1, -1, -1)]
+    return [*top, *bottom, top[0]]
 
 
 def test_inundation_requires_a_bbox_and_caps_its_size() -> None:
@@ -429,10 +448,106 @@ def test_sub_resolution_extent_reports_zero_as_unmeasurable(monkeypatch) -> None
                        json={"bbox": [-83.0, 25.0, -80.0, 28.0]}).json()
     assert wide["belowResolution"] is False
     assert wide["combined"]["totalTiv"] > 0
+
     # The floor is derived from the engine's own constants so the two can't drift.
     assert nwm_inundation.extent_area_deg2(
         {"type": "Polygon", "coordinates": [sliver]}
     ) < wildfire_exposure.resolution_deg2()
+
+
+def test_a_widespread_extent_is_still_priceable(monkeypatch) -> None:
+    """The regression that matters most: the work budget charges (candidates ×
+    TOTAL vertices), so an ordinary wide extent — measured live at 1,871 reaches
+    and ~200k vertices over the mid-Atlantic — costs 86M against a budget of 8M
+    and 422s. That would fail on exactly the widespread floods the button exists
+    for. Reaches holding no location are dropped first, which cannot move the
+    answer because they contribute no index.
+    """
+    from app.services import wildfire_exposure
+
+    big = _ring(-83.0, 25.0, -80.0, 28.0)
+    # Every sliver lies INSIDE `big`, so the union is unchanged by construction
+    # whether or not any of them happens to cover a synthetic location.
+    noise = [_reach([_sliver(-82.5 + i * 0.002, 26.0, 220)], fid=100 + i)
+             for i in range(300)]
+    features = [_reach([big], fid=1), *noise]
+    _patch_nwm(monkeypatch, {"type": "FeatureCollection", "features": features})
+
+    undropped = nwm_inundation.dissolve([f["geometry"] for f in features])
+    _, work = wildfire_exposure._cost(undropped)
+    assert work > wildfire_exposure._MAX_WORK, (
+        "fixture no longer reproduces the overrun it guards against"
+    )
+
+    r = client.post("/api/flood/inundation/exposure",
+                    json={"bbox": [-83.0, 25.0, -80.0, 28.0]})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["reaches"] == len(features)
+
+    alone = client.post("/api/flood/exposure", json={
+        "polygons": [{"id": "a", "geometry": {"type": "Polygon", "coordinates": [big]}}]
+    }).json()["combined"]
+    assert alone["totalTiv"] > 0, "fixture bbox no longer covers synthetic locations"
+    assert j["combined"]["totalTiv"] == pytest.approx(alone["totalTiv"], rel=1e-9)
+    assert j["combined"]["locationCount"] == alone["locationCount"]
+
+
+def test_malformed_upstream_geometry_cannot_crash_the_rollup(monkeypatch) -> None:
+    """This geometry comes off a third-party response and skips the request
+    validator, but the engine walks coordinates structurally: a string recurses
+    until the stack dies and a length-1 position raises IndexError. Both would
+    surface as a 500 on a live flood."""
+    _patch_nwm(monkeypatch, {"type": "FeatureCollection", "features": [
+        _reach([_ring(-83.0, 25.0, -80.0, 28.0)]),
+        {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": "abc"},
+         "properties": {}},
+        {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[0]]]},
+         "properties": {}},
+        {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[["a", "b"]]]},
+         "properties": {}},
+        {"type": "Feature", "geometry": {"type": "MultiPolygon", "coordinates": [[[[0]]]]},
+         "properties": {}},
+    ]})
+    j = client.get("/api/flood/inundation?bbox=-83.0,25.0,-80.0,28.0").json()
+    assert j["counts"]["reaches"] == 1
+
+    r = client.post("/api/flood/inundation/exposure",
+                    json={"bbox": [-83.0, 25.0, -80.0, 28.0]})
+    assert r.status_code == 200, r.text
+    assert r.json()["combined"]["totalTiv"] > 0
+
+
+def test_an_outage_is_distinguishable_from_a_dry_view(monkeypatch) -> None:
+    """Both are zero reaches and a null reference time. If only the wording of
+    `notes` separates them, a caller cannot branch and renders a bold 0 either
+    way — which reads as "no water" during an outage."""
+    def boom(req, timeout=None):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(nwm_inundation.urllib.request, "urlopen", boom)
+    down = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+
+    _patch_nwm(monkeypatch, {"type": "FeatureCollection", "features": []})
+    dry = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+
+    assert down["counts"] == dry["counts"] == {"reaches": 0}
+    assert down["referenceTime"] is dry["referenceTime"] is None
+    assert down["unavailable"] is True
+    assert dry["unavailable"] is False
+
+
+def test_an_oversized_upstream_body_is_refused(monkeypatch) -> None:
+    """The body is read into memory before it is parsed, so an upstream that
+    ignores its own feature cap must not be able to size this process."""
+    monkeypatch.setattr(nwm_inundation, "MAX_RESPONSE_BYTES", 64)
+    _patch_nwm(monkeypatch, {
+        "type": "FeatureCollection",
+        "features": [_reach([_ring(-95.5, 29.5, -95.4, 29.6)])],
+    })
+    j = client.get("/api/flood/inundation?bbox=-95.8,29.4,-94.9,30.2").json()
+    assert j["unavailable"] is True
+    assert j["counts"]["reaches"] == 0
 
 
 def test_extent_area_subtracts_holes() -> None:

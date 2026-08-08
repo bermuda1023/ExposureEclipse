@@ -74,9 +74,11 @@ export function FloodLayer({ map }: Props) {
 
   // Guarded rather than left to the server: past the cap the request can only
   // 422, and the panel tells the user to zoom in instead.
+  // `?? null` rather than leaving it undefined: FloodPanel keys the same query
+  // and the two spellings would be separate cache entries.
   const bbox = inundationBbox(viewBbox);
   const inundationQuery = useQuery({
-    queryKey: ["flood-inundation", bbox?.join(",")],
+    queryKey: ["flood-inundation", bbox?.join(",") ?? null],
     queryFn: () => fetchInundation(bbox!),
     enabled: active && showInundation && bbox !== null,
     // The model runs hourly, so a shorter window only adds load.

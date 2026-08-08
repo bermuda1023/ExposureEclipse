@@ -52,10 +52,15 @@ export const useLiveFloodStore = create<LiveFloodState>((set, get) => ({
   minSeverity: "Severe",
   viewBbox: null,
   selectedAlerts: [],
-  toggle: () => set({ active: !get().active, selectedAlerts: [] }),
-  setActive: (v) => set({ active: v }),
+  // `viewBbox` is cleared alongside every switch that stops it being updated.
+  // The layer only pushes the viewport while the extent is on, so a stale box
+  // would survive an off-pan-on cycle: the panel would still hold consent for
+  // it, both queries would still be inside their 10-minute staleTime, and the
+  // underwriter would see the previous city's exposed TIV over the new one.
+  toggle: () => set({ active: !get().active, selectedAlerts: [], viewBbox: null }),
+  setActive: (v) => set({ active: v, viewBbox: null }),
   setShowAlerts: (v) => set({ showAlerts: v }),
-  setShowInundation: (v) => set({ showInundation: v }),
+  setShowInundation: (v) => set({ showInundation: v, viewBbox: null }),
   setHideExposures: (v) => set({ hideExposures: v }),
   // Raising the floor drops alerts from the map; keeping them selected would
   // leave invisible polygons contributing to the combined TIV.

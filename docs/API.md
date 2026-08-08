@@ -691,6 +691,7 @@ water there is. `simplify=0.001` cut a Houston bbox from 4,146 vertices to 787
   "bbox": [-95.8, 29.4, -94.9, 30.2],
   "referenceTime": "2026-08-08 20:00:00",
   "truncated": false,
+  "unavailable": false,
   "inundation": {
     "type": "FeatureCollection",
     "features": [{
@@ -721,6 +722,11 @@ This route **fails soft**. If the model service is unreachable the response is a
 empty extent with an explicit note that this is *not* a statement that there is
 no flooding. An outage is never cached.
 
+Because it fails soft, an outage and a genuinely dry view are otherwise the same
+response — zero reaches, null `referenceTime`. `unavailable: true` is what
+separates them, so branch on it rather than on the wording of `notes`; rendering
+an outage as a bold `0` reaches reads as "no water here".
+
 ### `POST /api/flood/inundation/exposure`
 
 ```json
@@ -734,6 +740,17 @@ server-side into one multipart geometry before the rollup, which keeps the work
 budget meaningful and matches how an underwriter thinks about one flood event.
 Overlapping reaches do not double-count — the rollup collects location indices
 into a set.
+
+Reaches whose bounding box holds no synthetic location are dropped before the
+rollup. That is answer-preserving — such a reach contributes no index — and it
+is what makes the route usable at all: the work budget charges (candidate
+locations × *total* vertices), and a live 25 deg² mid-Atlantic extent measured
+1,871 reaches carrying 199,946 vertices, i.e. 86M charged operations against a
+budget of 8M. Without the drop the route would `422` on exactly the widespread
+floods it exists for; with it, that same extent prices at 96 operations.
+Coarsening `simplify` is *not* an alternative — measured, 50× coarser removed
+0.8% of the vertices, because the load is thousands of small separate reaches
+rather than a few over-detailed rings.
 
 Unlike the map route this **does not fail soft**: `503 UPSTREAM_UNAVAILABLE` if
 the model is unreachable. A zero exposed TIV would be indistinguishable from a

@@ -145,7 +145,9 @@ export function FloodPanel() {
               </div>
             ) : inundation.isFetching ? (
               <div style={{ color: "var(--ink-500)", fontSize: "0.64rem" }}>Loading modelled extent…</div>
-            ) : inundation.isError ? (
+            ) : inundation.isError || inundation.data?.unavailable ? (
+              // The route fails soft, so an outage arrives as a 200 with zero
+              // reaches. Rendering that as a bold 0 would read as "no water".
               <div style={{ color: "#b91c1c", fontSize: "0.64rem", lineHeight: 1.35 }}>
                 Couldn’t load the modelled extent. Treat this as unknown, not as dry.
               </div>

@@ -144,6 +144,11 @@ export interface InundationResponse {
   referenceTime: string | null;
   /** Upstream hit its feature cap — water is missing from this view. */
   truncated: boolean;
+  /**
+   * The model could not be reached. Zero reaches then means "unknown", not
+   * "dry" — branch on this rather than on the wording of `notes`.
+   */
+  unavailable: boolean;
   inundation: InundationFC;
   counts: { reaches: number };
   notes: string[];

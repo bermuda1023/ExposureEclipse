@@ -58,6 +58,11 @@ _CACHE_MAX_ENTRIES = 16
 # `exceededTransferLimit`. Measured: a 12°×11° box hit the cap at 5.3MB.
 ESRI_TRANSFER_LIMIT = 2000
 
+# The bbox cap keeps a well-behaved response near 5MB, so 32MB is far above any
+# legitimate payload. It bounds what a misbehaving upstream can make this
+# process allocate, since the body is read into memory before it is parsed.
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
+
 # A flood event is thousands of small per-reach polygons, so payload is driven
 # by area, not by how much water there is. 25 deg² is roughly a large metro or
 # a small state — past that the response truncates silently and the map lies by
@@ -102,6 +107,25 @@ def bbox_area_deg2(bbox: tuple[float, float, float, float]) -> float:
     return abs(east - west) * abs(north - south)
 
 
+def _well_formed(coords, depth: int) -> bool:
+    """True if ``coords`` is a ring nest of numeric positions ``depth`` levels down.
+
+    The exposure engine walks coordinates structurally and trusts what it finds:
+    a string there recurses until the stack dies, and a length-1 position raises
+    IndexError. Its own callers validate before handing geometry over, but this
+    geometry comes off a third-party HTTP response instead, so the boundary
+    check has to happen here.
+    """
+    if not isinstance(coords, list) or not coords:
+        return False
+    if depth == 0:
+        return (
+            len(coords) >= 2
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in coords[:2])
+        )
+    return all(_well_formed(c, depth - 1) for c in coords)
+
+
 def _clean(feature: dict) -> dict | None:
     """Keep the geometry and the two attributes worth showing.
 
@@ -112,7 +136,8 @@ def _clean(feature: dict) -> dict | None:
     geom = feature.get("geometry")
     if not isinstance(geom, dict) or geom.get("type") not in ("Polygon", "MultiPolygon"):
         return None
-    if not geom.get("coordinates"):
+    # Polygon nests position→ring→polygon; MultiPolygon adds one more level.
+    if not _well_formed(geom.get("coordinates"), 2 if geom["type"] == "Polygon" else 3):
         return None
     props = feature.get("properties") or {}
     return {
@@ -178,7 +203,14 @@ def fetch_inundation(
         )
         try:
             with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
-                data = json.loads(r.read().decode("utf-8"))
+                raw_body = r.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw_body) > MAX_RESPONSE_BYTES:
+                raise InundationUnavailable(
+                    f"response exceeded {MAX_RESPONSE_BYTES:,} bytes"
+                )
+            data = json.loads(raw_body.decode("utf-8"))
+        except InundationUnavailable:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise InundationUnavailable(str(exc)) from exc
         # ArcGIS reports failures in a 200 body as well as by status code.
@@ -249,8 +281,8 @@ def extent_area_deg2(geom: dict | None) -> float:
     return max(total, 0.0)
 
 
-def dissolved_geometry(features: list[dict]) -> dict | None:
-    """Every reach footprint as one MultiPolygon.
+def dissolve(geoms: list[dict]) -> dict | None:
+    """Polygon/MultiPolygon geometries combined into one MultiPolygon.
 
     A flood event arrives as thousands of per-reach polygons, well past the
     50-polygon cap on the exposure endpoint. Combining them keeps the work
@@ -261,9 +293,8 @@ def dissolved_geometry(features: list[dict]) -> dict | None:
     into a set, so overlapping reaches already count each location once.
     """
     parts: list = []
-    for f in features:
-        geom = f.get("geometry") or {}
-        coords = geom.get("coordinates")
+    for geom in geoms:
+        coords = (geom or {}).get("coordinates")
         if not coords:
             continue
         if geom.get("type") == "Polygon":
@@ -273,6 +304,11 @@ def dissolved_geometry(features: list[dict]) -> dict | None:
     if not parts:
         return None
     return {"type": "MultiPolygon", "coordinates": parts}
+
+
+def dissolved_geometry(features: list[dict]) -> dict | None:
+    """Every reach footprint in ``features`` as one MultiPolygon."""
+    return dissolve([f.get("geometry") or {} for f in features])
 
 
 __all__ = [
@@ -285,5 +321,6 @@ __all__ = [
     "bbox_area_deg2",
     "extent_area_deg2",
     "fetch_inundation",
+    "dissolve",
     "dissolved_geometry",
 ]
