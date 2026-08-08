@@ -36,11 +36,14 @@ import { LiveStormPanel } from "./LiveStormPanel";
 import { WildfireLayer } from "./WildfireLayer";
 import { WildfirePanel } from "./WildfirePanel";
 import { WildfireLegend } from "./WildfireLegend";
+import { FloodLayer } from "./FloodLayer";
+import { FloodPanel } from "./FloodPanel";
 import { WindMapLegend } from "./WindMapLegend";
 import { WindParticleLayer } from "./WindParticleLayer";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { useHazardOverlayStore } from "../../state/hazardOverlay";
 import { useLiveWildfireStore } from "../../state/liveWildfire";
+import { useLiveFloodStore } from "../../state/liveFlood";
 import { MapTooltip } from "./Tooltip";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ?? "";
@@ -542,18 +545,25 @@ export function MapView({ data, isLoading, error }: Props) {
   }, [focusedGeoid, impactData]);
 
   // ── Exposure-fill visibility (single owner) ──
-  // Both the hazard heatmap and the wildfire overlay want the TIV choropleth
-  // out of the way, and both used to set visibility themselves. Whichever ran
-  // last won, so clearing a hazard chip un-hid the fills underneath an active
-  // wildfire overlay. Owning it here means the two requests OR together.
+  // The hazard heatmap and the wildfire/flood overlays all want the TIV
+  // choropleth out of the way, and each used to set visibility itself.
+  // Whichever ran last won, so clearing a hazard chip un-hid the fills
+  // underneath an active wildfire overlay. Owning it here means the requests
+  // OR together.
   const hazardActive = useHazardOverlayStore((s) => s.active);
   const wildfireHidesExposures = useLiveWildfireStore(
+    (s) => s.active && s.hideExposures,
+  );
+  const floodHidesExposures = useLiveFloodStore(
     (s) => s.active && s.hideExposures,
   );
   useEffect(() => {
     const m = mapInstance;
     if (!m) return;
-    const visibility = hazardActive !== null || wildfireHidesExposures ? "none" : "visible";
+    const visibility =
+      hazardActive !== null || wildfireHidesExposures || floodHidesExposures
+        ? "none"
+        : "visible";
     const apply = () => {
       for (const id of [STATE_FILL, COUNTY_FILL]) {
         if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", visibility);
@@ -564,7 +574,7 @@ export function MapView({ data, isLoading, error }: Props) {
     return () => {
       m.off("style.load", apply);
     };
-  }, [mapInstance, hazardActive, wildfireHidesExposures]);
+  }, [mapInstance, hazardActive, wildfireHidesExposures, floodHidesExposures]);
 
   // ── Render ──
   if (!hasToken) {
@@ -589,9 +599,11 @@ export function MapView({ data, isLoading, error }: Props) {
       <LiveStormLayer map={mapInstance} />
       <WindParticleLayer map={mapInstance} />
       <WildfireLayer map={mapInstance} />
+      <FloodLayer map={mapInstance} />
       <LiveStormPanel />
       <WildfirePanel />
       <WildfireLegend />
+      <FloodPanel />
       <WindMapLegend />
       {isLoading && (
         <Pill>

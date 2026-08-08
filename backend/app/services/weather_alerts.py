@@ -21,7 +21,21 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-NWS_USER_AGENT = "exposure-eclipse/1.0 (contact: support@example.invalid)"
+
+class AlertFeedUnavailable(RuntimeError):
+    """The NWS alerts feed could not be reached or parsed.
+
+    Distinct from "the feed returned nothing": callers must be able to tell an
+    outage from a quiet day before telling a user there is no active weather.
+    """
+
+
+# A real contact, matching marine_obs.py — NWS asks for one and may throttle
+# or block placeholder agents, which would take the flood overlay down.
+NWS_USER_AGENT = (
+    "ExposureEclipse/1.0 (+https://github.com/bermuda1023/ExposureEclipse; "
+    "contact james.anfossi@accountingbda.com)"
+)
 NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 FETCH_TIMEOUT_S = 30
 
@@ -99,8 +113,12 @@ def fetch_active_alerts(
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
             data = json.loads(r.read().decode("utf-8"))
-    except Exception:  # noqa: BLE001
-        return []
+    except Exception as exc:  # noqa: BLE001
+        # Raise rather than return []. An empty list is indistinguishable from a
+        # genuinely quiet feed, and a caller that caches it then reports "no
+        # active alerts" — a confident all-clear during a live event. Callers
+        # that want soft-fail must say so explicitly.
+        raise AlertFeedUnavailable(str(exc)) from exc
 
     out: list[WeatherAlert] = []
     for f in data.get("features", []) or []:

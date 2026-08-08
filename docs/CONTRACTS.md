@@ -198,6 +198,7 @@ Warning object shape:
 | `ERT_JOB_FAILED` | 200* | yes (job status = failed; not an HTTP error) |
 | `JOB_NOT_FOUND` | 404 | yes |
 | `EXPORT_TOO_LARGE` | 413 | yes |
+| `GEOMETRY_TOO_COMPLEX` | 422 | yes (polygon exposure requests priced above the work budget) |
 | `INTERNAL_ERROR` | 500 | yes (generic) |
 
 \* These are domain outcomes, not transport failures — they ride in the response body.

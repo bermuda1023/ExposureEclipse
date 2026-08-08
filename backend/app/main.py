@@ -32,6 +32,7 @@ from .api import (
     ert_jobs,
     exports,
     exposures,
+    flood,
     fund_analysis,
     hazards,
     hurricanes,
@@ -110,6 +111,7 @@ app.include_router(hurricanes.router, prefix="/api")
 app.include_router(hazards.router, prefix="/api")
 app.include_router(live.router, prefix="/api")
 app.include_router(wildfire.router, prefix="/api")
+app.include_router(flood.router, prefix="/api")
 app.include_router(fund_analysis.router, prefix="/api")
 
 

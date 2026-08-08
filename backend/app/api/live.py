@@ -28,7 +28,7 @@ from ..services.live_hurricane import (
 )
 from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.sea_surface_temp import sst_field
-from ..services.weather_alerts import fetch_active_alerts
+from ..services.weather_alerts import AlertFeedUnavailable, fetch_active_alerts
 from ..services.wind_field_map import wind_field_grid
 from ..services.wind_forecast import fetch_model_wind_grid, point_forecast
 
@@ -449,7 +449,13 @@ def live_storm_bundle(
         # Live alerts as of today — used for demo even when the replay storm
         # is historical, per user instruction.
         states = _states_in_bbox(bbox)
-        for a in fetch_active_alerts(bbox=bbox, states=states or None):
+        try:
+            live_alerts = fetch_active_alerts(bbox=bbox, states=states or None)
+        except AlertFeedUnavailable:
+            # Alerts are context around the storm, not the storm itself — the
+            # bundle is still useful without them.
+            live_alerts = []
+        for a in live_alerts:
             alerts_out.append(
                 WeatherAlertOut(
                     alert_id=a.alert_id,

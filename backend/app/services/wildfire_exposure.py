@@ -254,35 +254,48 @@ def _candidates(ls: LocationSet, bb: tuple[float, float, float, float]) -> list[
     return out
 
 
-def _indices_in_polygon(geom: dict) -> set[int]:
-    """Indices of synthetic locations falling inside ``geom``.
+def _cost(geom: dict) -> tuple[list[int], int]:
+    """Candidate location indices for ``geom`` and the cost of ray-casting them.
 
-    Uses the 0.5° grid index to restrict candidate testing to cells overlapping
-    the polygon's bounding box, then ray-casts (even-odd) each candidate.
+    Uses the 0.5° grid index to restrict candidates to cells overlapping the
+    polygon's bounding box. Cost is (candidates × vertices): the location set is
+    fixed and small, but a caller controls the vertex count AND — through the
+    bbox — how many candidates get swept in, so the product is what must be
+    bounded. Neither factor alone is enough: a CONUS-wide ring at 100k vertices
+    measured 64s against a 30s function budget while passing every per-field
+    check.
 
-    Raises:
-        ValueError: if the ray-cast would exceed ``_MAX_WORK``.
+    Cheap to call — it stops short of the ray-cast, so callers can price a
+    request before committing to it.
     """
     ls = _load_locations()
     bb = _bbox(geom)
     if bb is None or not ls.locations:
-        return set()
+        return [], 0
     cands = _candidates(ls, bb)
-    # Ray-cast cost is (candidates × vertices). The location set is fixed and
-    # small, but a caller controls the vertex count AND — through the bbox —
-    # how many candidates get swept in, so the product is what must be bounded.
-    # Neither factor alone is enough: a CONUS-wide ring at 100k vertices
-    # measured 64s against a 30s function budget while passing every
-    # per-field check.
-    work = len(cands) * max(1, _vertex_count(geom))
+    return cands, len(cands) * max(1, _vertex_count(geom))
+
+
+def _cast(cands: list[int], geom: dict) -> set[int]:
+    ls = _load_locations()
+    return {idx for idx in cands
+            if point_in_geometry(ls.locations[idx].lon, ls.locations[idx].lat, geom)}
+
+
+def _indices_in_polygon(geom: dict) -> set[int]:
+    """Indices of synthetic locations falling inside ``geom``.
+
+    Raises:
+        ValueError: if the ray-cast would exceed ``_MAX_WORK``.
+    """
+    cands, work = _cost(geom)
     if work > _MAX_WORK:
         raise ValueError(
             f"geometry too expensive to evaluate ({work:,} point-in-polygon "
             f"operations, limit {_MAX_WORK:,}); simplify it or submit fewer "
             f"polygons"
         )
-    return {idx for idx in cands
-            if point_in_geometry(ls.locations[idx].lon, ls.locations[idx].lat, geom)}
+    return _cast(cands, geom)
 
 
 def _rollup(indices: set[int]) -> tuple[float, int, dict[str, tuple[float, int]]]:
@@ -317,9 +330,23 @@ def exposure_in_polygons(
     cost of every request.
 
     Raises:
-        ValueError: if a geometry would exceed the ray-cast work budget.
+        ValueError: if the request as a whole would exceed the work budget.
     """
-    per = [_indices_in_polygon(g) for g in geoms]
+    # Budget the REQUEST, not each polygon. Per-polygon was the original guard,
+    # but the caps compose badly: 50 polygons each just under the limit passes
+    # every per-field check and the vertex cap, and measured 69s against a 30s
+    # function budget. Pricing is cheap (bbox + grid lookup), so charge for the
+    # whole request before ray-casting any of it.
+    costs = [_cost(g) for g in geoms]
+    total = sum(w for _, w in costs)
+    if total > _MAX_WORK:
+        raise ValueError(
+            f"request too expensive to evaluate ({total:,} point-in-polygon "
+            f"operations across {len(geoms)} polygon(s), limit {_MAX_WORK:,}); "
+            f"simplify the geometry or submit fewer polygons"
+        )
+
+    per = [_cast(cands, g) for (cands, _), g in zip(costs, geoms)]
     union: set[int] = set()
     for s in per:
         union |= s

@@ -553,6 +553,111 @@ field (ISO 4217). CONTRACTS.md §12 currency rules apply — if the exposure
 plane spans more than one currency the values are not combinable, so the
 rollup is reported as 0 with an entry in `warnings[]`.
 
+## Live flood overlay
+
+Active NWS flood watches, warnings and advisories as GeoJSON polygons, plus
+exposed TIV by client for a selected set of them. Live layer, like the storm
+and wildfire bundles — not part of the mock data plane.
+
+| Verb | Path | Purpose |
+|---|---|---|
+| GET | `/api/flood/active` | polygon-bearing NWS flood alerts + affected-state roll-up |
+| POST | `/api/flood/exposure` | Exposed TIV by client inside submitted alert polygon(s) |
+
+Source: NOAA / National Weather Service `api.weather.gov/alerts/active`
+(keyless). Results are cached for 60 s per (bbox, states, severity floor,
+event set); the cache key includes the severity floor so a `Severe`-filtered
+response can never be served to an unfiltered caller.
+
+### `GET /api/flood/active`
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `bbox` | `west,south,east,north` | none | lon/lat, EPSG:4326. Omit for nationwide. `422` unless west<east and south<north. |
+| `minSeverity` | `Unknown\|Minor\|Moderate\|Severe\|Extreme` | `Unknown` | CAP severity floor. `422` on anything else. |
+
+Only flood products are fetched — `Flood`, `Flash Flood`, `Coastal Flood` and
+`Lakeshore Flood` × Warning/Watch/Advisory/Statement. That filter is what keeps
+a hurricane or winter-storm alert off the flood map.
+
+**Severity is the only "how bad" signal that arrives attached to the geometry.**
+NWS alert polygons carry no depth, no return period and no flood category, so
+`minSeverity=Severe` is the practical approximation of "major flooding only" —
+and it is the frontend default for that reason.
+
+```json
+{
+  "generatedAt": "2026-08-08T14:02:11Z",
+  "bbox": null,
+  "minSeverity": "Severe",
+  "alerts": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "id": "urn:oid:2.49.0.1.840.0.264ec87f…",
+        "geometry": { "type": "Polygon", "coordinates": [...] },
+        "properties": {
+          "alertId": "urn:oid:2.49.0.1.840.0.264ec87f…",
+          "event": "Flash Flood Warning",
+          "headline": "Flash Flood Warning issued August 8 …",
+          "severity": "Severe",
+          "severityRank": 3,
+          "urgency": "Immediate",
+          "certainty": "Observed",
+          "sentAt": "2026-08-08T12:00:00Z",
+          "expiresAt": "2026-08-08T18:00:00Z",
+          "areaDesc": "Houston, TN; Stewart, TN"
+        }
+      }
+    ]
+  },
+  "affectedStates": [{ "state": "TN", "alertCount": 4 }],
+  "counts": { "alerts": 19, "zoneOnly": 1 },
+  "notes": ["1 alert is zone-coded and carries no polygon, so it is not mapped."],
+  "attribution": { "alerts": "NOAA / National Weather Service active alerts", "alertsUrl": "…" }
+}
+```
+
+`severityRank` is the numeric twin of `severity` (`Unknown`=0 … `Extreme`=4) so
+the Mapbox fill ramp can interpolate without a string-match expression. The two
+always agree — they come from the same source field.
+
+The feature `id` is the upstream NWS URN. Unlike wildfire heat shapes, which are
+re-derived on every fetch and therefore need a geometry hash for a stable
+selection key, alert ids are already stable, so they are used directly.
+
+**Zone-coded alerts.** Coastal and Lakeshore products and most Watches are
+issued against NWS zone codes rather than polygons. They cannot be drawn or
+intersected, so they are excluded from `alerts` and reported in
+`counts.zoneOnly` **with an explanatory entry in `notes[]`** — an alert that
+vanished silently would understate the event. `zoneOnly` means "had no
+geometry" and never counts alerts dropped by `minSeverity`.
+
+`affectedStates` is parsed from the free-text `areaDesc` (`"Houston, TN;
+Stewart, TN"`). A trailing token that is not a 2-letter code is ignored rather
+than becoming a phantom state.
+
+### `POST /api/flood/exposure`
+
+Same request/response shape, same limits and the same engine as
+[`POST /api/wildfire/exposure`](#post-apiwildfireexposure) — at most 50
+polygons and 100,000 total ring vertices, `422` on malformed or oversized
+geometry, `503 UPSTREAM_UNAVAILABLE` if the exposure plane cannot be loaded,
+and the same rules 3+4 max-across-perils rollup. The shared validation lives in
+`backend/app/api/geometry_input.py` so the two routes cannot drift apart.
+
+`combined` is the union across every submitted polygon with each location
+counted **once**. Adjacent flood warnings routinely overlap, so summing
+`results` double-counts the shared ground.
+
+**IMPORTANT — two stacked caveats.** The exposure is `synthetic: true` for the
+same reason wildfire's is (county-aggregated TIV spread over deterministic
+synthetic points). On top of that, **alert polygons are warning areas**, often
+drawn to county or zone boundaries rather than observed water extent, so the
+exposed TIV is an **upper bound** on the affected area. Both are stated in the
+response `note` and surfaced in the UI.
+
 ## Hazard overlays (tornado / hail / wildfire)
 
 | Verb | Path | Purpose |
@@ -719,6 +824,8 @@ still work (JSON facts). Under `hybrid`/`sqlserver`, servers come from
 | GET | `/api/live/storms/{atcfId}` |
 | GET | `/api/wildfire/active` |
 | POST | `/api/wildfire/exposure` |
+| GET | `/api/flood/active` |
+| POST | `/api/flood/exposure` |
 | GET | `/api/hazards/{tornado\|hail\|wildfire}` |
 | GET | `/api/counties/{geographyId}/reference` |
 | POST | `/api/calc/layers` |

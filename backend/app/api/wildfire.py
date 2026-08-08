@@ -23,20 +23,14 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import Field, field_validator
 
 from ..config import get_settings
 from ..models.common import CamelModel
 from ..services.live_wildfire import build_wildfire_bundle
 from ..services import wildfire_exposure
+from .geometry_input import ExposureRequest, PolygonExposureOut, exposure_out
 
 router = APIRouter(prefix="/wildfire", tags=["wildfire"])
-
-# Caller-supplied geometry drives a grid walk and a point-in-polygon sweep, so
-# the polygon count and total vertex count are capped here; the service applies
-# a further (candidates × vertices) work budget that these alone can't express.
-_MAX_POLYGONS = 50
-_MAX_VERTICES = 100_000
 
 
 def _shape_id(geometry: dict) -> str:
@@ -281,76 +275,6 @@ def get_active_wildfire(
 # ─────────────────── exposed TIV inside fire polygons ───────────────────
 
 
-def _rings_of(geom: dict) -> list:
-    """Flatten a GeoJSON Polygon/MultiPolygon to its list of rings, validating
-    structure. Raises ValueError on anything we would not want to walk."""
-    gtype = geom.get("type")
-    coords = geom.get("coordinates")
-    if gtype == "Polygon":
-        rings = coords
-    elif gtype == "MultiPolygon":
-        if not isinstance(coords, list):
-            raise ValueError("coordinates must be a list")
-        rings = [r for poly in coords for r in (poly if isinstance(poly, list) else [])]
-    else:
-        raise ValueError("geometry type must be Polygon or MultiPolygon")
-    if not isinstance(rings, list) or not rings:
-        raise ValueError("geometry has no rings")
-    return rings
-
-
-class PolygonIn(CamelModel):
-    id: str = Field(max_length=200)
-    name: str | None = Field(default=None, max_length=200)
-    geometry: dict  # GeoJSON Polygon / MultiPolygon
-
-    @field_validator("geometry")
-    @classmethod
-    def _validate_geometry(cls, v: dict) -> dict:
-        # The rollup derives a bbox from these numbers and walks a 0.5° grid
-        # between the corners, so unbounded coordinates are a DoS, not a typo.
-        for ring in _rings_of(v):
-            if not isinstance(ring, list) or len(ring) < 4:
-                raise ValueError("each ring needs at least 4 positions")
-            for pos in ring:
-                if not isinstance(pos, list) or len(pos) < 2:
-                    raise ValueError("ring positions must be [lon, lat]")
-                lon, lat = pos[0], pos[1]
-                if isinstance(lon, bool) or isinstance(lat, bool):
-                    raise ValueError("ring positions must be numbers")
-                if not isinstance(lon, (int, float)) or not isinstance(lat, (int, float)):
-                    raise ValueError("ring positions must be numbers")
-                if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
-                    raise ValueError("coordinates must be within WGS84 bounds")
-        return v
-
-
-class ExposureRequest(CamelModel):
-    polygons: list[PolygonIn] = Field(max_length=_MAX_POLYGONS)
-
-    @field_validator("polygons")
-    @classmethod
-    def _validate_budget(cls, v: list[PolygonIn]) -> list[PolygonIn]:
-        total = sum(len(r) for p in v for r in _rings_of(p.geometry))
-        if total > _MAX_VERTICES:
-            raise ValueError(f"at most {_MAX_VERTICES} vertices per request")
-        return v
-
-
-class ClientExposureOut(CamelModel):
-    client: str
-    tiv: float
-    location_count: int
-
-
-class PolygonExposureOut(CamelModel):
-    id: str
-    name: str | None
-    total_tiv: float
-    location_count: int
-    by_client: list[ClientExposureOut]
-
-
 class WildfireExposureResponse(CamelModel):
     currency: str
     synthetic: bool
@@ -358,21 +282,6 @@ class WildfireExposureResponse(CamelModel):
     results: list[PolygonExposureOut]
     combined: PolygonExposureOut
     warnings: list[str]
-
-
-def _out(pid: str, name: str | None, rollup: tuple) -> PolygonExposureOut:
-    total, count, by_client = rollup
-    return PolygonExposureOut(
-        id=pid,
-        name=name,
-        total_tiv=round(total, 2),
-        location_count=count,
-        by_client=sorted(
-            [ClientExposureOut(client=c, tiv=round(t, 2), location_count=n)
-             for c, (t, n) in by_client.items()],
-            key=lambda x: -x.tiv,
-        ),
-    )
 
 
 @router.post("/exposure", response_model=WildfireExposureResponse)
@@ -407,8 +316,8 @@ def post_wildfire_exposure(req: ExposureRequest) -> WildfireExposureResponse:
             "message": str(exc),
         }) from exc
 
-    results = [_out(p.id, p.name, r) for p, r in zip(req.polygons, per)]
-    combined = _out("combined", None, union)
+    results = [exposure_out(p.id, p.name, r) for p, r in zip(req.polygons, per)]
+    combined = exposure_out("combined", None, union)
 
     return WildfireExposureResponse(
         currency=currency,
