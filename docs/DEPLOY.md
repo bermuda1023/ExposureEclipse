@@ -40,6 +40,8 @@ Optional (defaults are fine for mock):
 | `FACT_CACHE_MAX_DATASETS` | `256` | LRU size per lambda instance |
 | `FACT_CACHE_TTL_SECONDS` | `3600` | per-instance only |
 | `FACT_LOAD_MAX_WORKERS` | `16` | parallel fact loads |
+| `CORS_ALLOW_ORIGINS` | `http://localhost:5173,…` | comma-separated allowed origins; change when hosting API separately |
+| `FIRMS_MAP_KEY` | unset | NASA FIRMS key (free: https://firms.modaps.eosdis.nasa.gov/api/map_key/). Without it the live wildfire overlay still serves WFIGS perimeters — only the satellite heat layer is gated, and its absence comes back as a `notes[]` entry on `/api/wildfire/active`. |
 
 Do **not** put production SQL passwords on Vercel for a firm demo unless you
 have an explicit security review. Use mock fixtures publicly; hybrid/SQL on

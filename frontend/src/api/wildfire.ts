@@ -36,6 +36,8 @@ export interface ActiveFire {
 }
 
 export interface HeatShapeProps {
+  /** Stable handle for click-to-select; do NOT derive one from the cursor. */
+  shapeId: string;
   detectionCount: number;
   maxFrpMw: number | null;
   sumFrpMw: number | null;
@@ -118,6 +120,13 @@ export interface WildfireExposureResponse {
   synthetic: boolean;
   note: string;
   results: PolygonExposure[];
+  /**
+   * Union across every submitted polygon with each location counted once.
+   * Use this rather than summing `results` — an official perimeter and the
+   * heat shape over the same fire overlap, and summing double-counts it.
+   */
+  combined: PolygonExposure;
+  warnings: string[];
 }
 
 export const fetchWildfireExposure = (

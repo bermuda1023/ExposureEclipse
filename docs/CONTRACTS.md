@@ -286,10 +286,15 @@ uses acres-weighted KDE alone (perimeter data isn't human-reported, so it
 has no population bias to correct). See `docs/CALCULATIONS.md §Hazard
 climatology blend`.
 
-The wildfire chip is currently hidden from `HazardOverlayControls` because
-the WFIGS dataset only covers 2020-present, which skews the picture. The
-backend grid + endpoint stay live — re-add the wildfire entry to the
-`HAZARDS` array in `HazardOverlayControls.tsx` to bring the chip back.
+The wildfire **hazard-grid** chip (`/api/hazards/wildfire`) remains hidden
+from `HazardOverlayControls` — the WFIGS 2020-present dataset is too short
+to give a reliable climatological picture. Re-add the wildfire entry to the
+`HAZARDS` array in `HazardOverlayControls.tsx` to surface it.
+
+Note: this hazard grid is distinct from the **live wildfire overlay**
+(`/api/wildfire/active`), which shows current WFIGS perimeters + NASA FIRMS
+satellite heat and is fully active in the UI via the `WildfireControls` chip.
+See `docs/API.md §Live wildfire overlay`.
 
 ## 19. Hurricane loss assumption stores
 

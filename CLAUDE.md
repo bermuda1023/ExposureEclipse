@@ -17,7 +17,7 @@ NHC-style live-storm forecasts with marine + alert + SST context.
 `hybrid` / `sqlserver` read the same pre-aggregated cut shape from real EDM
 databases via a multi-host connection registry (`EDMRef.serverName`).
 
-## Capability snapshot (2026-06-29)
+## Capability snapshot (2026-08-07)
 
 - **Exposure map** — choropleth at state / county grain via Mapbox vector
   tilesets, peril multi-select, YoY, programme/chain/cedent/office/portfolio
@@ -40,20 +40,32 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
   observed track, advisory history (synthetic forecast cone), NWS active
   alerts within the cone, NDBC buoys + NWS land-station obs, and a JPL MUR
   SST grid for the bbox.
-- **Hazard overlays** — `/api/hazards/{tornado|hail|wildfire}` returns a
-  pre-baked 0.2° lat/lon hazard-index grid. Tornado + hail blend the real
-  SPC SVRGIS shapefile (KDE-smoothed, recency- and mag-weighted) with a
+- **Hazard overlays (pre-baked grid)** — `/api/hazards/{tornado|hail|wildfire}`
+  returns a pre-baked 0.2° lat/lon hazard-index grid. Tornado + hail blend the
+  real SPC SVRGIS shapefile (KDE-smoothed, recency- and mag-weighted) with a
   smooth Brooks/Tippett/Cintineo climatology prior (60% climatology / 40%
   history) — no per-city bias correction. Wildfire is acres-weighted KDE of
-  WFIGS perimeters; wildfire chip is currently hidden in the UI but the
-  endpoint + grid are live.
+  WFIGS perimeters; the wildfire hazard-grid chip is currently hidden in the UI
+  (dataset covers only 2020-present, too short for reliable climatology) but
+  the endpoint + grid are live.
+- **Live wildfire overlay** — `/api/wildfire/active` and
+  `/api/wildfire/exposure`. Real-time NIFC/WFIGS burn-area perimeters + NASA
+  FIRMS satellite thermal detections (VIIRS/MODIS). Three toggleable Mapbox
+  layers: official perimeters, heat-shape footprints (our own clustered
+  footprints from FIRMS), and raw detection points. Underwriters can
+  multi-select and combine fire polygons, then run exposed-TIV-by-client
+  through the XOL layer-calc engine. Exposed TIV is **synthetic** in v1
+  (county-aggregated data; no per-location lat/lon) — flagged `synthetic: true`
+  on the wire and surfaced in the UI. See `docs/CALCULATIONS.md §Wildfire
+  exposed TIV (synthetic point method)`. Requires `FIRMS_MAP_KEY` env var
+  (free) for the heat layer; perimeters work without it.
 - **Admin programmes** (`/admin/programmes`) — treaty-metadata table that
   maps each FS-display treaty ID → its EDM server + database, with CSV
   import and auto-suggest. Not linked from the header nav.
 - **Layer calc engine** — `POST /api/calc/layers` runs deterministic XOL
   scenarios (TIV × damage ratio through deductible/limit/share stacks),
-  payout curves via the default damage-ratio sweep. Engine is wired; no
-  frontend UI yet.
+  payout curves via the default damage-ratio sweep. Wired into the wildfire
+  exposure panel; no standalone frontend UI yet.
 - **Excel export** — works for any scope (single deal, chain, cedent,
   portfolio, scope-filtered) and dumps the most-granular fact rows.
 

@@ -4,7 +4,7 @@
  *   - heatShapes  : our own footprints, clustered from FIRMS over `heatDays`
  *   - heat        : raw FIRMS satellite detections
  *
- * `heatDays` is the FIRMS look-back (chained ≤5-day windows, up to 14).
+ * `heatDays` is the FIRMS look-back (chained ≤5-day windows, up to 30).
  * `minSize` cleans small hotspots (factories / one-off fires). `selectedFire`
  * drives the exposed-TIV-by-client rollup + perimeter highlight.
  */

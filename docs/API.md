@@ -345,6 +345,214 @@ Query toggles: `asOfIndex`, `includeObs`, `includeAlerts`, `includeSst`,
 from IBTrACS for a retired storm (replay mode). Real-time NHC text-advisory
 scraping is out of scope for v1.
 
+## Live wildfire overlay
+
+Live-data layer, not part of the mock data plane. Sources are NIFC/WFIGS
+(burn-area perimeters) and NASA FIRMS (satellite thermal anomalies). Both are
+fetched at request time; results are cached in-process with short TTLs
+(perimeters 10 min; FIRMS 30 min). Every upstream failure degrades gracefully
+— the endpoint returns what it has and describes the shortfall in `notes[]`.
+
+See `docs/CALCULATIONS.md §Live wildfire overlay` for the clustering and
+footprint-tracing algorithms.
+
+| Verb | Path | Purpose |
+|---|---|---|
+| GET | `/api/wildfire/active` | WFIGS perimeters + FIRMS satellite heat + affected-state roll-up |
+| POST | `/api/wildfire/exposure` | Exposed TIV by client inside submitted fire polygon(s) |
+
+### `GET /api/wildfire/active`
+
+Query parameters:
+
+| Param | Type | Default | Constraint | Notes |
+|---|---|---|---|---|
+| `bbox` | string | CONUS | `west,south,east,north` (lon/lat) | Omit for CONUS default |
+| `dayRange` | int | 3 | 1–30 | FIRMS look-back; chained ≤5-day windows (FIRMS API cap) |
+| `includeHeat` | bool | true | — | Fetch NASA FIRMS active-fire pixels |
+| `includePerimeters` | bool | true | — | Fetch WFIGS burn-area polygons |
+| `simplify` | float | 0.005 | 0.0–0.05 | Perimeter generalisation in degrees (0 = full resolution; 0.005 ≈ 550 m, ~70× smaller payload) |
+| `minCells` | int | 2 | 1–20 | Minimum distinct grid cells for a heat cluster to be kept (removes point sources) |
+| `minDetections` | int | 4 | 1–200 | Minimum FIRMS detections per cluster |
+| `minConfidence` | string | `nominal` | `low\|nominal\|high` | Drop VIIRS/MODIS detections below this confidence band |
+| `minFrp` | float | 0.0 | ≥ 0 | Drop detections with FRP (MW) below this threshold |
+
+`FIRMS_MAP_KEY` must be set for heat to populate; omitting it returns WFIGS
+perimeters only, with an explanatory message in `notes[]`.
+
+Response:
+
+```json
+{
+  "generatedAt": "2026-08-07T14:23:00Z",
+  "bbox": [-125.0, 24.0, -66.5, 50.0],
+  "dayRange": 3,
+  "perimeters": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "id": "{irwinId}",
+        "geometry": { "type": "Polygon", "coordinates": [...] },
+        "properties": {
+          "incidentId": "...",
+          "name": "PARK FIRE",
+          "gisAcres": 429603.0,
+          "incidentSizeAcres": 429603.0,
+          "percentContained": 62.0,
+          "cause": "Human",
+          "discoveryAt": "2024-07-24T14:00:00Z",
+          "perimeterUpdatedAt": "2026-08-06T08:00:00Z",
+          "state": "CA"
+        }
+      }
+    ]
+  },
+  "heatShapes": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "geometry": { "type": "Polygon", "coordinates": [...] },
+        "properties": {
+          "shapeId": "heat-0",
+          "detectionCount": 312,
+          "maxFrpMw": 847.3,
+          "sumFrpMw": 12043.8,
+          "firstDetectedAt": "2026-08-05T02:00:00Z",
+          "lastDetectedAt": "2026-08-07T10:00:00Z"
+        }
+      }
+    ]
+  },
+  "activeFires": [
+    {
+      "lat": 39.87, "lon": -121.43,
+      "brightnessK": 368.2, "frpMw": 312.4,
+      "confidence": "high", "satellite": "S-NPP",
+      "source": "VIIRS_SNPP_NRT",
+      "acquiredAt": "2026-08-07T10:00:00Z"
+    }
+  ],
+  "affectedStates": [
+    { "state": "CA", "fireCount": 14, "acres": 438201.0 }
+  ],
+  "counts": {
+    "perimeters": 14,
+    "activeFires": 2847,
+    "activeFiresTotal": 31200,
+    "heatShapes": 8
+  },
+  "notes": ["Showing 2,847 of 31,200 detections (thinned for display); shapes use all of them."],
+  "attribution": {
+    "perimeters": "NIFC / WFIGS Interagency Perimeters (Current)",
+    "perimetersUrl": "https://data-nifc.opendata.arcgis.com/datasets/nifc::wfigs-interagency-perimeters-current",
+    "activeFires": "NASA FIRMS (VIIRS/MODIS active fire, NRT)",
+    "activeFiresUrl": "https://firms.modaps.eosdis.nasa.gov/"
+  }
+}
+```
+
+`heatShapes` are footprints built by this service from FIRMS clusters — they
+are NOT official agency polygons. See `docs/CALCULATIONS.md §Live wildfire
+overlay` for how the footprint boundary is traced and holes are preserved.
+`shapeId` is the stable per-response handle a client should use to identify a
+shape (e.g. for click-to-select); shapes are sorted by `detectionCount`, so it
+is stable within a response but not across responses.
+
+At most 2,000 heat shapes are returned. When more exist the largest are kept
+and a `notes[]` entry says so — at `minCells=1` a CONUS-wide fire-season pull
+can otherwise produce tens of thousands of polygons.
+
+Degradation is always explicit in `notes[]`, never silent. An upstream that
+rejects a query (WFIGS answers with HTTP 200 and an error body; FIRMS answers
+over-quota with HTTP 200 plain text) is reported as unavailable rather than
+cached as "no fires". Partial FIRMS coverage — some of the chained ≤5-day
+windows failing — is reported too, and is not cached, because it understates
+every footprint and every exposed-TIV figure derived from it.
+
+### `POST /api/wildfire/exposure`
+
+Computes exposed TIV by client for each submitted fire polygon. Accepts
+official WFIGS perimeters and heat-derived shapes alike.
+
+Limits (the geometry drives a grid walk and a point-in-polygon sweep, so it is
+bounded): at most 50 polygons and 100,000 total ring vertices per request;
+rings need ≥4 numeric `[lon, lat]` positions within WGS84 bounds. Anything
+else is a `422`. If the exposure plane cannot be loaded the endpoint returns
+`503 UPSTREAM_UNAVAILABLE` rather than a silent zero.
+
+**IMPORTANT — synthetic data limitation:** v1 exposure facts are
+county-aggregated (no per-location lat/lon). This endpoint distributes each
+county's TIV across 4 deterministic synthetic points inside the county, then
+runs point-in-polygon against those. The `synthetic: true` flag and `note`
+field in the response make this explicit. The single swap point for real
+location-level data is `_load_locations()` in
+`backend/app/services/wildfire_exposure.py`.
+
+Request:
+
+```json
+{
+  "polygons": [
+    {
+      "id": "park-fire",
+      "name": "PARK FIRE",
+      "geometry": { "type": "Polygon", "coordinates": [...] }
+    }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "currency": "USD",
+  "synthetic": true,
+  "note": "Estimated from synthetic location points distributed within counties from aggregate TIV — not real location-level data. Replace the location source with individual-location exposure for exact in-perimeter TIV.",
+  "results": [
+    {
+      "id": "park-fire",
+      "name": "PARK FIRE",
+      "totalTiv": 2840000000,
+      "locationCount": 48,
+      "byClient": [
+        { "client": "Farmers Group", "tiv": 1920000000, "locationCount": 32 },
+        { "client": "CoastalRe", "tiv": 920000000,  "locationCount": 16 }
+      ]
+    }
+  ],
+  "combined": {
+    "id": "combined",
+    "name": null,
+    "totalTiv": 2840000000,
+    "locationCount": 48,
+    "byClient": [
+      { "client": "Farmers Group", "tiv": 1920000000, "locationCount": 32 },
+      { "client": "CoastalRe", "tiv": 920000000,  "locationCount": 16 }
+    ]
+  },
+  "warnings": []
+}
+```
+
+`combined` is the union across every submitted polygon with each location
+counted **once**. Use it rather than summing `results` — selecting an official
+perimeter together with the heat shape over the same fire is the natural thing
+to do, and summing double-counts every location in the overlap.
+
+TIV is combined **max-across-perils at the (client, county) grain** per
+CLAUDE.md rules 3+4: within one peril, fact rows are disjoint segments and are
+summed; across perils and across treaty years for the same cedent the max is
+taken. Summing there would report a cedent carrying WS+EQ+CS on one EDM at
+several times its real exposure.
+
+`totalTiv` and `byClient[].tiv` are in the currency reported in the `currency`
+field (ISO 4217). CONTRACTS.md §12 currency rules apply — if the exposure
+plane spans more than one currency the values are not combinable, so the
+rollup is reported as 0 with an entry in `warnings[]`.
+
 ## Hazard overlays (tornado / hail / wildfire)
 
 | Verb | Path | Purpose |
@@ -509,6 +717,8 @@ still work (JSON facts). Under `hybrid`/`sqlserver`, servers come from
 | POST | `/api/hurricanes/{stormId}/impact/export` |
 | GET | `/api/live/storms` |
 | GET | `/api/live/storms/{atcfId}` |
+| GET | `/api/wildfire/active` |
+| POST | `/api/wildfire/exposure` |
 | GET | `/api/hazards/{tornado\|hail\|wildfire}` |
 | GET | `/api/counties/{geographyId}/reference` |
 | POST | `/api/calc/layers` |

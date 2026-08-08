@@ -29,7 +29,9 @@ _BACKEND_DIR = Path(__file__).resolve().parents[2]
 _POINTS_PER_COUNTY = 4
 _JITTER_DEG = 0.10          # scatter radius around the county centroid
 _GRID_DEG = 0.5            # spatial index cell size
-_MAX_POLYGONS = 50
+# Ceiling on (candidate locations × polygon vertices) per request. ~8M
+# operations lands around a second; see `_indices_in_polygon`.
+_MAX_WORK = 8_000_000
 
 
 @dataclass(slots=True, frozen=True)
@@ -38,7 +40,14 @@ class Location:
     lat: float
     tiv: float
     client: str
-    programme: str
+
+
+@dataclass(slots=True, frozen=True)
+class LocationSet:
+    locations: list[Location]
+    index: dict[tuple[int, int], list[int]]
+    currency: str
+    warnings: tuple[str, ...]
 
 
 def _mock_dir() -> Path:
@@ -56,28 +65,45 @@ def _jitter(seed: str) -> tuple[float, float]:
 
 
 @lru_cache(maxsize=1)
-def _load_locations() -> tuple[list[Location], dict[tuple[int, int], list[int]], str]:
+def _load_locations() -> LocationSet:
     """Build synthetic locations from in-portfolio county facts + a grid index.
-    Returns (locations, cell->indices, currency)."""
+
+    TIV is combined with ``MAX_ACROSS_PERILS_AT_VIEW_GRAIN`` (CLAUDE.md rules
+    3+4) at the (client, county) grain, which is the finest grain this synthetic
+    plane has. Within one peril, fact rows are disjoint segments (occupancy ×
+    construction × …) and so are summed; across perils and across treaty years
+    for the same cedent we take the max, never the sum — a cedent renewing the
+    same slot in consecutive years, or carrying WS+EQ+CS on one EDM, would
+    otherwise report several times its real exposure.
+    """
     md = _mock_dir()
+    warnings: list[str] = []
     try:
         datasets = json.loads((md / "datasets.json").read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return [], {}, "USD"
+    except Exception as exc:  # noqa: BLE001
+        # Do not memoise a silent zero — an empty rollup must be traceable.
+        raise RuntimeError(f"Could not read datasets.json from {md}: {exc}") from exc
 
     centroids = county_centroids()
-    locs: list[Location] = []
-    currency = "USD"
+
+    # (client, geoid, datasetId, peril) → summed TIV across disjoint segments.
+    # The datasetId must be in the key: two treaty years of the same peril under
+    # one cedent are separate programmes, and folding them into one bucket sums
+    # them before the max ever runs.
+    by_segment: dict[tuple[str, str, str, str], float] = {}
+    currencies: set[str] = set()
     for ds in datasets:
         if not ds.get("isIncludedInPortfolio"):
             continue
-        currency = ds.get("currency") or currency
         client = ds.get("cedentName") or ds.get("datasetId") or "Unknown"
-        programme = ds.get("programmeName") or ""
-        fpath = md / "exposure_facts" / f"{ds['datasetId']}.json"
+        dataset_id = ds.get("datasetId") or ""
         try:
-            rows = json.loads(fpath.read_text(encoding="utf-8"))
+            rows = json.loads(
+                (md / "exposure_facts" / f"{dataset_id}.json").read_text(encoding="utf-8")
+            )
         except Exception:  # noqa: BLE001
+            warnings.append(f"Exposure facts for {dataset_id} could not be read; "
+                            f"{client} may be understated.")
             continue
         for r in rows:
             if r.get("aggregation") != "COUNTY":
@@ -87,25 +113,51 @@ def _load_locations() -> tuple[list[Location], dict[tuple[int, int], list[int]],
             if not tiv or not gid:
                 continue
             geoid = gid.split("-")[-1]
-            meta = centroids.get(geoid)
-            if meta is None:
+            if geoid not in centroids:
                 continue
-            per = float(tiv) / _POINTS_PER_COUNTY
-            for i in range(_POINTS_PER_COUNTY):
-                dx, dy = _jitter(f"{ds['datasetId']}:{geoid}:{i}")
-                locs.append(Location(
-                    lon=meta.centroid_lon + dx,
-                    lat=meta.centroid_lat + dy,
-                    tiv=per,
-                    client=client,
-                    programme=programme,
-                ))
+            # Rule 5: an absent currency is unknown, not USD. Defaulting it
+            # would let a row silently join a mixed-currency set as if it
+            # matched, which is exactly the mixing the rule forbids.
+            ccy = r.get("currency") or ds.get("currency")
+            currencies.add(ccy if ccy else "UNKNOWN")
+            peril = r.get("peril") or "UNKNOWN"
+            key = (client, geoid, dataset_id, peril)
+            by_segment[key] = by_segment.get(key, 0.0) + float(tiv)
+
+    # Rule 5: never silently mix currencies.
+    if len(currencies) > 1:
+        warnings.append(
+            "Exposure spans multiple currencies (" + ", ".join(sorted(currencies))
+            + "); in-perimeter TIV is not combinable and is reported as 0."
+        )
+        return LocationSet([], {}, sorted(currencies)[0], tuple(warnings))
+    currency = next(iter(currencies), "USD")
+
+    # Max across perils AND treaty years at the (client, county) grain.
+    by_county: dict[tuple[str, str], float] = {}
+    for (client, geoid, _ds, _peril), tiv in by_segment.items():
+        cur = by_county.get((client, geoid), 0.0)
+        if tiv > cur:
+            by_county[(client, geoid)] = tiv
+
+    locs: list[Location] = []
+    for (client, geoid), tiv in by_county.items():
+        meta = centroids[geoid]
+        per = tiv / _POINTS_PER_COUNTY
+        for i in range(_POINTS_PER_COUNTY):
+            dx, dy = _jitter(f"{client}:{geoid}:{i}")
+            locs.append(Location(
+                lon=meta.centroid_lon + dx,
+                lat=meta.centroid_lat + dy,
+                tiv=per,
+                client=client,
+            ))
 
     index: dict[tuple[int, int], list[int]] = {}
     for idx, loc in enumerate(locs):
         cell = (int(loc.lon // _GRID_DEG), int(loc.lat // _GRID_DEG))
         index.setdefault(cell, []).append(idx)
-    return locs, index, currency
+    return LocationSet(locs, index, currency, tuple(warnings))
 
 
 # ─────────────────────────── geometry ───────────────────────────
@@ -163,38 +215,130 @@ def _bbox(geom: dict) -> tuple[float, float, float, float] | None:
 # ─────────────────────────── rollup ───────────────────────────
 
 
-def exposure_in_polygon(geom: dict) -> tuple[float, int, dict[str, tuple[float, int]]]:
-    """Return (total_tiv, location_count, {client: (tiv, count)}) for locations
-    inside ``geom``. Uses the grid index so only nearby candidates are tested."""
-    locs, index, _ = _load_locations()
-    bb = _bbox(geom)
-    if bb is None or not locs:
-        return 0.0, 0, {}
+def _vertex_count(geom: dict) -> int:
+    n = 0
+    stack = [geom.get("coordinates")]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, list) or not node:
+            continue
+        head = node[0]
+        if isinstance(head, (int, float)):
+            n += 1
+        else:
+            stack.extend(node)
+    return n
+
+
+def _candidates(ls: LocationSet, bb: tuple[float, float, float, float]) -> list[int]:
+    """Location indices inside the bbox, via the grid index."""
     west, south, east, north = bb
     cx0, cx1 = int(west // _GRID_DEG), int(east // _GRID_DEG)
     cy0, cy1 = int(south // _GRID_DEG), int(north // _GRID_DEG)
+    span = (cx1 - cx0 + 1) * (cy1 - cy0 + 1)
+    # A world-spanning bbox sweeps more empty grid cells than the index holds,
+    # so walk whichever side is smaller.
+    cells = (
+        ls.index.items() if span > len(ls.index)
+        else ((c, ls.index.get(c, ())) for c in
+              ((x, y) for x in range(cx0, cx1 + 1) for y in range(cy0, cy1 + 1)))
+    )
+    out: list[int] = []
+    for (cx, cy), idxs in cells:
+        if not (cx0 <= cx <= cx1 and cy0 <= cy <= cy1):
+            continue
+        for idx in idxs:
+            loc = ls.locations[idx]
+            if west <= loc.lon <= east and south <= loc.lat <= north:
+                out.append(idx)
+    return out
 
+
+def _indices_in_polygon(geom: dict) -> set[int]:
+    """Indices of synthetic locations falling inside ``geom``.
+
+    Uses the 0.5° grid index to restrict candidate testing to cells overlapping
+    the polygon's bounding box, then ray-casts (even-odd) each candidate.
+
+    Raises:
+        ValueError: if the ray-cast would exceed ``_MAX_WORK``.
+    """
+    ls = _load_locations()
+    bb = _bbox(geom)
+    if bb is None or not ls.locations:
+        return set()
+    cands = _candidates(ls, bb)
+    # Ray-cast cost is (candidates × vertices). The location set is fixed and
+    # small, but a caller controls the vertex count AND — through the bbox —
+    # how many candidates get swept in, so the product is what must be bounded.
+    # Neither factor alone is enough: a CONUS-wide ring at 100k vertices
+    # measured 64s against a 30s function budget while passing every
+    # per-field check.
+    work = len(cands) * max(1, _vertex_count(geom))
+    if work > _MAX_WORK:
+        raise ValueError(
+            f"geometry too expensive to evaluate ({work:,} point-in-polygon "
+            f"operations, limit {_MAX_WORK:,}); simplify it or submit fewer "
+            f"polygons"
+        )
+    return {idx for idx in cands
+            if point_in_geometry(ls.locations[idx].lon, ls.locations[idx].lat, geom)}
+
+
+def _rollup(indices: set[int]) -> tuple[float, int, dict[str, tuple[float, int]]]:
+    ls = _load_locations()
     total = 0.0
-    count = 0
     by_client: dict[str, list] = {}
-    for cx in range(cx0, cx1 + 1):
-        for cy in range(cy0, cy1 + 1):
-            for idx in index.get((cx, cy), ()):
-                loc = locs[idx]
-                if not (west <= loc.lon <= east and south <= loc.lat <= north):
-                    continue
-                if not point_in_geometry(loc.lon, loc.lat, geom):
-                    continue
-                total += loc.tiv
-                count += 1
-                cur = by_client.setdefault(loc.client, [0.0, 0])
-                cur[0] += loc.tiv
-                cur[1] += 1
-    return total, count, {k: (v[0], v[1]) for k, v in by_client.items()}
+    for idx in indices:
+        loc = ls.locations[idx]
+        total += loc.tiv
+        cur = by_client.setdefault(loc.client, [0.0, 0])
+        cur[0] += loc.tiv
+        cur[1] += 1
+    return total, len(indices), {k: (v[0], v[1]) for k, v in by_client.items()}
+
+
+def exposure_in_polygons(
+    geoms: list[dict],
+) -> tuple[list[tuple[float, int, dict[str, tuple[float, int]]]],
+           tuple[float, int, dict[str, tuple[float, int]]]]:
+    """Exposed TIV per polygon, plus the deduped union, walking each ONCE.
+
+    Each rollup is (total_tiv, location_count, {client: (tiv, count)}) in the
+    currency reported by :func:`currency`. See docs/CALCULATIONS.md §Wildfire
+    exposed TIV (synthetic point method) for the accuracy characterisation and
+    the county-TIV-split assumption.
+
+    The union counts each location a single time: selecting an official
+    perimeter together with the heat shape covering the same fire is the
+    natural thing to do, and summing the per-polygon totals would double-count
+    every location in the overlap. Returning both from one pass matters because
+    the ray-cast is the expensive part — computing them separately doubled the
+    cost of every request.
+
+    Raises:
+        ValueError: if a geometry would exceed the ray-cast work budget.
+    """
+    per = [_indices_in_polygon(g) for g in geoms]
+    union: set[int] = set()
+    for s in per:
+        union |= s
+    return [_rollup(s) for s in per], _rollup(union)
 
 
 def currency() -> str:
-    return _load_locations()[2]
+    return _load_locations().currency
 
 
-__all__ = ["exposure_in_polygon", "point_in_geometry", "currency", "Location"]
+def load_warnings() -> tuple[str, ...]:
+    return _load_locations().warnings
+
+
+__all__ = [
+    "exposure_in_polygons",
+    "point_in_geometry",
+    "currency",
+    "load_warnings",
+    "Location",
+    "LocationSet",
+]

@@ -39,6 +39,8 @@ import { WildfireLegend } from "./WildfireLegend";
 import { WindMapLegend } from "./WindMapLegend";
 import { WindParticleLayer } from "./WindParticleLayer";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
+import { useHazardOverlayStore } from "../../state/hazardOverlay";
+import { useLiveWildfireStore } from "../../state/liveWildfire";
 import { MapTooltip } from "./Tooltip";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ?? "";
@@ -538,6 +540,31 @@ export function MapView({ data, isLoading, error }: Props) {
       });
     }
   }, [focusedGeoid, impactData]);
+
+  // ── Exposure-fill visibility (single owner) ──
+  // Both the hazard heatmap and the wildfire overlay want the TIV choropleth
+  // out of the way, and both used to set visibility themselves. Whichever ran
+  // last won, so clearing a hazard chip un-hid the fills underneath an active
+  // wildfire overlay. Owning it here means the two requests OR together.
+  const hazardActive = useHazardOverlayStore((s) => s.active);
+  const wildfireHidesExposures = useLiveWildfireStore(
+    (s) => s.active && s.hideExposures,
+  );
+  useEffect(() => {
+    const m = mapInstance;
+    if (!m) return;
+    const visibility = hazardActive !== null || wildfireHidesExposures ? "none" : "visible";
+    const apply = () => {
+      for (const id of [STATE_FILL, COUNTY_FILL]) {
+        if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", visibility);
+      }
+    };
+    if (m.isStyleLoaded()) apply();
+    else m.once("style.load", apply);
+    return () => {
+      m.off("style.load", apply);
+    };
+  }, [mapInstance, hazardActive, wildfireHidesExposures]);
 
   // ── Render ──
   if (!hasToken) {

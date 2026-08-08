@@ -2,7 +2,7 @@
 
 GET /api/wildfire/active
     ?bbox=west,south,east,north   (optional; default CONUS)
-    &dayRange=1                   (FIRMS look-back days, 1-10)
+    &dayRange=3                   (FIRMS look-back days, 1-30; chained ≤5-day windows)
     &includeHeat=true             (fetch NASA FIRMS active-fire pixels)
 
 Returns:
@@ -18,9 +18,12 @@ NIFC/WFIGS (perimeters) + NASA FIRMS (heat).
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import Field, field_validator
 
 from ..config import get_settings
 from ..models.common import CamelModel
@@ -28,6 +31,26 @@ from ..services.live_wildfire import build_wildfire_bundle
 from ..services import wildfire_exposure
 
 router = APIRouter(prefix="/wildfire", tags=["wildfire"])
+
+# Caller-supplied geometry drives a grid walk and a point-in-polygon sweep, so
+# the polygon count and total vertex count are capped here; the service applies
+# a further (candidates × vertices) work budget that these alone can't express.
+_MAX_POLYGONS = 50
+_MAX_VERTICES = 100_000
+
+
+def _shape_id(geometry: dict) -> str:
+    """Identity derived from the footprint itself, never its list position.
+
+    Heat shapes are sorted by detection count and the layer refetches every few
+    minutes, so a positional id silently re-points at a different fire: clicking
+    a shape would deselect whichever fire happened to hold that index before,
+    changing the combined TIV with no visible cause. Hashing the geometry means
+    the id only changes when the footprint does, and a footprint that has grown
+    simply reads as a new shape.
+    """
+    payload = json.dumps(geometry, sort_keys=True, separators=(",", ":"))
+    return "heat-" + hashlib.sha1(payload.encode()).hexdigest()[:12]
 
 
 # ─────────────────────────── wire types ───────────────────────────
@@ -126,6 +149,46 @@ def get_active_wildfire(
     min_confidence: str = Query(default="nominal", alias="minConfidence"),
     min_frp: float = Query(default=0.0, ge=0.0, alias="minFrp"),
 ) -> WildfireResponse:
+    """Assemble and return the current live wildfire bundle.
+
+    Fetches NIFC/WFIGS burn-area perimeters and (optionally) NASA FIRMS
+    satellite thermal detections, clusters detections into heat-shape footprints,
+    and rolls up perimeter coverage by point-of-origin state.
+
+    Both upstream sources fail soft — if either is unreachable the endpoint
+    returns whatever it obtained plus an explanatory entry in ``notes[]``.
+
+    See docs/CALCULATIONS.md §Live wildfire overlay for the clustering and
+    footprint-tracing algorithms.
+    See docs/API.md §GET /api/wildfire/active for the full parameter reference.
+
+    Args:
+        bbox: Bounding box as ``"west,south,east,north"`` (lon/lat, EPSG:4326).
+            Omit for the CONUS default (-125.0, 24.0, -66.5, 50.0).
+        day_range: FIRMS look-back in days (1–30). Internally chained as
+            consecutive ≤5-day windows (FIRMS API cap).
+        include_heat: When False, skip the FIRMS fetch entirely (faster; returns
+            perimeters + affected-state roll-up only).
+        include_perimeters: When False, skip the WFIGS fetch.
+        simplify: Server-side generalisation tolerance in degrees
+            (``maxAllowableOffset`` sent to ArcGIS). 0.005° ≈ 550 m reduces
+            payload ~70× with negligible shape error at mapping scales.
+        min_cells: Minimum distinct 0.02°-grid cells a detection cluster must
+            occupy to be kept. Removes point sources (factories, gas flares).
+        min_detections: Minimum FIRMS detections per cluster.
+        min_confidence: Drop detections below this VIIRS/MODIS confidence band
+            (``low | nominal | high``).
+        min_frp: Drop detections with fire radiative power below this value (MW).
+
+    Returns:
+        WildfireResponse containing the perimeter FeatureCollection, heat-shape
+        FeatureCollection, individual detection points (thinned to 8 000 max
+        for rendering), affected-state roll-up, counts, notes, and attribution.
+
+    Raises:
+        HTTPException 422: If ``bbox`` is malformed or ``minConfidence`` is
+            not one of ``low | nominal | high``.
+    """
     box = _parse_bbox(bbox)
     if min_confidence not in ("low", "nominal", "high"):
         raise HTTPException(status_code=422, detail={
@@ -169,8 +232,13 @@ def get_active_wildfire(
     heat_features = [
         {
             "type": "Feature",
+            "id": i,
             "geometry": hs.geometry,
             "properties": {
+                # Stable handle for click-to-select — see _shape_id. Without it
+                # the UI derived a selection id from the cursor position, so
+                # clicking the same shape twice selected it twice.
+                "shapeId": _shape_id(hs.geometry),
                 "detectionCount": hs.detection_count,
                 "maxFrpMw": hs.max_frp_mw,
                 "sumFrpMw": hs.sum_frp_mw,
@@ -178,7 +246,7 @@ def get_active_wildfire(
                 "lastDetectedAt": hs.last_detected_at,
             },
         }
-        for hs in bundle.heat_shapes
+        for i, hs in enumerate(bundle.heat_shapes)
     ]
 
     return WildfireResponse(
@@ -213,14 +281,60 @@ def get_active_wildfire(
 # ─────────────────── exposed TIV inside fire polygons ───────────────────
 
 
+def _rings_of(geom: dict) -> list:
+    """Flatten a GeoJSON Polygon/MultiPolygon to its list of rings, validating
+    structure. Raises ValueError on anything we would not want to walk."""
+    gtype = geom.get("type")
+    coords = geom.get("coordinates")
+    if gtype == "Polygon":
+        rings = coords
+    elif gtype == "MultiPolygon":
+        if not isinstance(coords, list):
+            raise ValueError("coordinates must be a list")
+        rings = [r for poly in coords for r in (poly if isinstance(poly, list) else [])]
+    else:
+        raise ValueError("geometry type must be Polygon or MultiPolygon")
+    if not isinstance(rings, list) or not rings:
+        raise ValueError("geometry has no rings")
+    return rings
+
+
 class PolygonIn(CamelModel):
-    id: str
-    name: str | None = None
+    id: str = Field(max_length=200)
+    name: str | None = Field(default=None, max_length=200)
     geometry: dict  # GeoJSON Polygon / MultiPolygon
+
+    @field_validator("geometry")
+    @classmethod
+    def _validate_geometry(cls, v: dict) -> dict:
+        # The rollup derives a bbox from these numbers and walks a 0.5° grid
+        # between the corners, so unbounded coordinates are a DoS, not a typo.
+        for ring in _rings_of(v):
+            if not isinstance(ring, list) or len(ring) < 4:
+                raise ValueError("each ring needs at least 4 positions")
+            for pos in ring:
+                if not isinstance(pos, list) or len(pos) < 2:
+                    raise ValueError("ring positions must be [lon, lat]")
+                lon, lat = pos[0], pos[1]
+                if isinstance(lon, bool) or isinstance(lat, bool):
+                    raise ValueError("ring positions must be numbers")
+                if not isinstance(lon, (int, float)) or not isinstance(lat, (int, float)):
+                    raise ValueError("ring positions must be numbers")
+                if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
+                    raise ValueError("coordinates must be within WGS84 bounds")
+        return v
 
 
 class ExposureRequest(CamelModel):
-    polygons: list[PolygonIn]
+    polygons: list[PolygonIn] = Field(max_length=_MAX_POLYGONS)
+
+    @field_validator("polygons")
+    @classmethod
+    def _validate_budget(cls, v: list[PolygonIn]) -> list[PolygonIn]:
+        total = sum(len(r) for p in v for r in _rings_of(p.geometry))
+        if total > _MAX_VERTICES:
+            raise ValueError(f"at most {_MAX_VERTICES} vertices per request")
+        return v
 
 
 class ClientExposureOut(CamelModel):
@@ -242,39 +356,69 @@ class WildfireExposureResponse(CamelModel):
     synthetic: bool
     note: str
     results: list[PolygonExposureOut]
+    combined: PolygonExposureOut
+    warnings: list[str]
+
+
+def _out(pid: str, name: str | None, rollup: tuple) -> PolygonExposureOut:
+    total, count, by_client = rollup
+    return PolygonExposureOut(
+        id=pid,
+        name=name,
+        total_tiv=round(total, 2),
+        location_count=count,
+        by_client=sorted(
+            [ClientExposureOut(client=c, tiv=round(t, 2), location_count=n)
+             for c, (t, n) in by_client.items()],
+            key=lambda x: -x.tiv,
+        ),
+    )
 
 
 @router.post("/exposure", response_model=WildfireExposureResponse)
 def post_wildfire_exposure(req: ExposureRequest) -> WildfireExposureResponse:
-    """Roll up exposed TIV by client for each supplied fire polygon (official
-    perimeter or heat-derived shape). v1 uses synthetic location points derived
-    from county-aggregated TIV — see `synthetic`/`note`."""
-    if len(req.polygons) > 50:
+    """Roll up exposed TIV by client for the supplied fire polygons.
+
+    ``results`` holds one entry per polygon. ``combined`` is the union across
+    all of them with each location counted once — selecting an official
+    perimeter and the heat shape over the same fire is normal, and summing the
+    per-polygon totals would double-count the overlap.
+
+    TIV is combined max-across-perils at the (client, county) grain per
+    CLAUDE.md rules 3+4. v1 uses synthetic location points derived from
+    county-aggregated TIV — see ``synthetic``/``note``.
+    """
+    try:
+        per, union = wildfire_exposure.exposure_in_polygons(
+            [p.geometry for p in req.polygons]
+        )
+        currency = wildfire_exposure.currency()
+        warnings = list(wildfire_exposure.load_warnings())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail={
+            "code": "UPSTREAM_UNAVAILABLE",
+            "message": f"Exposure data could not be loaded: {exc}",
+        }) from exc
+    except ValueError as exc:
+        # Geometry passed per-field validation but would cost too much to
+        # evaluate; that is a bad request, not a server fault.
         raise HTTPException(status_code=422, detail={
-            "code": "VALIDATION_ERROR",
-            "message": "At most 50 polygons per request.",
-        })
-    results: list[PolygonExposureOut] = []
-    for poly in req.polygons:
-        total, count, by_client = wildfire_exposure.exposure_in_polygon(poly.geometry)
-        results.append(PolygonExposureOut(
-            id=poly.id,
-            name=poly.name,
-            total_tiv=round(total, 2),
-            location_count=count,
-            by_client=sorted(
-                [ClientExposureOut(client=c, tiv=round(t, 2), location_count=n)
-                 for c, (t, n) in by_client.items()],
-                key=lambda x: -x.tiv,
-            ),
-        ))
+            "code": "GEOMETRY_TOO_COMPLEX",
+            "message": str(exc),
+        }) from exc
+
+    results = [_out(p.id, p.name, r) for p, r in zip(req.polygons, per)]
+    combined = _out("combined", None, union)
+
     return WildfireExposureResponse(
-        currency=wildfire_exposure.currency(),
+        currency=currency,
         synthetic=True,
         note=("Estimated from synthetic location points distributed within counties "
               "from aggregate TIV — not real location-level data. Replace the location "
               "source with individual-location exposure for exact in-perimeter TIV."),
         results=results,
+        combined=combined,
+        warnings=warnings,
     )
 
 

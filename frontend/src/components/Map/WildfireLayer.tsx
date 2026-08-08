@@ -12,7 +12,7 @@
  */
 
 import mapboxgl, { type GeoJSONSource, type Map as MbMap } from "mapbox-gl";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLiveWildfire, type WildfireResponse } from "../../api/wildfire";
 import { useLiveWildfireStore, MIN_SIZE_PARAMS, type SelectedFire } from "../../state/liveWildfire";
@@ -27,7 +27,6 @@ const SRC_HEAT = "wildfire-heat";
 const L_HEAT = "wildfire-heat-point";
 const SRC_SELECTED = "wildfire-selected";
 const L_SELECTED = "wildfire-selected-line";
-const EXPOSURE_FILLS = ["state-fill", "county-fill"];
 
 interface Props { map: MbMap | null; }
 
@@ -70,13 +69,14 @@ export function WildfireLayer({ map }: Props) {
   const showPerimeters = useLiveWildfireStore((s) => s.showPerimeters);
   const showHeat = useLiveWildfireStore((s) => s.showHeat);
   const showHeatShapes = useLiveWildfireStore((s) => s.showHeatShapes);
-  const hideExposures = useLiveWildfireStore((s) => s.hideExposures);
   const heatDays = useLiveWildfireStore((s) => s.heatDays);
   const minSize = useLiveWildfireStore((s) => s.minSize);
   const selectedFires = useLiveWildfireStore((s) => s.selectedFires);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
-  const wiredRef = useRef(false);
-  const hidRef = useRef(false);
+  // Must be state, not a ref: setup() can run from a deferred `style.load`,
+  // and a ref mutation schedules no re-render, so the paint effect below would
+  // never re-run and the overlay would stay empty.
+  const [wired, setWired] = useState(false);
 
   // Perimeters (fast) and heat (slow) are fetched separately so the burn
   // polygons paint in ~2s instead of waiting on the FIRMS pull.
@@ -99,6 +99,10 @@ export function WildfireLayer({ map }: Props) {
   useEffect(() => {
     if (!map) return;
     const setup = () => {
+      // Before the early return: a re-run against an already-wired map must
+      // still flip `wired`, or the paint effect below never runs again and the
+      // overlay silently stays empty.
+      setWired(true);
       if (map.getSource(SRC_PERIM)) return;
       map.addSource(SRC_PERIM, { type: "geojson", data: EMPTY_FC as never });
       map.addSource(SRC_SHAPES, { type: "geojson", data: EMPTY_FC as never });
@@ -156,18 +160,36 @@ export function WildfireLayer({ map }: Props) {
       map.on("mouseleave", L_SHAPE_FILL, () => { map.getCanvas().style.cursor = ""; popupRef.current?.remove(); });
       map.on("click", L_SHAPE_FILL, (e) => {
         const f = e.features?.[0]; if (!f) return;
-        const id = `heat-${e.lngLat.lng.toFixed(3)},${e.lngLat.lat.toFixed(3)}`;
+        // Use the backend's stable shapeId. Deriving an id from the cursor
+        // meant a second click landed on a different id, so the same shape was
+        // selected twice instead of deselected — doubling the combined TIV.
+        const id = (f.properties as Record<string, unknown> | undefined)?.shapeId;
+        if (typeof id !== "string") return;
         toggleFrom(f.geometry, id, "Heat-derived cluster", "heat");
       });
-
-      wiredRef.current = true;
     };
     if (map.isStyleLoaded()) setup();
     else map.once("style.load", setup);
+    return () => {
+      map.off("style.load", setup);
+      popupRef.current?.remove();
+      popupRef.current = null;
+      setWired(false);
+    };
   }, [map]);
 
+  // Z-order once, not on every data/selection change: map.getStyle() serialises
+  // the entire style spec on each call and moveLayer forces a repaint.
   useEffect(() => {
-    if (!map || !wiredRef.current) return;
+    if (!map || !wired) return;
+    const firstSymbol = (map.getStyle()?.layers ?? []).find((l) => l.type === "symbol")?.id;
+    for (const id of [L_SHAPE_FILL, L_SHAPE_LINE, L_FILL, L_LINE, L_SELECTED, L_HEAT]) {
+      if (map.getLayer(id)) map.moveLayer(id, firstSymbol);
+    }
+  }, [map, wired]);
+
+  useEffect(() => {
+    if (!map || !wired) return;
     const apply = () => {
       const perimSrc = map.getSource(SRC_PERIM) as GeoJSONSource | undefined;
       const shapeSrc = map.getSource(SRC_SHAPES) as GeoJSONSource | undefined;
@@ -190,26 +212,13 @@ export function WildfireLayer({ map }: Props) {
       set(L_SHAPE_LINE, vis(showHeatShapes, !!heat));
       set(L_HEAT, vis(showHeat, !!heat));
       set(L_SELECTED, active && selectedFires.length > 0 ? "visible" : "none");
-
-      // Optionally hide the TIV choropleth so sparse fire shapes read clearly.
-      const shouldHide = active && hideExposures;
-      for (const fill of EXPOSURE_FILLS) {
-        if (!map.getLayer(fill)) continue;
-        if (shouldHide) { map.setLayoutProperty(fill, "visibility", "none"); hidRef.current = true; }
-        else if (hidRef.current) { map.setLayoutProperty(fill, "visibility", "visible"); }
-      }
-      if (!shouldHide) hidRef.current = false;
-
-      // Keep wildfire layers above the choropleth fills, below map labels.
-      const layers = map.getStyle()?.layers ?? [];
-      const firstSymbol = layers.find((l) => l.type === "symbol")?.id;
-      for (const id of [L_SHAPE_FILL, L_SHAPE_LINE, L_FILL, L_LINE, L_SELECTED, L_HEAT]) {
-        if (map.getLayer(id)) map.moveLayer(id, firstSymbol);
-      }
     };
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, active, showPerimeters, showHeat, showHeatShapes, hideExposures, selectedFires, perimQuery.data, heatQuery.data]);
+    return () => { map.off("style.load", apply); };
+    // `hideExposures` is deliberately absent: MapView owns the exposure-fill
+    // visibility so the hazard overlay and this layer can't fight over it.
+  }, [map, wired, active, showPerimeters, showHeat, showHeatShapes, selectedFires, perimQuery.data, heatQuery.data]);
 
   return null;
 }

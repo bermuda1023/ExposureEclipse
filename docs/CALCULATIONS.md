@@ -275,3 +275,201 @@ capped at 300k per fire so mega-events don't blanket a region.
 The build scripts (`backend/scripts/build_{tornado,hail,wildfire}_grid.py`)
 emit `mockdata/hazard_*_grid.json` with `{stepDeg, cells}` shape. Re-bake
 when the upstream shapefile updates or you change a tuning constant.
+
+## Live wildfire overlay
+
+`GET /api/wildfire/active` is a live-data endpoint distinct from the pre-baked
+hazard grid above. It stitches two real sources at request time and applies
+its own clustering pipeline. See `docs/API.md §Live wildfire overlay` for the
+full request/response shape.
+
+### Source 1: WFIGS burn-area perimeters
+
+NIFC/WFIGS publishes the authoritative current fire perimeters via an ArcGIS
+FeatureServer (no API key). Raw IR-mapped polygons can carry 60 000+ vertices
+per fire; the service requests server-side generalisation (`maxAllowableOffset`
+in degrees, default 0.005° ≈ 550 m) before serialisation, reducing payload
+~70× with negligible shape distortion at mapping scales.
+
+Only `attr_IncidentTypeCategory == "WF"` (wildfire) features are kept;
+prescribed burns (`RX`) and other types are dropped.
+
+### Source 2: NASA FIRMS satellite thermal anomalies
+
+VIIRS 375 m (S-NPP + NOAA-20) and MODIS 1 km NRT products are fetched from
+the FIRMS area CSV API. The API caps a single request at 5 consecutive days.
+To support look-backs up to 30 days, the service chains consecutive ≤5-day
+windows (most-recent window uses the FIRMS "last N days" form; earlier windows
+supply an explicit `start_date`).
+
+Requires `FIRMS_MAP_KEY` (free registration). Without the key the heat layer
+returns empty; WFIGS perimeters are unaffected.
+
+Confidence filtering: VIIRS reports `low/nominal/high`; MODIS reports 0–100
+(mapped to `low < 30`, `nominal < 80`, `high ≥ 80`). Default filter is
+`nominal`; `minFrp` drops detections below a fire-radiative-power threshold
+(MW).
+
+### Clustering: grid connected-components
+
+Raw FIRMS detections are gridded at 0.02° (~2.2 km) and grouped into spatial
+clusters via 8-connected component labelling (flood-fill). Each occupied cell
+is a node; two cells are connected if they share any face or corner (8-way).
+
+A component whose cell count is < `minCells` OR whose detection count is
+< `minDetections` is discarded. This removes persistent point sources
+(industrial flares, gas stacks) which appear in FIRMS as a single cell with
+high detection counts but zero spatial spread.
+
+The UI's **All / Small+ / Med+ / Large+** control maps to these thresholds:
+
+| UI label | `minCells` | `minDetections` |
+|---|---|---|
+| All | 1 | 1 |
+| Small+ | 2 | 4 |
+| Med+ | 3 | 15 |
+| Large+ | 5 | 40 |
+
+Source: `MIN_SIZE_PARAMS` in `frontend/src/state/liveWildfire.ts`; parameters
+are passed to the backend on every `GET /api/wildfire/active` call.
+
+### Heat-shape footprint tracing (marching edges)
+
+For each qualifying cluster, the service traces the outer boundary of the
+**union of occupied grid cells** at 0.01° (~1.1 km, ≈ VIIRS pixel scale)
+rather than computing a convex hull. This preserves concavities and unburned
+interior gaps (ridges, green islands inside a perimeter) — features that matter
+for exposure analysis.
+
+Algorithm:
+
+1. Assign each occupied cell four directed boundary half-edges (one per
+   exposed face, oriented so the burned area lies on the left — CCW outer
+   convention).
+2. Walk the half-edge graph to extract closed rings.
+3. Simplify collinear staircase vertices, then scale integer grid coordinates
+   to lon/lat.
+4. Classify and nest the rings (below), then emit GeoJSON `Polygon` (one outer
+   ring plus ≥0 hole rings) or `MultiPolygon` (disconnected burned patches).
+
+Fallback: if the marching-edge trace yields a degenerate result (< 4 vertices),
+the service falls back to Andrew's monotone-chain convex hull over the cluster
+points.
+
+### Ring nesting (signed area)
+
+Because the tracer keeps the burned area on the left, orientation alone
+classifies a ring exactly: positive signed area (CCW) is an outer boundary,
+negative (CW) is an unburned interior pocket. Each pocket is then assigned to
+the smallest-area outer ring containing it, which satisfies RFC 7946 §3.1.6
+winding and hole containment.
+
+**Do not classify by ray-casting a ring vertex.** Every traced vertex sits on
+the grid lattice, and two cells touching only at a corner share that exact
+vertex — a point where point-in-polygon is undefined. Deciding nesting that
+way misfiled disjoint lobes of a diagonal fire front as holes and silently
+dropped their TIV from the rollup (a diagonal 8-cell front lost 2 cells, 25%
+of its burned area). The containment probe therefore uses a point half a cell
+to the *right* of a hole edge's midpoint — off-lattice, and inside the
+unburned pocket by construction.
+
+A pocket that cannot be placed under any outer ring is left filled rather than
+discarded: over-stating burned area is the safe direction for an exposure
+number, under-stating it is not.
+
+### Display thinning
+
+A 10-day CONUS FIRMS pull can exceed 50 000 detection points. The full point
+set is used for shape construction; only the returned `activeFires` point list
+is thinned to at most 8 000 points (evenly strided) for rendering. The
+`counts.activeFiresTotal` field records the pre-thin count; `counts.activeFires`
+records the displayed count. Heat shapes are built before thinning and are
+therefore complete.
+
+Shapes are capped separately at 2 000, keeping the largest by detection count.
+At `minCells = 1` every isolated detection becomes its own polygon, so a
+fire-season CONUS pull can otherwise emit tens of thousands. Truncation is
+reported in `notes[]`.
+
+## Wildfire exposed TIV (synthetic point method)
+
+`POST /api/wildfire/exposure` reports TIV inside a fire polygon broken down by
+client. See also `docs/API.md §POST /api/wildfire/exposure`.
+
+**The result is labelled `synthetic: true` because the v1 exposure data plane
+is county-aggregated.** The facts files carry no location coordinates — the
+finest grain available is the county, and each county holds many rows (one per
+peril × occupancy × construction × … segment). As shipped that is 3 956 COUNTY
+rows over 1 184 distinct counties across the 7 in-portfolio datasets.
+
+### Combining rows to a per-county TIV (rules 3+4)
+
+Rows are folded to `(client, county)` before any point is synthesised:
+
+1. Sum within a peril — a peril's rows are disjoint segments, so summing them
+   is the correct combination at this grain.
+2. **Take the max across perils *and* across treaty years** for the same
+   client. Never sum. A cedent carrying WS+EQ+CS on one EDM, or renewing the
+   same slot in consecutive years, appears as several datasets under one
+   `cedentName`; summing reported it at a multiple of its real exposure.
+   Measured on the shipped mock plane, Farmers Group in LA County (`06037`)
+   summed to USD 14.60bn against a correct max of USD 9.10bn — a **1.60×
+   overstatement** that fed straight into the XOL layer calc.
+
+This is CLAUDE.md rules 3+4 applied at the finest grain this plane has.
+
+If the rows span more than one currency they are not combinable (rule 5): the
+rollup is reported as 0 with an entry in `warnings[]` rather than silently
+mixed.
+
+### Synthetic location generation
+
+For each `(client, county)` TIV from the step above:
+
+1. Look up the county centroid from the us-atlas TopoJSON index
+   (`county_centroids()` in `hurricane_impact.py`).
+2. Generate `_POINTS_PER_COUNTY = 4` deterministic jitter offsets using
+   SHA-1 of `"{client}:{geoid}:{i}"`. The jitter radius is ±0.10° (~11 km).
+3. Assign each synthetic point `tiv / 4` and the cedent name as `client`.
+
+The county centroid plus deterministic jitter ensures the same polygon always
+returns the same TIV (no random sampling), making the output auditable and
+reproducible for any given data cut.
+
+### Combining several selected fires
+
+`combined` in the response is the union across every submitted polygon with
+each synthetic location counted **once**. Selecting an official perimeter
+together with the heat shape covering the same fire is the natural thing for
+an underwriter to do, and summing the per-polygon totals would double-count
+every location in the overlap. Clients must use `combined` rather than summing
+`results`.
+
+### Point-in-polygon test
+
+A spatial grid index (cell size 0.5°) limits candidate testing to points
+whose cell overlaps the polygon's bounding box. The polygon test uses the
+ray-casting (even-odd) algorithm; multi-ring polygons with holes correctly
+exclude interior hole regions.
+
+### Accuracy characterisation
+
+Because county TIV is distributed as 4 points within the county bounding area:
+
+- A small fire that clips only part of a county will capture either 0 or a
+  multiple of `tiv/4`, depending on whether any of the 4 synthetic points fall
+  inside the perimeter. The error is bounded by one county's TIV (the largest
+  partially-intersected county).
+- A large fire spanning many complete counties will be accurate to within the
+  partial-county error at each edge county.
+
+**This is an estimation method, not a precise exposure report.** It is
+appropriate for preliminary triage of fire exposure; it is not a substitute
+for running a real location-level accumulation query.
+
+### Upgrade path
+
+`_load_locations()` in `backend/app/services/wildfire_exposure.py` is the
+documented single swap point. Replace its county-fact iteration with a
+query against individual-location data (lat/lon, TIV, cedent); the
+point-in-polygon rollup below that function is unchanged.

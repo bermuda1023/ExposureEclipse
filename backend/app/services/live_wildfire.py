@@ -25,18 +25,36 @@ Every fetch fails soft (returns empty) so one dead upstream never 500s the map.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import time
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 # ─────────────────────────── sources ───────────────────────────
 
 USER_AGENT = "exposure-eclipse/1.0 (contact: support@example.invalid)"
-FETCH_TIMEOUT_S = 40
+# Must stay well under vercel.json `maxDuration` — a per-request timeout longer
+# than the function budget can only ever produce a 504 with nothing cached.
+FETCH_TIMEOUT_S = 8
+# A 30-day look-back fans out to 3 sources × 6 windows; stop chaining once the
+# wall clock is spent rather than blowing the whole function budget on FIRMS.
+FIRMS_TOTAL_BUDGET_S = 18.0
+# One wall clock for the whole request, shared by the perimeter and FIRMS legs.
+# Budgeting them independently let 8s of perimeters plus a FIRMS window started
+# just under its own deadline run past vercel.json `maxDuration` (30s).
+REQUEST_BUDGET_S = 24.0
+
+
+def _budget(deadline: float | None) -> float:
+    """Seconds available for one upstream call, capped by the request budget."""
+    if deadline is None:
+        return float(FETCH_TIMEOUT_S)
+    return min(float(FETCH_TIMEOUT_S), deadline - time.monotonic())
 
 # NIFC/WFIGS current interagency fire perimeters (ArcGIS Online, public).
 WFIGS_PERIMETERS_URL = (
@@ -83,10 +101,34 @@ _PERIM_FIELDS = ",".join(
 DEFAULT_SIMPLIFY_DEG = 0.005
 
 # TTL caches. WFIGS updates through the day; FIRMS NRT ~ every 3 h.
-_PERIM_CACHE: dict[str, tuple[float, list["FirePerimeter"]]] = {}
+# Bounded because the keys embed caller-supplied query params (bbox, dayRange,
+# minFrp): an unbounded dict lets a caller mint entries until the process OOMs.
+_CACHE_MAX_ENTRIES = 64
+# Caches the (perimeters, note) pair, not just the perimeters: a truncated
+# WFIGS response is still worth serving, but its warning has to survive the
+# cache or the next 10 minutes of callers get a short list with no warning.
+_PERIM_CACHE: "OrderedDict[str, tuple[float, tuple[list[FirePerimeter], str | None]]]" = OrderedDict()
 _PERIM_TTL_S = 10 * 60
-_FIRMS_CACHE: dict[str, tuple[float, list["ActiveFire"]]] = {}
+_FIRMS_CACHE: "OrderedDict[str, tuple[float, list[ActiveFire]]]" = OrderedDict()
 _FIRMS_TTL_S = 30 * 60
+
+
+def _cache_get(cache: OrderedDict, key: str, ttl: float):
+    hit = cache.get(key)
+    if hit is None:
+        return None
+    if (time.monotonic() - hit[0]) >= ttl:
+        cache.pop(key, None)
+        return None
+    cache.move_to_end(key)
+    return hit[1]
+
+
+def _cache_put(cache: OrderedDict, key: str, value) -> None:
+    cache[key] = (time.monotonic(), value)
+    cache.move_to_end(key)
+    while len(cache) > _CACHE_MAX_ENTRIES:
+        cache.popitem(last=False)
 
 
 # ─────────────────────────── types ───────────────────────────
@@ -179,15 +221,20 @@ def _bbox_key(bbox: tuple[float, float, float, float] | None) -> str:
 def fetch_perimeters(
     bbox: tuple[float, float, float, float] | None = None,
     simplify_deg: float = DEFAULT_SIMPLIFY_DEG,
-) -> list[FirePerimeter]:
+    deadline: float | None = None,
+) -> tuple[list[FirePerimeter], str | None]:
     """Current WFIGS burn-area polygons, optionally clipped to a lon/lat bbox.
+
     Geometry is generalised server-side by ``simplify_deg`` (outSR degrees;
-    0 = full resolution). Filters to wildfire incidents. Fails soft."""
+    0 = full resolution). Filters to wildfire incidents. Fails soft.
+
+    Returns (perimeters, note); ``note`` is set when the layer is degraded, so
+    "no fires are burning" is never conflated with "we could not ask".
+    """
     key = f"{_bbox_key(bbox)}@{simplify_deg}"
-    now = time.monotonic()
-    hit = _PERIM_CACHE.get(key)
-    if hit is not None and (now - hit[0]) < _PERIM_TTL_S:
-        return hit[1]
+    cached = _cache_get(_PERIM_CACHE, key, _PERIM_TTL_S)
+    if cached is not None:
+        return cached
 
     params: dict[str, str] = {
         "where": "1=1",
@@ -208,11 +255,20 @@ def fetch_perimeters(
 
     url = WFIGS_PERIMETERS_URL + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    budget = _budget(deadline)
+    if budget <= 0:
+        return [], "Fire perimeters unavailable: request time budget exhausted."
     try:
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
+        with urllib.request.urlopen(req, timeout=budget) as r:
             data = json.loads(r.read().decode("utf-8"))
     except Exception:  # noqa: BLE001
-        return []
+        return [], "Fire perimeters unavailable: NIFC/WFIGS did not respond."
+
+    # ArcGIS answers a rejected query with HTTP 200 and an error body; treating
+    # that as "no features" would cache an empty map for the full TTL.
+    if isinstance(data, dict) and "error" in data:
+        detail = (data.get("error") or {}).get("message") or "unknown error"
+        return [], f"Fire perimeters unavailable: NIFC/WFIGS rejected the query ({detail})."
 
     out: list[FirePerimeter] = []
     for f in data.get("features", []) or []:
@@ -247,8 +303,12 @@ def fetch_perimeters(
         )
     # Biggest burn areas first — that's what an underwriter scans for.
     out.sort(key=lambda fp: -(fp.gis_acres or fp.incident_size_acres or 0.0))
-    _PERIM_CACHE[key] = (now, out)
-    return out
+    note = None
+    if data.get("exceededTransferLimit"):
+        note = ("Fire perimeter list was truncated by NIFC/WFIGS — some active "
+                "fires are not shown.")
+    _cache_put(_PERIM_CACHE, key, (out, note))
+    return out, note
 
 
 # ─────────────────────────── satellite heat (FIRMS) ───────────────────────────
@@ -308,6 +368,7 @@ def fetch_active_fires(
     day_range: int = 1,
     min_confidence: str = "nominal",
     min_frp: float = 0.0,
+    deadline: float | None = None,
 ) -> tuple[list[ActiveFire], str | None]:
     """NASA FIRMS thermal anomalies for the bbox over ``day_range`` days
     (chained ≤5-day windows). Drops detections below ``min_confidence`` /
@@ -323,28 +384,42 @@ def fetch_active_fires(
     area = ",".join(f"{c:.4f}" for c in box)  # west,south,east,north
     min_rank = _CONF_RANK.get(min_confidence, 1)
 
-    key = f"{map_key[:6]}:{_bbox_key(box)}:{day_range}:{min_confidence}:{min_frp}"
-    now = time.monotonic()
-    hit = _FIRMS_CACHE.get(key)
-    if hit is not None and (now - hit[0]) < _FIRMS_TTL_S:
-        return hit[1], None
+    key = (f"{hashlib.sha256(map_key.encode()).hexdigest()[:12]}:{_bbox_key(box)}"
+           f":{day_range}:{min_confidence}:{min_frp}")
+    cached = _cache_get(_FIRMS_CACHE, key, _FIRMS_TTL_S)
+    if cached is not None:
+        return cached, None
 
     out: list[ActiveFire] = []
-    any_ok = False
+    windows = _firms_windows(day_range)
+    expected = len(FIRMS_SOURCES) * len(windows)
+    ok = 0
+    # FIRMS gets its own slice, but never more than what is left of the whole
+    # request — otherwise a window started just inside the FIRMS deadline can
+    # still run the function past `maxDuration`.
+    firms_deadline = time.monotonic() + FIRMS_TOTAL_BUDGET_S
+    if deadline is not None:
+        firms_deadline = min(firms_deadline, deadline)
     for source in FIRMS_SOURCES:
-        for chunk, start_date in _firms_windows(day_range):
+        for chunk, start_date in windows:
+            budget = _budget(firms_deadline)
+            if budget <= 0:
+                break
             url = f"{FIRMS_AREA_URL}/{map_key}/{source}/{area}/{chunk}"
             if start_date:
                 url += f"/{start_date}"
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             try:
-                with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
+                with urllib.request.urlopen(req, timeout=budget) as r:
                     text = r.read().decode("utf-8", errors="replace")
             except Exception:  # noqa: BLE001
                 continue
-            if not text or text.lstrip().lower().startswith(("invalid", "<!doctype", "<html")):
+            # FIRMS answers a rate-limited or malformed request with HTTP 200
+            # and a plain-text body, so the only reliable success signal is a
+            # CSV header we recognise.
+            if not text or "latitude" not in text.split("\n", 1)[0].lower():
                 continue
-            any_ok = True
+            ok += 1
             for row in csv.DictReader(io.StringIO(text)):
                 lat, lon = _as_float(row.get("latitude")), _as_float(row.get("longitude"))
                 if lat is None or lon is None:
@@ -370,9 +445,19 @@ def fetch_active_fires(
                         else "",
                     )
                 )
-    if not any_ok:
-        return [], "Satellite heat layer unavailable: FIRMS did not respond (check FIRMS_MAP_KEY / quota)."
-    _FIRMS_CACHE[key] = (now, out)
+    if ok == 0:
+        return [], ("Satellite heat layer unavailable: FIRMS did not respond "
+                    "(check FIRMS_MAP_KEY / quota).")
+    if ok < expected:
+        # Partial coverage understates every footprint and every exposed-TIV
+        # figure derived from it, so say so and do NOT cache the short result.
+        covered = round(day_range * ok / expected)
+        return out, (
+            f"Satellite heat is incomplete: {ok} of {expected} FIRMS windows "
+            f"responded (~{covered}d of the {day_range}d requested). Heat shapes "
+            "and exposed TIV are understated."
+        )
+    _cache_put(_FIRMS_CACHE, key, out)
     return out, None
 
 
@@ -382,6 +467,10 @@ def fetch_active_fires(
 # which bogs the map. Shapes are built from the FULL set first; only the
 # returned point list is thinned (evenly strided) past this.
 HEAT_POINT_DISPLAY_CAP = 8000
+# At minSize "All" every isolated detection becomes its own shape, so a
+# fire-season CONUS pull can produce tens of thousands of polygons. Shapes are
+# sorted by detection count, so truncating keeps the ones worth looking at.
+HEAT_SHAPE_CAP = 2000
 # Grid for clustering detections into footprints (~2.2 km); VIIRS pixels are
 # ~375 m so this groups a fire's pixels without merging distant fires.
 HEAT_CLUSTER_GRID_DEG = 0.02
@@ -511,20 +600,26 @@ def _footprint_geometry(pts: list[ActiveFire], g: float = FOOTPRINT_GRID_DEG) ->
         return None
 
     # Nest interior rings as HOLES (unburned pockets) rather than filled
-    # polygons. A ring contained by an odd number of others is a hole; assign
-    # it to the smallest ring that contains it. Outers keep their holes.
-    def area(r: list[list[float]]) -> float:
+    # polygons. The tracer above emits edges with the burned area on the left,
+    # so an outer boundary comes back CCW (positive signed area) and an unburned
+    # pocket comes back CW (negative). Classifying on that sign is exact.
+    #
+    # Do NOT infer nesting by ray-casting a ring vertex: every vertex sits on
+    # the grid lattice, and two cells touching only at a corner share that exact
+    # vertex, where point-in-polygon is undefined. That misfiled disjoint lobes
+    # of a diagonal fire front as holes and dropped their TIV from the rollup.
+    def signed_area(r: list[list[float]]) -> float:
         s = 0.0
         for i in range(len(r) - 1):
             s += r[i][0] * r[i + 1][1] - r[i + 1][0] * r[i][1]
-        return abs(s) / 2.0
+        return s / 2.0
 
     def contains(outer: list[list[float]], pt: list[float]) -> bool:
         x, y = pt
         inside = False
-        n = len(outer)
-        j = n - 1
-        for i in range(n):
+        n_o = len(outer)
+        j = n_o - 1
+        for i in range(n_o):
             xi, yi = outer[i]
             xj, yj = outer[j]
             if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-15) + xi):
@@ -532,29 +627,39 @@ def _footprint_geometry(pts: list[ActiveFire], g: float = FOOTPRINT_GRID_DEG) ->
             j = i
         return inside
 
-    n = len(rings)
-    depth = [0] * n            # how many other rings contain this one
-    parent = [-1] * n          # smallest containing ring
-    for i in range(n):
-        pt = rings[i][0]
-        best_area = float("inf")
-        for k in range(n):
-            if k == i:
-                continue
-            if contains(rings[k], pt):
-                depth[i] += 1
-                a = area(rings[k])
-                if a < best_area:
-                    best_area = a
-                    parent[i] = k
+    def interior_point(hole: list[list[float]]) -> list[float]:
+        """A point strictly inside a CW hole ring, off the grid lattice.
 
-    polys: dict[int, list[list[list[float]]]] = {}
-    for i in range(n):
-        if depth[i] % 2 == 0:            # outer ring
-            polys.setdefault(i, [rings[i]])
-    for i in range(n):
-        if depth[i] % 2 == 1 and parent[i] in polys:  # hole → its outer
-            polys[parent[i]].append(rings[i])
+        Walking a hole ring keeps burned area on the left, so the unburned
+        pocket lies to the RIGHT of travel. Stepping half a cell that way from
+        an edge midpoint lands in the middle of an unburned cell.
+        """
+        (x0, y0), (x1, y1) = hole[0], hole[1]
+        dx, dy = x1 - x0, y1 - y0
+        length = math.hypot(dx, dy) or 1.0
+        return [
+            (x0 + x1) / 2.0 + (dy / length) * (g * 0.5),
+            (y0 + y1) / 2.0 - (dx / length) * (g * 0.5),
+        ]
+
+    areas = [signed_area(r) for r in rings]
+    polys: dict[int, list[list[list[float]]]] = {
+        i: [rings[i]] for i in range(len(rings)) if areas[i] > 0
+    }
+    if not polys:
+        return None
+    for i, ring in enumerate(rings):
+        if areas[i] >= 0:
+            continue
+        pt = interior_point(ring)
+        best, parent = float("inf"), -1
+        for k in polys:
+            if areas[k] < best and contains(rings[k], pt):
+                best, parent = areas[k], k
+        # An unplaceable pocket is left filled: over-stating burned area is the
+        # safe direction for an exposure number, under-stating it is not.
+        if parent >= 0:
+            polys[parent].append(ring)
 
     coords = list(polys.values())
     if not coords:
@@ -592,9 +697,9 @@ def cluster_heat_shapes(
     min_points: int = HEAT_CLUSTER_MIN_POINTS,
     min_cells: int = 1,
 ) -> list[HeatShape]:
-    """Convex-hull footprint per qualifying cluster. Clusters below
-    ``min_points`` detections or ``min_cells`` spatial extent are dropped
-    (removes factories/flares and one-off tiny detections). Pure Python."""
+    """Traced footprint per qualifying cluster. Clusters below ``min_points``
+    detections or ``min_cells`` spatial extent are dropped (removes
+    factories/flares and one-off tiny detections). Pure Python."""
     if not fires:
         return []
     shapes: list[HeatShape] = []
@@ -641,13 +746,19 @@ def build_wildfire_bundle(
     high count) and one-off tiny fires. Both the returned points and the heat
     shapes come from the surviving clusters."""
     bundle = WildfireBundle()
+    # One wall clock for both legs — see REQUEST_BUDGET_S.
+    deadline = time.monotonic() + REQUEST_BUDGET_S
     if include_perimeters:
-        bundle.perimeters = fetch_perimeters(bbox, simplify_deg=simplify_deg)
+        bundle.perimeters, perim_note = fetch_perimeters(
+            bbox, simplify_deg=simplify_deg, deadline=deadline
+        )
+        if perim_note:
+            bundle.notes.append(perim_note)
 
     if include_heat:
         fires, note = fetch_active_fires(
             map_key=map_key, bbox=bbox, day_range=day_range,
-            min_confidence=min_confidence, min_frp=min_frp,
+            min_confidence=min_confidence, min_frp=min_frp, deadline=deadline,
         )
         bundle.detections_total = len(fires)
         # Cluster once; keep only qualifying clusters. Shapes + displayed
@@ -662,6 +773,12 @@ def build_wildfire_bundle(
             if s is not None:
                 shapes.append(s)
         shapes.sort(key=lambda s: -s.detection_count)
+        if len(shapes) > HEAT_SHAPE_CAP:
+            bundle.notes.append(
+                f"Showing the {HEAT_SHAPE_CAP:,} largest heat clusters of "
+                f"{len(shapes):,}. Raise the minimum size to narrow the list."
+            )
+            shapes = shapes[:HEAT_SHAPE_CAP]
         bundle.heat_shapes = shapes
         bundle.active_fires = _thin(kept_points, HEAT_POINT_DISPLAY_CAP)
         dropped = len(fires) - len(kept_points)

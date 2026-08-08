@@ -5,7 +5,7 @@
  * by client across the selection, feedable into the XOL layer calc.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchLiveWildfire, fetchWildfireExposure, type WildfirePerimeterProps,
@@ -21,11 +21,13 @@ const SIZE_OPTIONS: { id: MinSize; label: string }[] = [
   { id: "medium", label: "Med+" }, { id: "large", label: "Large+" },
 ];
 
-function tiv(n: number): string {
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}bn`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}m`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}k`;
-  return `$${Math.round(n)}`;
+/** Rule 5: currency rides on every monetary value — never assume USD. */
+function tiv(n: number, ccy: string): string {
+  const v = n >= 1e9 ? `${(n / 1e9).toFixed(2)}bn`
+    : n >= 1e6 ? `${(n / 1e6).toFixed(1)}m`
+    : n >= 1e3 ? `${(n / 1e3).toFixed(0)}k`
+    : `${Math.round(n)}`;
+  return `${ccy} ${v}`;
 }
 
 function Toggle({ on, label, tint, onClick }: { on: boolean; label: string; tint: string; onClick: () => void }) {
@@ -60,7 +62,7 @@ function Pills<T extends string | number>({ options, value, onPick, fmt }: {
 
 interface LayerRow { deductible: number; limit: number; share: number; }
 
-function LayerCalc({ combinedTiv }: { combinedTiv: number }) {
+function LayerCalc({ combinedTiv, currency }: { combinedTiv: number; currency: string }) {
   const [layers, setLayers] = useState<LayerRow[]>([{ deductible: 0, limit: 500_000_000, share: 1 }]);
   const [result, setResult] = useState<LayerCalcResponse | null>(null);
   const [running, setRunning] = useState(false);
@@ -90,7 +92,7 @@ function LayerCalc({ combinedTiv }: { combinedTiv: number }) {
   return (
     <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--ink-200)" }}>
       <div style={{ fontWeight: 700, color: "var(--ink-600)", fontSize: "0.64rem", marginBottom: 4 }}>
-        Layer calc (XOL) on {tiv(combinedTiv)}
+        Layer calc (XOL) on {tiv(combinedTiv, currency)}
       </div>
       {layers.map((l, i) => (
         <div key={i} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 3, fontSize: "0.6rem" }}>
@@ -122,7 +124,7 @@ function LayerCalc({ combinedTiv }: { combinedTiv: number }) {
           {result.scenarios.map((sc) => (
             <div key={sc.label} style={{ display: "flex", justifyContent: "space-between" }}>
               <span>{sc.damageRatio != null ? `${(sc.damageRatio * 100).toFixed(0)}%` : sc.label}</span>
-              <span style={{ fontWeight: 600 }}>{tiv(sc.totalCeded)}</span>
+              <span style={{ fontWeight: 600 }}>{tiv(sc.totalCeded, currency)}</span>
             </div>
           ))}
         </div>
@@ -157,17 +159,10 @@ export function WildfirePanel() {
     staleTime: 5 * 60_000,
   });
 
-  // Combine exposure across selected fires.
-  const combined = useMemo(() => {
-    const res = exposure.data?.results ?? [];
-    const byClient = new Map<string, number>();
-    let total = 0, locs = 0;
-    for (const r of res) {
-      total += r.totalTiv; locs += r.locationCount;
-      for (const c of r.byClient) byClient.set(c.client, (byClient.get(c.client) ?? 0) + c.tiv);
-    }
-    return { total, locs, byClient: [...byClient.entries()].sort((a, b) => b[1] - a[1]) };
-  }, [exposure.data]);
+  // The union is computed server-side so overlapping selections (an official
+  // perimeter plus the heat shape over the same fire) count each location once.
+  const combined = exposure.data?.combined;
+  const ccy = exposure.data?.currency ?? "USD";
 
   if (!s.active) return null;
   const perim = perimQuery.data;
@@ -249,22 +244,27 @@ export function WildfirePanel() {
                   ))}
                 </div>
                 {exposure.isLoading && <div style={{ color: "var(--ink-500)" }}>Computing…</div>}
-                {exposure.data && (
+                {exposure.isError && <div style={{ color: "#b91c1c", fontSize: "0.64rem" }}>Couldn’t compute exposed TIV.</div>}
+                {exposure.data && combined && (
                   <>
-                    <div style={{ marginBottom: 3 }}>Total exposed <strong>{tiv(combined.total)}</strong> <span style={{ color: "var(--ink-500)" }}>· {combined.locs} locations</span></div>
+                    {exposure.data.warnings.map((w) => (
+                      <div key={w} style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 6, padding: "4px 6px", marginBottom: 4, fontSize: "0.6rem", lineHeight: 1.35 }}>{w}</div>
+                    ))}
+                    <div style={{ marginBottom: 3 }}>Total exposed <strong>{tiv(combined.totalTiv, ccy)}</strong> <span style={{ color: "var(--ink-500)" }}>· {combined.locationCount} locations</span></div>
                     {combined.byClient.length === 0
                       ? <div style={{ color: "var(--ink-500)", fontSize: "0.64rem" }}>No exposure inside the selected fire(s).</div>
-                      : combined.byClient.map(([c, t]) => (
-                        <div key={c} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.66rem" }}>
-                          <span>{c}</span><span style={{ fontWeight: 600 }}>{tiv(t)}</span>
+                      : combined.byClient.map((c) => (
+                        <div key={c.client} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.66rem" }}>
+                          <span>{c.client}</span><span style={{ fontWeight: 600 }}>{tiv(c.tiv, ccy)}</span>
                         </div>
                       ))}
                     {exposure.data.synthetic && (
                       <div style={{ marginTop: 4, color: "#92400e", fontSize: "0.58rem", lineHeight: 1.35 }}>
                         Estimated — synthetic locations from county aggregates (not location-level data).
+                        Max across perils at county grain.
                       </div>
                     )}
-                    {combined.total > 0 && <LayerCalc combinedTiv={combined.total} />}
+                    {combined.totalTiv > 0 && <LayerCalc combinedTiv={combined.totalTiv} currency={ccy} />}
                   </>
                 )}
               </div>
