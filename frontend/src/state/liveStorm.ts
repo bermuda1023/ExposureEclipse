@@ -225,6 +225,14 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     windMapFrameIndex: 0,
     highlightObs: null,
     windMapMode: "observed",
+    // Reset ALL storm-specific data slices — otherwise ModelTrackLayer /
+    // StrikeProbabilityLayer keep painting whatever they held from the
+    // previous storm. GTWO is intentionally NOT reset — it's a basin-wide
+    // overlay independent of any storm selection.
+    modelTracks: null,
+    modelTracksStatus: "idle",
+    ensembleRisk: null,
+    ensembleRiskStatus: "idle",
   }),
   setToggle: (key, value) => set({ [key]: value } as Partial<LiveStormState>),
   setWindMapMode: (mode) => set({ windMapMode: mode, windMapFrameIndex: 0 }),
