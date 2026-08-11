@@ -25,6 +25,10 @@ export interface LiveStormRow {
 export interface LiveStormListResponse {
   active: LiveStormRow[];
   replay: LiveStormRow[];
+  // Invests (CY 90-99, pre-advisory systems with a-deck coverage but no
+  // NHC-issued advisory yet). Model tracks + ensemble strike probability
+  // work; NHC-issued products (cone, surge, watches/warnings) do not.
+  invests: LiveStormRow[];
   hasActive: boolean;
   note: string | null;
 }
@@ -361,6 +365,29 @@ export interface EnsembleRiskResponse {
   notes: string[];
   attribution: string;
 }
+
+// ─────────── NHC Tropical Weather Outlook (basin-wide, no storm required) ───────────
+
+export interface GTWOArea {
+  basin: "atl" | "ep" | "cp";
+  windowDays: 2 | 5;
+  chancePct: number;
+  chanceBucket: "low" | "medium" | "high";
+  label: string;
+  description: string;
+  ring: [number, number][];        // closed lon/lat ring
+}
+
+export interface GTWOResponse {
+  basin: "atl" | "ep" | "cp";
+  twoDay: GTWOArea[];
+  fiveDay: GTWOArea[];
+  note: string | null;
+  attribution: string;
+}
+
+export const fetchGTWO = (basin: "atl" | "ep" | "cp" = "atl") =>
+  apiGet<GTWOResponse>("/live/gtwo", { basin });
 
 export const fetchEnsembleRisk = (
   stormId: string,

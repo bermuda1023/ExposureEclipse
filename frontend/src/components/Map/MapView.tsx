@@ -35,6 +35,7 @@ import { LiveStormLayer } from "./LiveStormLayer";
 import { LiveStormPanel } from "./LiveStormPanel";
 import { ModelTrackLayer } from "./ModelTrackLayer";
 import { StrikeProbabilityLayer } from "./StrikeProbabilityLayer";
+import { TWOLayer } from "./TWOLayer";
 import { WildfireLayer } from "./WildfireLayer";
 import { WildfirePanel } from "./WildfirePanel";
 import { WildfireLegend } from "./WildfireLegend";
@@ -601,6 +602,7 @@ export function MapView({ data, isLoading, error }: Props) {
       <LiveStormLayer map={mapInstance} />
       <ModelTrackLayer map={mapInstance} />
       <StrikeProbabilityLayer map={mapInstance} />
+      <TWOLayer map={mapInstance} />
       <WindParticleLayer map={mapInstance} />
       <WildfireLayer map={mapInstance} />
       <FloodLayer map={mapInstance} />

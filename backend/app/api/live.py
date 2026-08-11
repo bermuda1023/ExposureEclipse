@@ -34,6 +34,8 @@ from ..services.atcf_adecks import (
     list_available_cycles,
 )
 from ..services.ensemble_envelope import build_envelope
+from ..services.invests import InvestSummary, fetch_active_invests
+from ..services.nhc_gtwo import fetch_gtwo
 from ..services.ensemble_risk import (
     ATLANTIC_COASTAL_STATES,
     DEFAULT_STRIKE_THRESHOLD_NM,
@@ -70,6 +72,11 @@ class LiveStormRow(CamelModel):
 class LiveStormListResponse(CamelModel):
     active: list[LiveStormRow]
     replay: list[LiveStormRow]
+    # Invests (CY 90-99) — pre-advisory systems with ATCF a-deck coverage
+    # but no NHC advisory yet. Model tracks + ensemble strike probability
+    # both work for them; NHC-issued products (cone, surge, watches/warnings)
+    # do not. Rendered as a distinct picker section.
+    invests: list[LiveStormRow]
     has_active: bool
     note: str | None = None
 
@@ -339,6 +346,24 @@ class LiveStormBundle(CamelModel):
 # ─────────────────────────── helpers ───────────────────────────
 
 
+def _invest_to_row(inv: InvestSummary) -> LiveStormRow:
+    """Map an :class:`InvestSummary` into the same LiveStormRow shape the
+    picker uses for active + replay entries. classification=INVEST is what
+    the frontend keys on for the distinct chip styling."""
+    return LiveStormRow(
+        storm_id=inv.atcf_id,
+        name=inv.name,
+        year=int(inv.atcf_id[-4:]),
+        classification="INVEST",
+        intensity_kt=inv.intensity_kt,
+        pressure_mb=None,
+        lat=inv.lat,
+        lon=inv.lon,
+        is_live=True,
+        label=inv.label,
+    )
+
+
 def _summary_to_row(s: LiveStormSummary) -> LiveStormRow:
     return LiveStormRow(
         storm_id=s.storm_id,
@@ -411,18 +436,35 @@ def _states_in_bbox(bbox: tuple[float, float, float, float]) -> list[str]:
 
 @router.get("/storms", response_model=LiveStormListResponse)
 def list_live_storms() -> LiveStormListResponse:
-    """Active NHC storms + curated replay candidates (always available)."""
+    """Active NHC storms + curated replay candidates + active invests.
+
+    Invests (pre-advisory systems with ATCF a-deck coverage) probe every
+    (basin × 90..99) slot in parallel — an outage there degrades to an
+    empty invest list rather than 5xx'ing the whole picker."""
     active = [_summary_to_row(s) for s in fetch_active_summaries()]
     replay = [_summary_to_row(s) for s in replay_summaries()]
+    try:
+        invests = [_invest_to_row(i) for i in fetch_active_invests()]
+    except Exception:  # noqa: BLE001 — invest FTP outage → empty, not 5xx
+        invests = []
     note = None
-    if not active:
+    if not active and not invests:
         note = (
-            "No active Atlantic storms right now. Pick a replay storm below "
-            "for a demo of the live-data overlays."
+            "No active Atlantic storms or invests right now. Pick a replay "
+            "storm below for a demo of the live-data overlays."
+        )
+    elif not active and invests:
+        note = (
+            "No active named/numbered storms — but "
+            f"{len(invests)} invest{'s' if len(invests) != 1 else ''} being "
+            "tracked. Model tracks + ensemble strike probability are "
+            "available for these; NHC-issued products (cone, watches) "
+            "start when an advisory does."
         )
     return LiveStormListResponse(
         active=active,
         replay=replay,
+        invests=invests,
         has_active=bool(active),
         note=note,
     )
@@ -804,6 +846,77 @@ def wind_forecast_at_point(
             )
             for f in result.forecasts
         ],
+    )
+
+
+# ─────────────────── NHC Tropical Weather Outlook ───────────────────
+
+
+class GTWOAreaOut(CamelModel):
+    """One formation-chance polygon from the NHC Graphical Tropical Weather
+    Outlook. ``chance_pct`` is the % chance of tropical cyclone formation
+    in the associated ``window_days`` (2 or 5) window; ``chance_bucket``
+    matches NHC's own colour legend (yellow=low, orange=medium, red=high)."""
+
+    basin: str
+    window_days: int
+    chance_pct: int
+    chance_bucket: str
+    label: str
+    description: str
+    ring: list[list[float]]      # closed [[lon, lat], ...]
+
+
+class GTWOResponse(CamelModel):
+    basin: str
+    two_day: list[GTWOAreaOut]
+    five_day: list[GTWOAreaOut]
+    note: str | None
+    attribution: str = (
+        "NHC Graphical Tropical Weather Outlook (issued every 6h). Areas "
+        "represent NHC's assessment of tropical cyclone formation potential "
+        "in the corresponding window. Not a track forecast."
+    )
+
+
+@router.get("/gtwo", response_model=GTWOResponse)
+def gtwo_endpoint(
+    basin: str = Query(default="atl", pattern="^(atl|ep|cp)$"),
+) -> GTWOResponse:
+    """NHC 2-day + 5-day Tropical Weather Outlook areas for one basin.
+
+    This is the pre-invest signal — days before a system gets a numbered
+    invest slot and typically a week+ before a name. Empty lists on
+    unreachable KML feed are surfaced with an explanatory note (never
+    silently confused with "no active areas")."""
+    bundle = fetch_gtwo(basin)
+    return GTWOResponse(
+        basin=bundle.basin,
+        two_day=[
+            GTWOAreaOut(
+                basin=a.basin,
+                window_days=a.window_days,
+                chance_pct=a.chance_pct,
+                chance_bucket=a.chance_bucket,
+                label=a.label,
+                description=a.description,
+                ring=[[round(lon, 4), round(lat, 4)] for (lon, lat) in a.ring],
+            )
+            for a in bundle.two_day
+        ],
+        five_day=[
+            GTWOAreaOut(
+                basin=a.basin,
+                window_days=a.window_days,
+                chance_pct=a.chance_pct,
+                chance_bucket=a.chance_bucket,
+                label=a.label,
+                description=a.description,
+                ring=[[round(lon, 4), round(lat, 4)] for (lon, lat) in a.ring],
+            )
+            for a in bundle.five_day
+        ],
+        note=bundle.note,
     )
 
 

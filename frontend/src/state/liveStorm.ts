@@ -11,6 +11,7 @@
 import { create } from "zustand";
 import type {
   EnsembleRiskResponse,
+  GTWOResponse,
   LiveStormBundle,
   ModelFamily,
   ModelTracksResponse,
@@ -81,6 +82,14 @@ interface LiveStormState {
   showStrikeProbability: boolean;
   strikeThresholdNm: number;
 
+  // NHC Tropical Weather Outlook (basin-wide "what could become a storm").
+  // Independent of the active storm selection — the underwriter can leave
+  // this on all the time as a pre-invest signal.
+  gtwoData: GTWOResponse | null;
+  gtwoStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  showGTWO: boolean;
+  gtwoWindow: "2" | "5" | "both";
+
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
   setError: (msg: string) => void;
@@ -106,6 +115,11 @@ interface LiveStormState {
     s: "idle" | "loading" | "ok" | "empty" | "error",
   ) => void;
   setStrikeThresholdNm: (nm: number) => void;
+  setGTWOData: (r: GTWOResponse | null) => void;
+  setGTWOStatus: (
+    s: "idle" | "loading" | "ok" | "empty" | "error",
+  ) => void;
+  setGTWOWindow: (w: "2" | "5" | "both") => void;
 }
 
 export type ToggleKey =
@@ -123,7 +137,8 @@ export type ToggleKey =
   | "showModelTracks"
   | "showEnsembleEnvelope"
   | "showAiEnvelope"
-  | "showStrikeProbability";
+  | "showStrikeProbability"
+  | "showGTWO";
 
 export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   activeStormId: null,
@@ -175,6 +190,10 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   ensembleRiskStatus: "idle" as const,
   showStrikeProbability: false,
   strikeThresholdNm: 60,
+  gtwoData: null,
+  gtwoStatus: "idle" as const,
+  showGTWO: false,
+  gtwoWindow: "5" as const,   // 5-day is the higher-signal default
 
   start: (stormId) =>
     set({
@@ -233,4 +252,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     ensembleRisk: null,
     ensembleRiskStatus: "idle",
   }),
+  setGTWOData: (r) => set({ gtwoData: r }),
+  setGTWOStatus: (s) => set({ gtwoStatus: s }),
+  setGTWOWindow: (w) => set({ gtwoWindow: w }),
 }));

@@ -6,10 +6,11 @@
  * HurricaneImpactPanel which lives bottom-left.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchEnsembleRisk,
+  fetchGTWO,
   fetchLiveStormBundle,
   fetchLiveStormList,
   fetchModelTracks,
@@ -22,6 +23,7 @@ import {
   type WatchWarnExposureResponse,
 } from "../../api/live";
 import { FAMILY_COLOR } from "./ModelTrackLayer";
+import { GTWO_BUCKET_COLOR } from "./TWOLayer";
 import { fetchHurricaneImpact } from "../../api/hurricanes";
 import { useFiltersStore } from "../../state/filters";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
@@ -196,6 +198,26 @@ export function LiveStormPanel() {
     store.ensembleRisk, store.ensembleRiskStatus,
   ]);
 
+  // GTWO (Tropical Weather Outlook) — basin-wide, doesn't need a storm.
+  // Fetch on toggle-on, refresh every 30 min while enabled (NHC issues the
+  // outlook every 6h, so 30 min is generous and cheap).
+  useEffect(() => {
+    if (!store.showGTWO) return;
+    if (store.gtwoStatus === "loading") return;
+    const stale = !store.gtwoData;
+    if (!stale) return;
+    const s = useLiveStormStore.getState();
+    s.setGTWOStatus("loading");
+    fetchGTWO("atl")
+      .then((r) => {
+        s.setGTWOData(r);
+        s.setGTWOStatus(
+          r.twoDay.length + r.fiveDay.length > 0 ? "ok" : "empty",
+        );
+      })
+      .catch(() => s.setGTWOStatus("error"));
+  }, [store.showGTWO, store.gtwoData, store.gtwoStatus]);
+
   if (!open) return null;
 
   return (
@@ -270,40 +292,63 @@ export function LiveStormPanel() {
                   No active Atlantic storms right now.
                 </div>
               )}
+              {list.data.invests.length > 0 && (
+                <StormPicker
+                  label={`Invests (pre-advisory · ${list.data.invests.length})`}
+                  rows={list.data.invests}
+                  activeId={activeId}
+                  variant="invest"
+                  onPick={(id) => useLiveStormStore.getState().start(id)}
+                />
+              )}
+              {list.data.replay.length > 0 && (
+                <StormPicker
+                  label="Replay"
+                  rows={list.data.replay}
+                  activeId={activeId}
+                  variant="replay"
+                  onPick={(id) => useLiveStormStore.getState().start(id)}
+                />
+              )}
             </>
           )}
-          <div style={{ borderTop: "1px solid var(--ink-200)", paddingTop: 8 }}>
-            <div
-              style={{
-                fontSize: "0.62rem",
-                color: "var(--ink-500)",
-                fontWeight: 700,
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-                marginBottom: 6,
-              }}
-            >
-              Layers
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+          <div style={{ borderTop: "1px solid var(--ink-200)", paddingTop: 8, display: "grid", gap: 10 }}>
+            {/* Basin overlays — work without a storm selection. Own subsection
+                so the underwriter can leave TWO on as a pre-invest signal
+                without wading past storm-specific chips. */}
+            <ChipGroup label="Basin (no storm needed)">
+              <LayerChip store={store} k="showGTWO" label="Formation outlook (TWO)" hint="NHC 2/5-day outlook · yellow/orange/red = low/med/high chance" color="#f97316" />
+              <GTWOWindowSelector store={store} />
+            </ChipGroup>
+
+            <ChipGroup label="Track & cone">
               <LayerChip store={store} k="showForecastCone" label="NHC cone" hint="Cone of uncertainty" color="#475569" />
-              <LayerChip store={store} k="showSurge" label="Peak surge" hint="NHC coastal inundation" color="#dc2626" />
-              <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
               <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
-              <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
-              <LayerChip store={store} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
-              <LayerChip store={store} k="showModelTracks" label="Model ensemble" hint="GEFS + ECMWF-ENS + AI spaghetti tracks" color="#a855f7" />
+              <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
+            </ChipGroup>
+
+            <ChipGroup label="Model ensemble">
+              <LayerChip store={store} k="showModelTracks" label="Model tracks" hint="GEFS + ECMWF-ENS + AI spaghetti" color="#a855f7" />
               <LayerChip store={store} k="showEnsembleEnvelope" label="Consensus envelope" hint="Convex hull of every ensemble member" color="#7f1d1d" />
               <LayerChip store={store} k="showAiEnvelope" label="AI-only envelope" hint="GraphCast + GenCast + AIFS + FourCastNet + Pangu" color="#a855f7" />
               <LayerChip store={store} k="showStrikeProbability" label="Strike probability" hint="Ensemble P(track within threshold nm) by county" color="#dc2626" />
-              <WindMapModeSelector store={store} />
-              <WindMapTimeSlider store={store} />
+            </ChipGroup>
+
+            <ChipGroup label="Threat products">
               <LayerChip store={store} k="showWatchesWarnings" label="NHC watches/warnings" hint="Hurricane / TS / Storm Surge · NHC palette" color="#ec4899" />
+              <LayerChip store={store} k="showSurge" label="Peak surge" hint="NHC coastal inundation" color="#dc2626" />
               <LayerChip store={store} k="showAlerts" label="Other NWS alerts" hint="Flood, tornado, wind..." color="#ea580c" />
+            </ChipGroup>
+
+            <ChipGroup label="Wind & observations">
+              <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
+              <LayerChip store={store} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
               <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
               <LayerChip store={store} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
               <LayerChip store={store} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
-            </div>
+              <WindMapModeSelector store={store} />
+              <WindMapTimeSlider store={store} />
+            </ChipGroup>
           </div>
           {store.activeStormId && (
             <button
@@ -358,23 +403,171 @@ export function LiveStormPanel() {
   );
 }
 
-function StormPicker({
+/**
+ * Small labelled subsection of chips. Keeps the chip grid legible now that
+ * we have ~15 layer chips spread across five logical groups. Full-width
+ * label bar above a 2-col chip grid, matching the visual style of the
+ * previous single "Layers" section but broken up for scanability.
+ */
+function ChipGroup({
   label,
-  rows,
-  activeId,
-  onPick,
+  children,
 }: {
   label: string;
-  rows: LiveStormRow[];
-  activeId: string | null;
-  onPick: (id: string) => void;
+  children: ReactNode;
 }) {
   return (
     <div>
       <div
         style={{
-          fontSize: "0.62rem",
+          fontSize: "0.6rem",
           color: "var(--ink-500)",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 2-day vs 5-day vs both toggle for the GTWO overlay. Small three-segment
+ * pill, spans two columns so it lives directly under the TWO chip.
+ */
+function GTWOWindowSelector({
+  store,
+}: {
+  store: ReturnType<typeof useLiveStormStore.getState>;
+}) {
+  if (!store.showGTWO) return null;
+  const opts: Array<[typeof store.gtwoWindow, string, string]> = [
+    ["2", "2d", "2-day formation chance"],
+    ["5", "5d", "5-day formation chance (default)"],
+    ["both", "Both", "Show both windows, 2-day on top"],
+  ];
+
+  // Count areas by chance bucket for the compact status line — gives an
+  // at-a-glance signal (any red areas? how many?) without needing to look
+  // at the map. When still loading, just show a spinner label.
+  const areas = store.gtwoData
+    ? store.gtwoWindow === "2"
+      ? store.gtwoData.twoDay
+      : store.gtwoWindow === "5"
+      ? store.gtwoData.fiveDay
+      : [...store.gtwoData.twoDay, ...store.gtwoData.fiveDay]
+    : [];
+  const highCount = areas.filter((a) => a.chanceBucket === "high").length;
+  const medCount = areas.filter((a) => a.chanceBucket === "medium").length;
+  const lowCount = areas.filter((a) => a.chanceBucket === "low").length;
+  const status = store.gtwoStatus;
+
+  return (
+    <div style={{ gridColumn: "span 2", display: "grid", gap: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3 }}>
+        {opts.map(([val, label, hint]) => {
+          const active = store.gtwoWindow === val;
+          return (
+            <button
+              key={val}
+              type="button"
+              title={hint}
+              onClick={() => useLiveStormStore.getState().setGTWOWindow(val)}
+              style={{
+                all: "unset",
+                cursor: "pointer",
+                padding: "3px 5px",
+                borderRadius: 3,
+                fontSize: "0.66rem",
+                textAlign: "center",
+                border: `1px solid ${active ? "#f97316" : "var(--ink-200)"}`,
+                background: active ? "#fff7ed" : "transparent",
+                color: active ? "#9a3412" : "var(--ink-600)",
+                fontWeight: active ? 700 : 400,
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {status === "loading" && (
+        <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>Loading outlook…</div>
+      )}
+      {status === "error" && (
+        <div style={{ fontSize: "0.62rem", color: "var(--error-700)" }}>
+          Outlook feed unreachable.
+        </div>
+      )}
+      {status === "ok" && areas.length > 0 && (
+        <div style={{ display: "flex", gap: 6, fontSize: "0.62rem", alignItems: "center" }}>
+          {highCount > 0 && (
+            <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: GTWO_BUCKET_COLOR.high }} />
+              <strong>{highCount}</strong> high
+            </span>
+          )}
+          {medCount > 0 && (
+            <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: GTWO_BUCKET_COLOR.medium }} />
+              <strong>{medCount}</strong> med
+            </span>
+          )}
+          {lowCount > 0 && (
+            <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: GTWO_BUCKET_COLOR.low }} />
+              <strong>{lowCount}</strong> low
+            </span>
+          )}
+        </div>
+      )}
+      {status === "ok" && areas.length === 0 && (
+        <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>
+          No active areas — basin is quiet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StormPicker({
+  label,
+  rows,
+  activeId,
+  onPick,
+  variant = "active",
+}: {
+  label: string;
+  rows: LiveStormRow[];
+  activeId: string | null;
+  onPick: (id: string) => void;
+  variant?: "active" | "invest" | "replay";
+}) {
+  // Distinct pastel per variant so the picker sections are instantly
+  // distinguishable at a glance without a legend key. Invests get a
+  // yellow tint that matches the NHC low-confidence TWO chip; replays
+  // get a muted slate to read as historical.
+  const variantStyle: Record<
+    "active" | "invest" | "replay",
+    { bg: string; border: string; label: string; accent: string }
+  > = {
+    active:  { bg: "var(--ink-50)", border: "var(--ink-200)", label: "var(--ink-500)", accent: "var(--brand-400)" },
+    invest:  { bg: "#fef3c7", border: "#fbbf24", label: "#78350f", accent: "#f59e0b" },
+    replay:  { bg: "#f1f5f9", border: "#cbd5e1", label: "#475569", accent: "#64748b" },
+  };
+  const vs = variantStyle[variant];
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: "0.62rem",
+          color: vs.label,
           fontWeight: 700,
           textTransform: "uppercase",
           letterSpacing: "0.05em",
@@ -397,9 +590,14 @@ function StormPicker({
                 borderRadius: 4,
                 fontSize: "0.72rem",
                 color: isActive ? "var(--brand-700)" : "var(--ink-800)",
-                background: isActive ? "var(--brand-50)" : "var(--ink-50)",
-                border: `1px solid ${isActive ? "var(--brand-400)" : "var(--ink-200)"}`,
+                background: isActive ? "var(--brand-50)" : vs.bg,
+                border: `1px solid ${isActive ? vs.accent : vs.border}`,
               }}
+              title={
+                variant === "invest"
+                  ? "Pre-advisory invest — model tracks + strike probability available; NHC-issued products (cone, watches) start when an advisory does."
+                  : undefined
+              }
             >
               {r.label}
             </button>
@@ -1273,11 +1471,17 @@ function IntensitySparkline({
 }
 
 function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundle }) {
+  const isInvest = data.storm.classification === "INVEST";
+  // Invests get a distinct pale-yellow summary card matching the picker
+  // treatment, plus an explicit note that NHC-issued products (cone, surge,
+  // watches/warnings) will be empty until an advisory is issued.
+  const bg = isInvest ? "#fef3c7" : "var(--brand-50)";
+  const border = isInvest ? "#fbbf24" : "var(--brand-400)";
   return (
     <div
       style={{
-        background: "var(--brand-50)",
-        border: "1px solid var(--brand-400)",
+        background: bg,
+        border: `1px solid ${border}`,
         borderRadius: 4,
         padding: 6,
         fontSize: "0.68rem",
@@ -1290,6 +1494,13 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
         <strong>{data.storm.name}</strong> · {data.storm.year} ·{" "}
         {data.storm.intensityKt} kt
       </div>
+      {isInvest && (
+        <div style={{ fontSize: "0.62rem", color: "#78350f", fontStyle: "italic" }}>
+          Pre-advisory invest — enable "Model tracks" + "Strike probability"
+          for the ensemble signal. NHC cone / watches / surge remain empty
+          until an advisory is issued.
+        </div>
+      )}
       <div>{data.observedTrack.length} observed fixes · {data.forecasts.length} advisories</div>
       {data.watchesWarnings.length > 0 && (
         <div>
