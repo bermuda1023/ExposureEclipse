@@ -34,6 +34,7 @@ const SRC_OBSERVED = "live-observed";
 const SRC_FORECAST_LATEST = "live-forecast-latest";
 const SRC_FORECAST_HISTORY = "live-forecast-history";
 const SRC_ALERTS = "live-alerts";
+const SRC_WW = "live-watches-warnings";
 const SRC_BUOYS = "live-buoys";
 const SRC_LAND = "live-land";
 const SRC_SST = "live-sst";
@@ -52,6 +53,8 @@ const LAYER_FORECAST_LATEST = "live-forecast-latest-line";
 const LAYER_FORECAST_HISTORY = "live-forecast-history-line";
 const LAYER_ALERTS_FILL = "live-alerts-fill";
 const LAYER_ALERTS_LINE = "live-alerts-line";
+const LAYER_WW_FILL = "live-watches-warnings-fill";
+const LAYER_WW_LINE = "live-watches-warnings-line";
 const LAYER_BUOYS = "live-buoys-circle";
 const LAYER_LAND = "live-land-circle";
 const LAYER_SST = "live-sst-fill";
@@ -193,6 +196,35 @@ function buildAlertsFC(alerts: import("../../api/live").WeatherAlert[]) {
         event: a.event,
         severity: a.severity,
         headline: a.headline,
+      },
+    });
+  }
+  return { type: "FeatureCollection" as const, features };
+}
+
+// NHC watches/warnings — carry the NHC operational colour on the feature so
+// the paint expression can be a straight ["get", "color"] instead of a bulky
+// match on event. Sort ascending by rank so higher-rank polygons paint LAST
+// (on top): Extreme Wind Warning > Hurricane Warning > Storm Surge Warning
+// > Hurricane Watch > TS Warning > TS Watch.
+function buildWatchWarnFC(ww: import("../../api/live").NHCWatchWarn[]) {
+  const features: GeoJSON.Feature[] = [];
+  const sorted = [...ww].sort((a, b) => a.rank - b.rank);
+  for (const w of sorted) {
+    if (!w.geometry) continue;
+    features.push({
+      type: "Feature",
+      id: w.alertId,
+      geometry: w.geometry as GeoJSON.Geometry,
+      properties: {
+        alertId: w.alertId,
+        event: w.event,
+        family: w.family,
+        color: w.color,
+        rank: w.rank,
+        headline: w.headline,
+        areasAffected: w.areasAffected,
+        expiresAt: w.expiresAt,
       },
     });
   }
@@ -465,6 +497,7 @@ export function LiveStormLayer({ map }: Props) {
   const data = useLiveStormStore((s) => s.data);
   const showForecastHistory = useLiveStormStore((s) => s.showForecastHistory);
   const showAlerts = useLiveStormStore((s) => s.showAlerts);
+  const showWatchesWarnings = useLiveStormStore((s) => s.showWatchesWarnings);
   const showBuoys = useLiveStormStore((s) => s.showBuoys);
   const showLand = useLiveStormStore((s) => s.showLand);
   const showSst = useLiveStormStore((s) => s.showSst);
@@ -486,6 +519,7 @@ export function LiveStormLayer({ map }: Props) {
       // ── Sources (data) — always set, even empty (no features = no draw). ──
       setSource(map, SRC_SST, buildSstFC(data?.sst ?? [], data?.sstMeta?.stepDeg ?? 0.1));
       setSource(map, SRC_ALERTS, buildAlertsFC(data?.alerts ?? []));
+      setSource(map, SRC_WW, buildWatchWarnFC(data?.watchesWarnings ?? []));
       setSource(map, SRC_FORECAST_HISTORY, buildForecastHistoryFC(data?.forecasts ?? []));
       const latestForecast = (() => {
         if (!data?.forecasts.length) return [];
@@ -610,6 +644,29 @@ export function LiveStormLayer({ map }: Props) {
           "line-opacity": 0.65,
         },
       }, "county-line");
+
+      // NHC operational Tropical Cyclone watches / warnings. Colour comes
+      // straight off the feature (pink=Hurricane Warning, cyan=TS Watch,
+      // violet=Storm Surge Warning, ...) so this reads exactly like NHC's
+      // own product graphics. Fill is translucent enough that overlapping
+      // watch × warning at the same coastline both remain visible; the
+      // outline gets the same colour but full opacity for definition.
+      ensureLayer(map, LAYER_WW_FILL, {
+        id: LAYER_WW_FILL, type: "fill", source: SRC_WW,
+        paint: {
+          "fill-color": ["get", "color"] as unknown as never,
+          "fill-opacity": 0.35,
+          "fill-outline-color": "rgba(0,0,0,0)",
+        },
+      }, "county-line");
+      ensureLayer(map, LAYER_WW_LINE, {
+        id: LAYER_WW_LINE, type: "line", source: SRC_WW,
+        paint: {
+          "line-color": ["get", "color"] as unknown as never,
+          "line-width": 1.6,
+          "line-opacity": 0.95,
+        },
+      });
 
       // ── Wind-field cones: same Cat palette as historical impact. Outer
       //    R64 (asymmetric) first at low opacity, inner Rmax on top. Forecast
@@ -894,6 +951,8 @@ export function LiveStormLayer({ map }: Props) {
       moveToTop(map, LAYER_NHC_CONE_LINE);
       moveToTop(map, LAYER_SURGE_FILL);
       moveToTop(map, LAYER_SURGE_LINE);
+      moveToTop(map, LAYER_WW_FILL);
+      moveToTop(map, LAYER_WW_LINE);
       moveToTop(map, LAYER_FORECAST_HISTORY);
       moveToTop(map, LAYER_FORECAST_LATEST);
       moveToTop(map, LAYER_OBSERVED);
@@ -902,6 +961,8 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_SST, showSst);
       setVis(map, LAYER_ALERTS_FILL, showAlerts);
       setVis(map, LAYER_ALERTS_LINE, showAlerts);
+      setVis(map, LAYER_WW_FILL, showWatchesWarnings);
+      setVis(map, LAYER_WW_LINE, showWatchesWarnings);
       setVis(map, LAYER_FORECAST_HISTORY, showForecastHistory);
       // Latest forecast + observed track always visible when a storm is loaded.
       setVis(map, LAYER_FORECAST_LATEST, true);
@@ -928,7 +989,8 @@ export function LiveStormLayer({ map }: Props) {
     else map.once("style.load", apply);
   }, [
     map, data,
-    showForecastHistory, showAlerts, showBuoys, showLand, showSst,
+    showForecastHistory, showAlerts, showWatchesWarnings,
+    showBuoys, showLand, showSst,
     showWindField, showForecastCone, showSurge, showWindMap,
     windMapMode, gfsGrid, ecmwfGrid, highlightObs, frameIndex,
   ]);
@@ -999,6 +1061,38 @@ export function LiveStormLayer({ map }: Props) {
       map.getCanvas().style.cursor = "";
     };
 
+    const onEnterWW = async (e: mapboxgl.MapMouseEvent) => {
+      const f = (e as any).features?.[0];
+      if (!f) return;
+      const p = f.properties as {
+        event: string;
+        color: string;
+        headline: string;
+        areasAffected: string;
+        expiresAt: string;
+      };
+      const mb = await import("mapbox-gl");
+      popup?.remove();
+      const expires = p.expiresAt
+        ? new Date(p.expiresAt).toUTCString().slice(5, 22) + " UTC"
+        : "—";
+      popup = new mb.default.Popup({ closeButton: false, closeOnClick: false })
+        .setLngLat(e.lngLat)
+        .setHTML(
+          `<div style="font-size:11px;line-height:1.4;max-width:280px">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${p.color}"></span>
+              <strong>${p.event}</strong>
+            </div>
+            <div style="color:#475569;margin-bottom:4px">${p.headline}</div>
+            <div style="color:#64748b;font-size:10px">Areas: ${p.areasAffected}</div>
+            <div style="color:#64748b;font-size:10px">Expires: ${expires}</div>
+          </div>`,
+        )
+        .addTo(map);
+      map.getCanvas().style.cursor = "pointer";
+    };
+
     const reg = () => {
       if (map.getLayer(LAYER_BUOYS)) {
         map.on("mouseenter", LAYER_BUOYS, onEnterBuoy as never);
@@ -1007,6 +1101,10 @@ export function LiveStormLayer({ map }: Props) {
       if (map.getLayer(LAYER_LAND)) {
         map.on("mouseenter", LAYER_LAND, onEnterLand as never);
         map.on("mouseleave", LAYER_LAND, onLeave);
+      }
+      if (map.getLayer(LAYER_WW_FILL)) {
+        map.on("mouseenter", LAYER_WW_FILL, onEnterWW as never);
+        map.on("mouseleave", LAYER_WW_FILL, onLeave);
       }
     };
     if (map.isStyleLoaded()) reg();
@@ -1017,6 +1115,8 @@ export function LiveStormLayer({ map }: Props) {
         map.off("mouseleave", LAYER_BUOYS, onLeave);
         map.off("mouseenter", LAYER_LAND, onEnterLand as never);
         map.off("mouseleave", LAYER_LAND, onLeave);
+        map.off("mouseenter", LAYER_WW_FILL, onEnterWW as never);
+        map.off("mouseleave", LAYER_WW_FILL, onLeave);
       } catch {
         /* layer was already torn down */
       }

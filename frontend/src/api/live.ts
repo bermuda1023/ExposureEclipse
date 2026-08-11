@@ -66,6 +66,33 @@ export interface WeatherAlert {
   geometry: GeoJSON.Geometry | null;
 }
 
+// NHC-issued coastal Tropical Cyclone watches/warnings, split out of the
+// generic NWS alerts stream so we can paint them in the NHC operational
+// colour scheme (pink=Hurricane Warning, cyan=TS Watch, etc.) instead of the
+// generic severity palette. Zone-coded alerts (no polygon) have geometry:null
+// and are counted in the bundle's watchesWarningsZoneOnly field.
+export interface NHCWatchWarn {
+  alertId: string;
+  event: string;
+  family:
+    | "hurricane"
+    | "tropical_storm"
+    | "storm_surge"
+    | "extreme_wind"
+    | "statement"
+    | "other";
+  color: string;             // NHC operational hex — feed straight to the map paint
+  rank: number;              // higher = more severe; drives z-order
+  headline: string;
+  severity: string;
+  urgency: string;
+  certainty: string;
+  sentAt: string;
+  expiresAt: string;
+  areasAffected: string;
+  geometry: GeoJSON.Geometry | null;
+}
+
 export interface BuoyObs {
   stationId: string;
   lat: number;
@@ -205,6 +232,8 @@ export interface LiveStormBundle {
   forecasts: ForecastAdvisory[];
   bbox: [number, number, number, number];
   alerts: WeatherAlert[];
+  watchesWarnings: NHCWatchWarn[];
+  watchesWarningsZoneOnly: number;
   buoys: BuoyObs[];
   landStations: LandObs[];
   sst: SSTPoint[];
@@ -233,6 +262,47 @@ export const fetchWindModelGrid = (
   apiGet<WindModelGrid>("/live/wind-model-grid", {
     west: bbox[0], south: bbox[1], east: bbox[2], north: bbox[3], model,
   });
+
+// POST body for the watch/warning exposure endpoint — mirrors the shape
+// used by wildfire + flood.
+export interface PolygonExposureInput {
+  id: string;
+  name?: string | null;
+  geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+}
+
+export interface ClientExposure {
+  client: string;
+  tiv: number;
+  locationCount: number;
+}
+
+export interface PolygonExposureOut {
+  id: string;
+  name: string | null;
+  totalTiv: number;
+  locationCount: number;
+  byClient: ClientExposure[];
+}
+
+export interface WatchWarnExposureResponse {
+  currency: string;
+  synthetic: boolean;
+  note: string;
+  results: PolygonExposureOut[];
+  combined: PolygonExposureOut;
+  warnings: string[];
+}
+
+export const postWatchWarnExposure = async (
+  polygons: PolygonExposureInput[],
+): Promise<WatchWarnExposureResponse> => {
+  const { apiPost } = await import("./client");
+  return apiPost<WatchWarnExposureResponse>(
+    "/live/watches-warnings/exposure",
+    { polygons },
+  );
+};
 
 export const fetchLiveStormBundle = (
   stormId: string,

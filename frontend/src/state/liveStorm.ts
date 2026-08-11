@@ -30,6 +30,8 @@ interface LiveStormState {
   // stations (NWS API is the slowest source).
   showForecastHistory: boolean;
   showAlerts: boolean;
+  showWatchesWarnings: boolean;  // NHC coastal TC watches/warnings — split out
+                                 // of generic alerts, NHC operational palette
   showBuoys: boolean;
   showLand: boolean;
   showSst: boolean;
@@ -75,6 +77,7 @@ interface LiveStormState {
 export type ToggleKey =
   | "showForecastHistory"
   | "showAlerts"
+  | "showWatchesWarnings"
   | "showBuoys"
   | "showLand"
   | "showSst"
@@ -92,6 +95,9 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   pickerOpen: false,
   showForecastHistory: true,
   showAlerts: true,
+  // NHC watches/warnings default ON — they are the primary operational signal
+  // for pre-loss underwriting during a live event.
+  showWatchesWarnings: true,
   // NDBC buoys, wind-field cone, and NHC peak-surge polygons all default
   // OFF now — they get busy fast and users mostly want them on-demand.
   showBuoys: false,

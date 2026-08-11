@@ -27,10 +27,13 @@ from ..services.live_hurricane import (
     storm_and_forecasts,
 )
 from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
+from ..services.nhc_watch_warn import split_watches_warnings
 from ..services.sea_surface_temp import sst_field
 from ..services.weather_alerts import AlertFeedUnavailable, fetch_active_alerts
 from ..services.wind_field_map import wind_field_grid
 from ..services.wind_forecast import fetch_model_wind_grid, point_forecast
+from ..services import wildfire_exposure
+from .geometry_input import ExposureRequest, PolygonExposureOut, exposure_out
 
 router = APIRouter(prefix="/live", tags=["live"])
 
@@ -85,6 +88,27 @@ class ForecastAdvisory(CamelModel):
 class WeatherAlertOut(CamelModel):
     alert_id: str
     event: str
+    headline: str
+    severity: str
+    urgency: str
+    certainty: str
+    sent_at: str
+    expires_at: str
+    areas_affected: str
+    geometry: dict | None
+
+
+class NHCWatchWarnOut(CamelModel):
+    """One NHC-issued coastal Tropical Cyclone watch or warning polygon
+    (Hurricane / Tropical Storm / Storm Surge × Watch/Warning + Extreme Wind
+    Warning). ``geometry`` is null for zone-coded alerts that ship without a
+    polygon — surfaced in the count and text but not rendered as a shape."""
+
+    alert_id: str
+    event: str
+    family: str            # hurricane | tropical_storm | storm_surge | extreme_wind | statement
+    color: str             # NHC operational hex — feed straight to the map paint
+    rank: int              # higher = more severe (drives map z-order)
     headline: str
     severity: str
     urgency: str
@@ -269,6 +293,11 @@ class LiveStormBundle(CamelModel):
     forecasts: list[ForecastAdvisory]      # latest first
     bbox: list[float]                      # [west, south, east, north]
     alerts: list[WeatherAlertOut]
+    # NHC-issued Tropical Cyclone watches/warnings, split out of the generic
+    # alerts stream. Same underlying source (NWS CAP feed) but with the NHC
+    # operational colour scheme + rank so they render distinctly on the map.
+    watches_warnings: list[NHCWatchWarnOut]
+    watches_warnings_zone_only: int        # count of zone-coded (no polygon) WWs
     buoys: list[BuoyOut]
     land_stations: list[LandObsOut]
     sst: list[SSTOut]
@@ -445,6 +474,8 @@ def live_storm_bundle(
     bbox = _bbox_for_storm(observed_storm.track, forecasts)
 
     alerts_out: list[WeatherAlertOut] = []
+    watches_warnings_out: list[NHCWatchWarnOut] = []
+    zone_only_ww_count = 0
     if include_alerts:
         # Live alerts as of today — used for demo even when the replay storm
         # is historical, per user instruction.
@@ -455,7 +486,12 @@ def live_storm_bundle(
             # Alerts are context around the storm, not the storm itself — the
             # bundle is still useful without them.
             live_alerts = []
-        for a in live_alerts:
+        # Split NHC Tropical Cyclone watches/warnings out of the generic
+        # alerts stream so they render with the operational NHC colour
+        # scheme + carry their own exposure rollup. Residual alerts (flood,
+        # tornado, ...) stay on the generic severity palette.
+        nhc_ww, residual_alerts = split_watches_warnings(live_alerts)
+        for a in residual_alerts:
             alerts_out.append(
                 WeatherAlertOut(
                     alert_id=a.alert_id,
@@ -468,6 +504,26 @@ def live_storm_bundle(
                     expires_at=a.expires_at,
                     areas_affected=a.areas_affected,
                     geometry=a.geometry,
+                )
+            )
+        for w in nhc_ww:
+            if w.geometry is None:
+                zone_only_ww_count += 1
+            watches_warnings_out.append(
+                NHCWatchWarnOut(
+                    alert_id=w.alert_id,
+                    event=w.event,
+                    family=w.family,
+                    color=w.color,
+                    rank=w.rank,
+                    headline=w.headline,
+                    severity=w.severity,
+                    urgency=w.urgency,
+                    certainty=w.certainty,
+                    sent_at=w.sent_at,
+                    expires_at=w.expires_at,
+                    areas_affected=w.areas_affected,
+                    geometry=w.geometry,
                 )
             )
 
@@ -657,6 +713,8 @@ def live_storm_bundle(
         forecasts=forecast_out,
         bbox=list(bbox),
         alerts=alerts_out,
+        watches_warnings=watches_warnings_out,
+        watches_warnings_zone_only=zone_only_ww_count,
         buoys=buoys_out,
         land_stations=land_out,
         sst=sst_out,
@@ -733,6 +791,74 @@ def wind_forecast_at_point(
             )
             for f in result.forecasts
         ],
+    )
+
+
+# ─────────────────── exposed TIV inside NHC watches/warnings ───────────────────
+
+
+class WatchWarnExposureResponse(CamelModel):
+    """Rollup of exposed TIV inside a set of NHC watch/warning polygons.
+
+    Same synthetic-point machinery as wildfire / flood — TIV is derived from
+    county-aggregated exposure scattered as deterministic locations, then
+    counted by point-in-polygon. Flagged ``synthetic`` on the wire and in the
+    UI: the true answer needs location-level exposure, which v1 does not have.
+    """
+
+    currency: str
+    synthetic: bool
+    note: str
+    results: list[PolygonExposureOut]
+    combined: PolygonExposureOut
+    warnings: list[str]
+
+
+@router.post("/watches-warnings/exposure", response_model=WatchWarnExposureResponse)
+def post_watch_warn_exposure(req: ExposureRequest) -> WatchWarnExposureResponse:
+    """Roll up exposed TIV by client for the supplied NHC watch/warning
+    polygons. ``combined`` is the deduped union across all polygons (each
+    synthetic location counted once) so overlapping Hurricane Warning +
+    Storm Surge Warning areas over the same coast do not double-count.
+
+    Zone-coded watches (no polygon) cannot be rolled up here — surface them
+    from the bundle's ``watchesWarnings[]`` entries whose ``geometry`` is
+    null and count them separately in the UI.
+    """
+    try:
+        per, union = wildfire_exposure.exposure_in_polygons(
+            [p.geometry for p in req.polygons]
+        )
+        currency = wildfire_exposure.currency()
+        warnings = list(wildfire_exposure.load_warnings())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail={
+            "code": "UPSTREAM_UNAVAILABLE",
+            "message": f"Exposure data could not be loaded: {exc}",
+        }) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "GEOMETRY_TOO_COMPLEX",
+            "message": str(exc),
+        }) from exc
+
+    results = [exposure_out(p.id, p.name, r) for p, r in zip(req.polygons, per)]
+    combined = exposure_out("combined", None, union)
+
+    return WatchWarnExposureResponse(
+        currency=currency,
+        synthetic=True,
+        note=(
+            "Estimated from synthetic location points distributed within counties "
+            "from aggregate TIV — not real location-level data. Replace the "
+            "location source with individual-location exposure for exact "
+            "in-warning TIV. Also, watch/warning polygons are threat areas, "
+            "not observed damage — so this is an upper bound on the TIV that "
+            "will actually see the corresponding wind or surge."
+        ),
+        results=results,
+        combined=combined,
+        warnings=warnings,
     )
 
 

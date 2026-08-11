@@ -6,13 +6,17 @@
  * HurricaneImpactPanel which lives bottom-left.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchLiveStormBundle,
   fetchLiveStormList,
   fetchWindModelGrid,
+  postWatchWarnExposure,
+  type LiveStormBundle,
   type LiveStormRow,
+  type NHCWatchWarn,
+  type WatchWarnExposureResponse,
 } from "../../api/live";
 import { fetchHurricaneImpact } from "../../api/hurricanes";
 import { useFiltersStore } from "../../state/filters";
@@ -247,7 +251,8 @@ export function LiveStormPanel() {
               <LayerChip store={store} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
               <WindMapModeSelector store={store} />
               <WindMapTimeSlider store={store} />
-              <LayerChip store={store} k="showAlerts" label="NWS alerts" hint="Watches + warnings" color="#ea580c" />
+              <LayerChip store={store} k="showWatchesWarnings" label="NHC watches/warnings" hint="Hurricane / TS / Storm Surge · NHC palette" color="#ec4899" />
+              <LayerChip store={store} k="showAlerts" label="Other NWS alerts" hint="Flood, tornado, wind..." color="#ea580c" />
               <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
               <LayerChip store={store} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
               <LayerChip store={store} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
@@ -275,6 +280,7 @@ export function LiveStormPanel() {
           {store.data && (
             <>
               <BundleSummary data={store.data} />
+              <WatchWarnExposureSection data={store.data} />
               <button
                 onClick={runImpact}
                 style={{
@@ -710,6 +716,191 @@ function LayerChip({
   );
 }
 
+/**
+ * "Exposed TIV inside NHC watches/warnings" panel section. Groups WWs by
+ * family (hurricane / TS / storm surge) and computes rolled-up TIV per
+ * family + a combined total across all polygon-bearing WWs.
+ *
+ * All rollups walk through the same synthetic-point / point-in-polygon
+ * machinery wildfire + flood use — flagged synthetic in the note and
+ * warned as an upper bound since WWs are threat areas, not observed damage.
+ * Zone-coded WWs (no polygon) are counted but excluded from the TIV rollup
+ * with an explicit callout.
+ */
+function WatchWarnExposureSection({ data }: { data: LiveStormBundle }) {
+  const [result, setResult] = useState<WatchWarnExposureResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedFamilies, setSelectedFamilies] = useState<Set<string>>(
+    () => new Set(["hurricane", "tropical_storm", "storm_surge", "extreme_wind"]),
+  );
+
+  const withGeom = data.watchesWarnings.filter((w) => w.geometry);
+  if (withGeom.length === 0 && data.watchesWarningsZoneOnly === 0) return null;
+
+  const familyLabel: Record<string, string> = {
+    hurricane: "Hurricane",
+    tropical_storm: "Tropical Storm",
+    storm_surge: "Storm Surge",
+    extreme_wind: "Extreme Wind",
+    statement: "Statement",
+    other: "Other",
+  };
+  const familyCounts = withGeom.reduce<Record<string, NHCWatchWarn[]>>(
+    (acc, w) => {
+      (acc[w.family] ??= []).push(w);
+      return acc;
+    },
+    {},
+  );
+
+  async function runExposure() {
+    const polygons = withGeom
+      .filter((w) => selectedFamilies.has(w.family))
+      .map((w) => ({
+        id: w.alertId,
+        name: `${familyLabel[w.family] ?? w.family} · ${w.event}`,
+        geometry: w.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon,
+      }));
+    if (polygons.length === 0) {
+      setError("Select at least one watch/warning family.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await postWatchWarnExposure(polygons);
+      setResult(r);
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const toggleFamily = (family: string) => {
+    const next = new Set(selectedFamilies);
+    if (next.has(family)) next.delete(family);
+    else next.add(family);
+    setSelectedFamilies(next);
+    setResult(null);
+  };
+
+  const fmt = (n: number) =>
+    n >= 1e9
+      ? `${(n / 1e9).toFixed(2)} B`
+      : n >= 1e6
+      ? `${(n / 1e6).toFixed(1)} M`
+      : n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+  return (
+    <div
+      style={{
+        background: "#fef2f8",
+        border: "1px solid #f9a8d4",
+        borderRadius: 4,
+        padding: 8,
+        fontSize: "0.68rem",
+        color: "var(--ink-800)",
+        display: "grid",
+        gap: 6,
+      }}
+    >
+      <div style={{ fontWeight: 700, color: "#9d174d", fontSize: "0.7rem" }}>
+        Exposed TIV — NHC Watches / Warnings
+      </div>
+      {data.watchesWarningsZoneOnly > 0 && (
+        <div style={{ fontSize: "0.62rem", color: "#78350f", background: "#fef3c7", padding: "3px 5px", borderRadius: 3 }}>
+          {data.watchesWarningsZoneOnly} zone-coded WW without polygon — counted but not rolled up here.
+        </div>
+      )}
+      <div style={{ display: "grid", gap: 3 }}>
+        {Object.entries(familyCounts).map(([family, ww]) => {
+          const on = selectedFamilies.has(family);
+          const color = ww[0]?.color ?? "#94a3b8";
+          return (
+            <label
+              key={family}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                cursor: "pointer",
+                padding: "2px 4px",
+                borderRadius: 3,
+                background: on ? "rgba(255,255,255,0.7)" : "transparent",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => toggleFamily(family)}
+                style={{ cursor: "pointer" }}
+              />
+              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: color }} />
+              <span style={{ flex: 1 }}>{familyLabel[family] ?? family}</span>
+              <span style={{ color: "var(--ink-500)" }}>{ww.length}</span>
+            </label>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={runExposure}
+        disabled={loading}
+        style={{
+          all: "unset",
+          cursor: loading ? "wait" : "pointer",
+          padding: "5px 8px",
+          borderRadius: 3,
+          background: "#ec4899",
+          color: "white",
+          textAlign: "center",
+          fontWeight: 700,
+          fontSize: "0.68rem",
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+          opacity: loading ? 0.6 : 1,
+        }}
+      >
+        {loading ? "Computing…" : "Compute exposed TIV"}
+      </button>
+      {error && (
+        <div style={{ color: "var(--error-700)", fontSize: "0.65rem" }}>{error}</div>
+      )}
+      {result && (
+        <div style={{ display: "grid", gap: 3 }}>
+          <div style={{ fontWeight: 700, color: "#0f172a" }}>
+            Combined: {fmt(result.combined.totalTiv)} {result.currency} ·{" "}
+            {result.combined.locationCount} synthetic locs
+          </div>
+          {result.combined.byClient.slice(0, 6).map((c) => (
+            <div
+              key={c.client}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: "0.66rem" }}
+            >
+              <span style={{ color: "var(--ink-700)" }}>{c.client}</span>
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                {fmt(c.tiv)} · {c.locationCount}
+              </span>
+            </div>
+          ))}
+          {result.combined.byClient.length > 6 && (
+            <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>
+              +{result.combined.byClient.length - 6} more clients
+            </div>
+          )}
+          {result.synthetic && (
+            <div style={{ fontSize: "0.6rem", color: "var(--ink-500)", fontStyle: "italic", marginTop: 2 }}>
+              Upper bound — synthetic county-scattered points; WWs are threat areas.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundle }) {
   return (
     <div
@@ -729,7 +920,17 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
         {data.storm.intensityKt} kt
       </div>
       <div>{data.observedTrack.length} observed fixes · {data.forecasts.length} advisories</div>
-      <div>{data.alerts.length} alerts in cone · {data.buoys.length} buoys</div>
+      {data.watchesWarnings.length > 0 && (
+        <div>
+          <strong>{data.watchesWarnings.length}</strong> NHC watches/warnings
+          {data.watchesWarningsZoneOnly > 0 && (
+            <span style={{ color: "var(--ink-500)" }}>
+              {" "}({data.watchesWarningsZoneOnly} zone-only)
+            </span>
+          )}
+        </div>
+      )}
+      <div>{data.alerts.length} other alerts · {data.buoys.length} buoys</div>
       {data.landStations.length > 0 && <div>{data.landStations.length} land stations</div>}
       {data.forecastCone && (
         <div>NHC cone: {data.forecastCone.ring.length} pts</div>
