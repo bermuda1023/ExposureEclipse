@@ -7,8 +7,14 @@
  * the layer is enabled. Hidden otherwise to keep the toolbar tidy.
  */
 
+import { useEffect, useState } from "react";
 import { useHurricaneStore } from "../../state/hurricanes";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
+
+// Upper bound on the year input — current UTC year. Hardcoding 2025 made
+// the input reject anything typed above it once we passed New Year.
+const CURRENT_YEAR = new Date().getUTCFullYear();
+const MIN_YEAR = 1950;
 
 const CATEGORIES = [
   { value: -1, label: "All (incl. TD/TS)" },
@@ -87,24 +93,30 @@ export function HurricaneControls() {
       {enabled && (
         <>
           <label style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: "0.72rem", color: "var(--ink-600)" }}>
-            <input
-              type="number"
+            <YearInput
               value={yearMin}
-              min={1950}
-              max={yearMax}
-              onChange={(e) => setYearRange(clampYear(+e.target.value, 1950, yearMax), yearMax)}
-              style={{ width: 60, fontSize: "0.78rem" }}
-              aria-label="Earliest year"
+              min={MIN_YEAR}
+              max={CURRENT_YEAR}
+              ariaLabel="Earliest year"
+              onCommit={(v) => {
+                // Cross-clamp: if the user types an earliest year above the
+                // current latest, bump latest up too rather than silently
+                // clamping to yearMax (which was the source of the glitch).
+                const newMax = Math.max(yearMax, v);
+                setYearRange(v, newMax);
+              }}
             />
             <span>–</span>
-            <input
-              type="number"
+            <YearInput
               value={yearMax}
-              min={yearMin}
-              max={2025}
-              onChange={(e) => setYearRange(yearMin, clampYear(+e.target.value, yearMin, 2025))}
-              style={{ width: 60, fontSize: "0.78rem" }}
-              aria-label="Latest year"
+              min={MIN_YEAR}
+              max={CURRENT_YEAR}
+              ariaLabel="Latest year"
+              onCommit={(v) => {
+                // Same cross-clamp the other way — earliest never > latest.
+                const newMin = Math.min(yearMin, v);
+                setYearRange(newMin, v);
+              }}
             />
           </label>
           <select
@@ -238,9 +250,82 @@ function LandfallStatePicker({
   );
 }
 
-function clampYear(v: number, lo: number, hi: number): number {
-  if (Number.isNaN(v)) return lo;
-  return Math.max(lo, Math.min(hi, v));
+/**
+ * Number-typed year input that only commits to the store on blur / Enter,
+ * so the user can freely type a 4-digit year without the intermediate
+ * digits (2 → 20 → 202 → 2023) getting clamped on each keystroke.
+ *
+ * The previous implementation clamped `+e.target.value` on every change,
+ * which broke typing in three ways:
+ *   1. Typing "2023" into a field with max=yearMax=2020 clamped every
+ *      digit to 2020, so the user could never raise the year at all.
+ *   2. Backspacing to empty gave +"" = 0, which NaN-guarded back to
+ *      MIN_YEAR — cursor jumped, field snapped to 1950.
+ *   3. Number spinner arrows also snapped past the clamp boundary
+ *      because HTML min/max was set to the OTHER field's value.
+ *
+ * This version keeps a local string, commits an integer on blur/Enter,
+ * and cross-clamps at the callsite instead of the DOM — so typing an
+ * earliest year of 2023 with current latest at 2020 bumps latest up
+ * rather than rejecting the input.
+ */
+function YearInput({
+  value,
+  min,
+  max,
+  onCommit,
+  ariaLabel,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onCommit: (v: number) => void;
+  ariaLabel: string;
+}) {
+  const [local, setLocal] = useState<string>(String(value));
+
+  // Sync from the store when the value changes for an external reason
+  // (Clear button, cross-clamp from the other field, etc.). Only rewrites
+  // the local string when it drifts from the prop — no thrash while typing.
+  useEffect(() => {
+    setLocal((cur) => (cur === String(value) ? cur : String(value)));
+  }, [value]);
+
+  const commit = () => {
+    const n = parseInt(local, 10);
+    if (Number.isNaN(n)) {
+      setLocal(String(value));   // revert an empty/garbage field
+      return;
+    }
+    const clamped = Math.max(min, Math.min(max, n));
+    setLocal(String(clamped));
+    if (clamped !== value) onCommit(clamped);
+  };
+
+  return (
+    <input
+      type="number"
+      value={local}
+      // Deliberately NO min/max attributes — HTML clamping fights with the
+      // typing UX. Commit-time clamping in the callback is the source of
+      // truth.
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+          (e.currentTarget as HTMLInputElement).blur();
+        } else if (e.key === "Escape") {
+          setLocal(String(value));
+          (e.currentTarget as HTMLInputElement).blur();
+        }
+      }}
+      inputMode="numeric"
+      maxLength={4}
+      style={{ width: 60, fontSize: "0.78rem" }}
+      aria-label={ariaLabel}
+    />
+  );
 }
 
 function HurricaneLegend() {
