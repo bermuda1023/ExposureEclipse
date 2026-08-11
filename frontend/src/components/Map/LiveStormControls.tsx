@@ -4,6 +4,7 @@
  * with the wildfire panel on the right.
  */
 
+import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { useLiveStormStore } from "../../state/liveStorm";
 
 export function LiveStormControls() {
@@ -20,7 +21,16 @@ export function LiveStormControls() {
   const handleClick = () => {
     const s = useLiveStormStore.getState();
     if (s.pickerOpen) {
-      if (s.activeStormId) s.clear();
+      if (s.activeStormId) {
+        s.clear();
+        // "Run county impact" from the live-storm panel pushes results
+        // into the separate hurricaneImpact store, which HurricaneLayer
+        // reads to paint the impact cone / outer cone / footprint /
+        // outer footprint on the map. Clearing the live storm alone
+        // leaves those overlays behind — clear both so "exit live
+        // storm mode" really does return the map to a clean state.
+        useHurricaneImpactStore.getState().clear();
+      }
       s.setPickerOpen(false);
     } else {
       s.setPickerOpen(true);

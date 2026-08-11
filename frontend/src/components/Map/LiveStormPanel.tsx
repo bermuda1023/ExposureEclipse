@@ -24,6 +24,18 @@ import {
 } from "../../api/live";
 import { FAMILY_COLOR } from "./ModelTrackLayer";
 import { GTWO_BUCKET_COLOR } from "./TWOLayer";
+
+/**
+ * "Exit live storm mode" primitive — clears the live-storm slice AND the
+ * hurricane-impact slice (populated by "Run county impact"). Both stores
+ * back layers on the map, so a clean exit needs both. Called from three
+ * spots: the X button, the toolbar chip (in LiveStormControls), and
+ * clicking the currently-active picker row.
+ */
+function fullyClearLiveStorm(): void {
+  useLiveStormStore.getState().clear();
+  useHurricaneImpactStore.getState().clear();
+}
 import { fetchHurricaneImpact } from "../../api/hurricanes";
 import { useFiltersStore } from "../../state/filters";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
@@ -222,11 +234,14 @@ export function LiveStormPanel() {
   // an explicit deselect matches the user's expectation ("I clicked the
   // active button, I want it off") and keeps the state machine tidy.
   const pickStorm = (id: string) => {
-    const s = useLiveStormStore.getState();
     if (id === activeId) {
-      s.clear();
+      fullyClearLiveStorm();
     } else {
-      s.start(id);
+      useLiveStormStore.getState().start(id);
+      // Reset any previous impact result too — running county impact for
+      // a different storm should start from a clean slate rather than
+      // briefly showing the previous storm's cone.
+      useHurricaneImpactStore.getState().clear();
     }
   };
 
@@ -267,12 +282,12 @@ export function LiveStormPanel() {
         <span>● Live storm</span>
         <button
           onClick={() => {
-            // Full exit — clear the active storm so LiveStormLayer stops
-            // painting the map, then close the panel. Previously this only
-            // closed the panel, so the storm's overlays stayed visible
-            // with no obvious way to remove them short of hunting for the
-            // "Clear active storm" text link below.
-            useLiveStormStore.getState().clear();
+            // Full exit: clear both the live-storm slice AND the hurricane
+            // impact slice (populated by "Run county impact" and rendered
+            // by HurricaneLayer). Previously only the live-storm slice was
+            // cleared, so the impact cone / outer cone / footprint painted
+            // by HurricaneLayer stayed on the map.
+            fullyClearLiveStorm();
             setPickerOpen(false);
           }}
           style={{ all: "unset", cursor: "pointer", color: "var(--ink-500)", fontWeight: 700 }}
@@ -372,7 +387,7 @@ export function LiveStormPanel() {
           </div>
           {store.activeStormId && (
             <button
-              onClick={store.clear}
+              onClick={fullyClearLiveStorm}
               style={{
                 all: "unset",
                 cursor: "pointer",
