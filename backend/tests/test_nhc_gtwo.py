@@ -1,8 +1,10 @@
 """Unit tests for the NHC GTWO KML parser + /gtwo endpoint.
 
-Uses hand-crafted KML fixtures — no network. Verifies the chance-bucket
-mapping (low < 40% ≤ medium < 60% ≤ high) and the graceful-degradation
-behaviour when the upstream is unreachable.
+Uses hand-crafted KML fixtures — no network. NHC's real KML encodes chance
+via the placemark's ``<styleUrl>`` (``#0``/``#1``/``#2``/``#3`` matching
+gray/yellow/orange/red = none/low/medium/high). We also fall back to a
+"N percent" description when present (older vintages), so both paths are
+covered.
 """
 
 from __future__ import annotations
@@ -14,18 +16,14 @@ from app.main import app
 from app.services import nhc_gtwo
 
 
-def _kml_area(name: str, percent: int | None, coords: str,
-              style_url: str | None = None) -> str:
-    desc = (
-        f"<description>Formation chance through 5 days...{percent} percent "
-        f"(Medium)</description>" if percent is not None else ""
-    )
-    style = f"<styleUrl>{style_url}</styleUrl>" if style_url else ""
+def _polygon_placemark(name: str, style_url: str, coords: str,
+                       desc: str | None = None) -> str:
+    desc_el = f"<description>{desc}</description>" if desc else ""
     return f"""
     <Placemark>
       <name>{name}</name>
-      {desc}
-      {style}
+      {desc_el}
+      <styleUrl>{style_url}</styleUrl>
       <Polygon><outerBoundaryIs><LinearRing>
         <coordinates>{coords}</coordinates>
       </LinearRing></outerBoundaryIs></Polygon>
@@ -33,10 +31,20 @@ def _kml_area(name: str, percent: int | None, coords: str,
     """
 
 
-def _kml_doc(placemarks: str) -> bytes:
+def _point_placemark(style_url: str, lon: float, lat: float) -> str:
+    return f"""
+    <Placemark>
+      <styleUrl>{style_url}</styleUrl>
+      <Point><coordinates>{lon},{lat},0</coordinates></Point>
+    </Placemark>
+    """
+
+
+def _kml_doc(placemarks: str, doc_name: str = "GTWO test") -> bytes:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        f"<name>{doc_name}</name>"
         f"{placemarks}"
         "</Document></kml>"
     ).encode()
@@ -47,81 +55,100 @@ def _clear_cache() -> None:
     nhc_gtwo.clear_cache()
 
 
-def test_parser_extracts_percent_and_bucket_from_description() -> None:
+# ─────────────────────────── parser ───────────────────────────
+
+
+def test_parser_extracts_bucket_from_style_url_numeric() -> None:
     coords = "-75.0,25.0 -70.0,25.0 -70.0,30.0 -75.0,30.0 -75.0,25.0"
     payload = _kml_doc(
-        _kml_area("Area 1", 20, coords)
-        + _kml_area("Area 2", 50, coords)
-        + _kml_area("Area 3", 80, coords)
+        _polygon_placemark("A1", "#1", coords)
+        + _polygon_placemark("A2", "#2", coords)
+        + _polygon_placemark("A3", "#3", coords)
+        + _polygon_placemark("A0", "#0", coords)
     )
-    areas = nhc_gtwo._parse_gtwo(payload, "atl", 5)
-    assert len(areas) == 3
-    assert areas[0].chance_pct == 20
-    assert areas[0].chance_bucket == "low"
-    assert areas[1].chance_pct == 50
-    assert areas[1].chance_bucket == "medium"
-    assert areas[2].chance_pct == 80
-    assert areas[2].chance_bucket == "high"
+    areas, _ = nhc_gtwo._parse_gtwo(payload, "atl")
+    assert len(areas) == 4
+    buckets = [a.chance_bucket for a in areas]
+    assert buckets == ["low", "medium", "high", "none"]
+    pcts = [a.chance_pct for a in areas]
+    assert pcts == [20, 50, 80, 0]
 
 
 def test_parser_closes_open_rings() -> None:
-    # Open ring — last point ≠ first. Parser should auto-close it.
     coords = "-75.0,25.0 -70.0,25.0 -70.0,30.0 -75.0,30.0"
-    payload = _kml_doc(_kml_area("Open", 40, coords))
-    areas = nhc_gtwo._parse_gtwo(payload, "atl", 5)
+    payload = _kml_doc(_polygon_placemark("Open", "#2", coords))
+    areas, _ = nhc_gtwo._parse_gtwo(payload, "atl")
     assert len(areas) == 1
     assert areas[0].ring[0] == areas[0].ring[-1]
 
 
-def test_parser_falls_back_to_style_url() -> None:
+def test_parser_falls_back_to_description_percent() -> None:
+    # No usable styleUrl but a "N percent" phrase in the description.
     coords = "-75.0,25.0 -70.0,25.0 -70.0,30.0 -75.0,30.0 -75.0,25.0"
-    payload = _kml_doc(_kml_area("No desc", None, coords, style_url="#40percent"))
-    areas = nhc_gtwo._parse_gtwo(payload, "atl", 5)
+    payload = _kml_doc(
+        _polygon_placemark("A", "#unknown", coords,
+                           desc="Formation chance through 7 days...40 percent")
+    )
+    areas, _ = nhc_gtwo._parse_gtwo(payload, "atl")
     assert len(areas) == 1
     assert areas[0].chance_pct == 40
     assert areas[0].chance_bucket == "medium"
 
 
+def test_parser_pairs_polygon_with_following_point_marker() -> None:
+    coords = "-75.0,25.0 -70.0,25.0 -70.0,30.0 -75.0,30.0 -75.0,25.0"
+    payload = _kml_doc(
+        _polygon_placemark("A1", "#3", coords)
+        + _point_placemark("#higx", -72.5, 27.5)
+    )
+    areas, _ = nhc_gtwo._parse_gtwo(payload, "atl")
+    assert len(areas) == 1
+    assert areas[0].marker == (-72.5, 27.5)
+
+
+def test_parser_extracts_issued_note_from_doc_name() -> None:
+    coords = "-75.0,25.0 -70.0,25.0 -70.0,30.0 -75.0,30.0 -75.0,25.0"
+    payload = _kml_doc(
+        _polygon_placemark("A", "#1", coords),
+        doc_name="GTWO - Mon Aug 10 23:41:16 2026",
+    )
+    _, issued = nhc_gtwo._parse_gtwo(payload, "atl")
+    assert issued == "Mon Aug 10 23:41:16 2026"
+
+
+# ─────────────────────────── endpoint ───────────────────────────
+
+
 def test_gtwo_endpoint_smoke_returns_empty_when_upstream_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Force both 2-day + 5-day KML fetches to fail.
     monkeypatch.setattr(nhc_gtwo, "_download_kml", lambda url: None)
     client = TestClient(app)
     r = client.get("/api/live/gtwo?basin=atl")
     assert r.status_code == 200
     body = r.json()
-    assert body["twoDay"] == []
-    assert body["fiveDay"] == []
-    assert body["note"]   # explanation surfaced
+    assert body["areas"] == []
+    assert body["note"]
 
 
-def test_gtwo_endpoint_parses_both_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    two_kml = _kml_doc(
-        _kml_area("2d1", 30, "-75.0,25.0 -70.0,25.0 -70.0,30.0 -75.0,30.0 -75.0,25.0")
+def test_gtwo_endpoint_parses_areas(monkeypatch: pytest.MonkeyPatch) -> None:
+    coords = "-75.0,25.0 -70.0,25.0 -70.0,30.0 -75.0,30.0 -75.0,25.0"
+    kml = _kml_doc(
+        _polygon_placemark("A1", "#3", coords)
+        + _point_placemark("#higx", -72.5, 27.5)
+        + _polygon_placemark("A2", "#1",
+                             "-40.0,15.0 -35.0,15.0 -35.0,20.0 -40.0,20.0 -40.0,15.0")
+        + _point_placemark("#lowx", -37.5, 17.5)
     )
-    five_kml = _kml_doc(
-        _kml_area("5d1", 70, "-80.0,20.0 -70.0,20.0 -70.0,30.0 -80.0,30.0 -80.0,20.0")
-    )
-
-    def _fake_download(url: str) -> bytes | None:
-        if "2d0" in url:
-            return two_kml
-        if "5d0" in url:
-            return five_kml
-        return None
-
-    monkeypatch.setattr(nhc_gtwo, "_download_kml", _fake_download)
+    monkeypatch.setattr(nhc_gtwo, "_download_kml", lambda url: kml)
     client = TestClient(app)
     r = client.get("/api/live/gtwo?basin=atl")
     body = r.json()
-    assert len(body["twoDay"]) == 1
-    assert body["twoDay"][0]["chancePct"] == 30
-    assert body["twoDay"][0]["chanceBucket"] == "low"
-    assert len(body["fiveDay"]) == 1
-    assert body["fiveDay"][0]["chancePct"] == 70
-    assert body["fiveDay"][0]["chanceBucket"] == "high"
-    assert body["note"] is None
+    assert len(body["areas"]) == 2
+    assert body["areas"][0]["chanceBucket"] == "high"
+    assert body["areas"][0]["marker"] == [-72.5, 27.5]
+    assert body["areas"][1]["chanceBucket"] == "low"
+    assert body["areas"][1]["marker"] == [-37.5, 17.5]
 
 
 def test_gtwo_endpoint_rejects_unknown_basin() -> None:

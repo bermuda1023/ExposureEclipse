@@ -369,24 +369,24 @@ export interface EnsembleRiskResponse {
 // ─────────── NHC Tropical Weather Outlook (basin-wide, no storm required) ───────────
 
 export interface GTWOArea {
-  basin: "atl" | "ep" | "cp";
-  windowDays: 2 | 5;
+  basin: "atl" | "pac" | "cpac";
   chancePct: number;
-  chanceBucket: "low" | "medium" | "high";
+  chanceBucket: "none" | "low" | "medium" | "high";
   label: string;
   description: string;
-  ring: [number, number][];        // closed lon/lat ring
+  ring: [number, number][];               // closed lon/lat ring
+  marker: [number, number] | null;         // NHC's point-label location, if any
 }
 
 export interface GTWOResponse {
-  basin: "atl" | "ep" | "cp";
-  twoDay: GTWOArea[];
-  fiveDay: GTWOArea[];
+  basin: "atl" | "pac" | "cpac";
+  areas: GTWOArea[];
+  issuedNote: string | null;
   note: string | null;
   attribution: string;
 }
 
-export const fetchGTWO = (basin: "atl" | "ep" | "cp" = "atl") =>
+export const fetchGTWO = (basin: "atl" | "pac" | "cpac" = "atl") =>
   apiGet<GTWOResponse>("/live/gtwo", { basin });
 
 export const fetchEnsembleRisk = (

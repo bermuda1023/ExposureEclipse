@@ -853,69 +853,64 @@ def wind_forecast_at_point(
 
 
 class GTWOAreaOut(CamelModel):
-    """One formation-chance polygon from the NHC Graphical Tropical Weather
-    Outlook. ``chance_pct`` is the % chance of tropical cyclone formation
-    in the associated ``window_days`` (2 or 5) window; ``chance_bucket``
-    matches NHC's own colour legend (yellow=low, orange=medium, red=high)."""
+    """One formation-area polygon from the NHC Graphical Tropical Weather
+    Outlook (7-day envelope). ``chance_pct`` is the representative percent
+    for the area's bucket (0 / 20 / 50 / 80) — the current NHC KML encodes
+    chance only as a bucket via styleUrl, not as an exact percent.
+    ``chance_bucket`` matches NHC's legend: none (gray) / low (yellow) /
+    medium (orange) / high (red)."""
 
     basin: str
-    window_days: int
     chance_pct: int
-    chance_bucket: str
+    chance_bucket: str            # "none" | "low" | "medium" | "high"
     label: str
     description: str
-    ring: list[list[float]]      # closed [[lon, lat], ...]
+    ring: list[list[float]]       # closed [[lon, lat], ...]
+    marker: list[float] | None    # [lon, lat] of NHC's designated point label, if any
 
 
 class GTWOResponse(CamelModel):
     basin: str
-    two_day: list[GTWOAreaOut]
-    five_day: list[GTWOAreaOut]
+    areas: list[GTWOAreaOut]
+    issued_note: str | None       # "Mon Aug 10 23:41:16 2026" — from KML doc name
     note: str | None
     attribution: str = (
-        "NHC Graphical Tropical Weather Outlook (issued every 6h). Areas "
-        "represent NHC's assessment of tropical cyclone formation potential "
-        "in the corresponding window. Not a track forecast."
+        "NHC Graphical Tropical Weather Outlook (issued every 6h). Polygons "
+        "represent NHC's assessment of the 7-day formation envelope for each "
+        "disturbance. Not a track forecast; the 2-day chance is only in the "
+        "text outlook and is not currently wired to this feed."
     )
 
 
 @router.get("/gtwo", response_model=GTWOResponse)
 def gtwo_endpoint(
-    basin: str = Query(default="atl", pattern="^(atl|ep|cp)$"),
+    basin: str = Query(default="atl", pattern="^(atl|pac|cpac)$"),
 ) -> GTWOResponse:
-    """NHC 2-day + 5-day Tropical Weather Outlook areas for one basin.
+    """NHC Tropical Weather Outlook formation-area polygons for one basin.
 
     This is the pre-invest signal — days before a system gets a numbered
-    invest slot and typically a week+ before a name. Empty lists on
-    unreachable KML feed are surfaced with an explanatory note (never
+    invest slot and typically a week+ before a name. Empty list on
+    unreachable KMZ feed is surfaced with an explanatory note (never
     silently confused with "no active areas")."""
     bundle = fetch_gtwo(basin)
     return GTWOResponse(
         basin=bundle.basin,
-        two_day=[
+        areas=[
             GTWOAreaOut(
                 basin=a.basin,
-                window_days=a.window_days,
                 chance_pct=a.chance_pct,
                 chance_bucket=a.chance_bucket,
                 label=a.label,
                 description=a.description,
                 ring=[[round(lon, 4), round(lat, 4)] for (lon, lat) in a.ring],
+                marker=(
+                    [round(a.marker[0], 4), round(a.marker[1], 4)]
+                    if a.marker else None
+                ),
             )
-            for a in bundle.two_day
+            for a in bundle.areas
         ],
-        five_day=[
-            GTWOAreaOut(
-                basin=a.basin,
-                window_days=a.window_days,
-                chance_pct=a.chance_pct,
-                chance_bucket=a.chance_bucket,
-                label=a.label,
-                description=a.description,
-                ring=[[round(lon, 4), round(lat, 4)] for (lon, lat) in a.ring],
-            )
-            for a in bundle.five_day
-        ],
+        issued_note=bundle.issued_note,
         note=bundle.note,
     )
 

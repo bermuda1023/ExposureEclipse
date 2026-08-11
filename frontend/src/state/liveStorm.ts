@@ -88,7 +88,6 @@ interface LiveStormState {
   gtwoData: GTWOResponse | null;
   gtwoStatus: "idle" | "loading" | "ok" | "empty" | "error";
   showGTWO: boolean;
-  gtwoWindow: "2" | "5" | "both";
 
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
@@ -119,7 +118,6 @@ interface LiveStormState {
   setGTWOStatus: (
     s: "idle" | "loading" | "ok" | "empty" | "error",
   ) => void;
-  setGTWOWindow: (w: "2" | "5" | "both") => void;
 }
 
 export type ToggleKey =
@@ -193,7 +191,6 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   gtwoData: null,
   gtwoStatus: "idle" as const,
   showGTWO: false,
-  gtwoWindow: "5" as const,   // 5-day is the higher-signal default
 
   start: (stormId) =>
     set({
@@ -262,5 +259,4 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   }),
   setGTWOData: (r) => set({ gtwoData: r }),
   setGTWOStatus: (s) => set({ gtwoStatus: s }),
-  setGTWOWindow: (w) => set({ gtwoWindow: w }),
 }));

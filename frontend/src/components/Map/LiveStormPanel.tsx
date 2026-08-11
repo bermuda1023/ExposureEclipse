@@ -209,9 +209,7 @@ export function LiveStormPanel() {
     fetchGTWO("atl")
       .then((r) => {
         s.setGTWOData(r);
-        s.setGTWOStatus(
-          r.twoDay.length + r.fiveDay.length > 0 ? "ok" : "empty",
-        );
+        s.setGTWOStatus(r.areas.length > 0 ? "ok" : "empty");
       })
       .catch(() => s.setGTWOStatus("error"));
   }, [store.showGTWO, store.gtwoData, store.gtwoStatus]);
@@ -323,8 +321,8 @@ export function LiveStormPanel() {
                 so the underwriter can leave TWO on as a pre-invest signal
                 without wading past storm-specific chips. */}
             <ChipGroup label="Basin (no storm needed)">
-              <SmartChip store={store} status={chipStatus.showGTWO} k="showGTWO" label="Formation outlook (TWO)" hint="NHC 2/5-day outlook · yellow/orange/red = low/med/high chance" color="#f97316" />
-              <GTWOWindowSelector store={store} />
+              <SmartChip store={store} status={chipStatus.showGTWO} k="showGTWO" label="Formation outlook (TWO)" hint="NHC 7-day outlook · yellow/orange/red = low/med/high chance" color="#f97316" />
+              <GTWOStatusLine store={store} />
             </ChipGroup>
 
             <ChipGroup label="Track & cone">
@@ -623,62 +621,27 @@ function ChipGroup({
  * 2-day vs 5-day vs both toggle for the GTWO overlay. Small three-segment
  * pill, spans two columns so it lives directly under the TWO chip.
  */
-function GTWOWindowSelector({
+/**
+ * Compact status line under the TWO chip. Shows loading / error state and
+ * a bucket-count summary ("2 high, 1 low") when data is loaded. NHC's KML
+ * only ships the 7-day formation envelope as a single product, so there's
+ * no window toggle — the previous 2d/5d/both selector was for a two-URL
+ * scheme that turned out not to exist.
+ */
+function GTWOStatusLine({
   store,
 }: {
   store: ReturnType<typeof useLiveStormStore.getState>;
 }) {
   if (!store.showGTWO) return null;
-  const opts: Array<[typeof store.gtwoWindow, string, string]> = [
-    ["2", "2d", "2-day formation chance"],
-    ["5", "5d", "5-day formation chance (default)"],
-    ["both", "Both", "Show both windows, 2-day on top"],
-  ];
-
-  // Count areas by chance bucket for the compact status line — gives an
-  // at-a-glance signal (any red areas? how many?) without needing to look
-  // at the map. When still loading, just show a spinner label.
-  const areas = store.gtwoData
-    ? store.gtwoWindow === "2"
-      ? store.gtwoData.twoDay
-      : store.gtwoWindow === "5"
-      ? store.gtwoData.fiveDay
-      : [...store.gtwoData.twoDay, ...store.gtwoData.fiveDay]
-    : [];
+  const areas = store.gtwoData?.areas ?? [];
+  const status = store.gtwoStatus;
   const highCount = areas.filter((a) => a.chanceBucket === "high").length;
   const medCount = areas.filter((a) => a.chanceBucket === "medium").length;
   const lowCount = areas.filter((a) => a.chanceBucket === "low").length;
-  const status = store.gtwoStatus;
 
   return (
     <div style={{ gridColumn: "span 2", display: "grid", gap: 4 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3 }}>
-        {opts.map(([val, label, hint]) => {
-          const active = store.gtwoWindow === val;
-          return (
-            <button
-              key={val}
-              type="button"
-              title={hint}
-              onClick={() => useLiveStormStore.getState().setGTWOWindow(val)}
-              style={{
-                all: "unset",
-                cursor: "pointer",
-                padding: "3px 5px",
-                borderRadius: 3,
-                fontSize: "0.66rem",
-                textAlign: "center",
-                border: `1px solid ${active ? "#f97316" : "var(--ink-200)"}`,
-                background: active ? "#fff7ed" : "transparent",
-                color: active ? "#9a3412" : "var(--ink-600)",
-                fontWeight: active ? 700 : 400,
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
       {status === "loading" && (
         <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>Loading outlook…</div>
       )}
@@ -688,7 +651,7 @@ function GTWOWindowSelector({
         </div>
       )}
       {status === "ok" && areas.length > 0 && (
-        <div style={{ display: "flex", gap: 6, fontSize: "0.62rem", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6, fontSize: "0.62rem", alignItems: "center", flexWrap: "wrap" }}>
           {highCount > 0 && (
             <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: GTWO_BUCKET_COLOR.high }} />
@@ -707,9 +670,14 @@ function GTWOWindowSelector({
               <strong>{lowCount}</strong> low
             </span>
           )}
+          {store.gtwoData?.issuedNote && (
+            <span style={{ color: "var(--ink-500)", marginLeft: "auto" }}>
+              Issued {store.gtwoData.issuedNote}
+            </span>
+          )}
         </div>
       )}
-      {status === "ok" && areas.length === 0 && (
+      {status === "empty" && (
         <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>
           No active areas — basin is quiet.
         </div>
