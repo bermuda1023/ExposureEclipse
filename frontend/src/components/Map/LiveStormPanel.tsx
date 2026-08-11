@@ -214,15 +214,20 @@ export function LiveStormPanel() {
       .catch(() => s.setGTWOStatus("error"));
   }, [store.showGTWO, store.gtwoData, store.gtwoStatus]);
 
-  // Picker click handler. Guards against re-invoking start() on a storm
-  // that's already active — start() nulls the data/modelTracks slices as
-  // part of its state reset, but the fetch effect only fires when activeId
-  // changes, so re-clicking the same storm made the layers disappear
-  // without a refetch. Same-storm clicks are now a silent no-op; a
-  // "refresh" affordance would be a separate button, not an easy misclick.
+  // Picker click handler. Same-storm click acts as a toggle-off (clear +
+  // remove overlays) rather than re-invoking start() — start() nulls the
+  // data/modelTracks slices as part of its state reset, but the fetch
+  // effect only fires when activeId changes, so an inadvertent re-click
+  // used to make the layers disappear without a refetch. Turning it into
+  // an explicit deselect matches the user's expectation ("I clicked the
+  // active button, I want it off") and keeps the state machine tidy.
   const pickStorm = (id: string) => {
-    if (id === activeId) return;
-    useLiveStormStore.getState().start(id);
+    const s = useLiveStormStore.getState();
+    if (id === activeId) {
+      s.clear();
+    } else {
+      s.start(id);
+    }
   };
 
   if (!open) return null;
@@ -718,17 +723,37 @@ function StormPicker({
   const modelTracksLoading = useLiveStormStore((s) => s.modelTracksStatus) === "loading";
   const busy = isLoading || modelTracksLoading;
 
-  // Distinct pastel per variant so the picker sections are instantly
-  // distinguishable at a glance without a legend key. Invests get a
-  // yellow tint that matches the NHC low-confidence TWO chip; replays
-  // get a muted slate to read as historical.
+  // Distinct pastel per variant, with an "intensified" version for the
+  // active state so the button reads clearly as "on" without abandoning
+  // the variant colour scheme. Previously the active state used a
+  // brand-blue background regardless of variant — which read as jarring
+  // against the yellow invest bg (the "gray with yellow outline" bug the
+  // user hit was actually the brand-50 fill against the yellow border).
   const variantStyle: Record<
     "active" | "invest" | "replay",
-    { bg: string; border: string; label: string; accent: string }
+    {
+      idle:   { bg: string; border: string; text: string };
+      active: { bg: string; border: string; text: string; dot: string };
+      label:  string;
+      hint?:  string;
+    }
   > = {
-    active:  { bg: "var(--ink-50)", border: "var(--ink-200)", label: "var(--ink-500)", accent: "var(--brand-400)" },
-    invest:  { bg: "#fef3c7", border: "#fbbf24", label: "#78350f", accent: "#f59e0b" },
-    replay:  { bg: "#f1f5f9", border: "#cbd5e1", label: "#475569", accent: "#64748b" },
+    active: {
+      idle:   { bg: "var(--ink-50)",  border: "var(--ink-200)",  text: "var(--ink-800)" },
+      active: { bg: "var(--brand-50)", border: "var(--brand-600)", text: "var(--brand-800)", dot: "var(--brand-700)" },
+      label:  "var(--ink-500)",
+    },
+    invest: {
+      idle:   { bg: "#fef3c7", border: "#fbbf24", text: "#78350f" },
+      active: { bg: "#fde68a", border: "#b45309", text: "#78350f", dot: "#b45309" },
+      label:  "#78350f",
+      hint:   "Pre-advisory invest — model tracks + strike probability available; NHC-issued products (cone, watches) start when an advisory does.",
+    },
+    replay: {
+      idle:   { bg: "#f1f5f9", border: "#cbd5e1", text: "#475569" },
+      active: { bg: "#e2e8f0", border: "#475569", text: "#0f172a", dot: "#475569" },
+      label:  "#475569",
+    },
   };
   const vs = variantStyle[variant];
   return (
@@ -749,30 +774,36 @@ function StormPicker({
         {rows.map((r) => {
           const isActive = activeId === r.stormId;
           const showSpinner = isActive && busy;
+          const state = isActive ? vs.active : vs.idle;
           return (
             <button
               key={r.stormId}
               onClick={() => onPick(r.stormId)}
               style={{
                 all: "unset",
-                cursor: isActive ? "default" : "pointer",
+                cursor: "pointer",
                 padding: "4px 8px",
                 borderRadius: 4,
                 fontSize: "0.72rem",
-                color: isActive ? "var(--brand-700)" : "var(--ink-800)",
-                background: isActive ? "var(--brand-50)" : vs.bg,
-                border: `1px solid ${isActive ? vs.accent : vs.border}`,
+                color: state.text,
+                background: state.bg,
+                border: `${isActive ? 2 : 1}px solid ${state.border}`,
+                fontWeight: isActive ? 700 : 400,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: 6,
+                // Compensate for the +1px border when active so text
+                // doesn't shift on toggle.
+                paddingLeft: isActive ? 7 : 8,
+                paddingRight: isActive ? 7 : 8,
+                paddingTop: isActive ? 3 : 4,
+                paddingBottom: isActive ? 3 : 4,
               }}
               title={
                 isActive
-                  ? "Already selected."
-                  : variant === "invest"
-                  ? "Pre-advisory invest — model tracks + strike probability available; NHC-issued products (cone, watches) start when an advisory does."
-                  : undefined
+                  ? "Selected — click again to deselect and clear the map."
+                  : vs.hint
               }
             >
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -785,7 +816,7 @@ function StormPicker({
                   style={{
                     fontSize: "0.8rem",
                     lineHeight: 1,
-                    color: "var(--brand-700)",
+                    color: vs.active.dot,
                     fontWeight: 700,
                   }}
                 >

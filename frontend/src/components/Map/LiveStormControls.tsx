@@ -10,13 +10,26 @@ export function LiveStormControls() {
   const open = useLiveStormStore((s) => s.pickerOpen);
   const activeId = useLiveStormStore((s) => s.activeStormId);
   const name = useLiveStormStore((s) => s.data?.storm.name);
-  const toggle = useLiveStormStore((s) => s.togglePicker);
 
   const on = open || !!activeId;
+  // Clicking the toolbar chip toggles the picker panel. When the user
+  // "clicks out" (closing the panel while a storm is active), also clear
+  // the storm so its overlays disappear — otherwise the panel closes but
+  // the tracks / envelopes / strike-prob circles stay painted with no
+  // obvious way to remove them. Opens are always additive.
+  const handleClick = () => {
+    const s = useLiveStormStore.getState();
+    if (s.pickerOpen) {
+      if (s.activeStormId) s.clear();
+      s.setPickerOpen(false);
+    } else {
+      s.setPickerOpen(true);
+    }
+  };
   return (
     <button
       type="button"
-      onClick={toggle}
+      onClick={handleClick}
       style={{
         all: "unset",
         cursor: "pointer",
