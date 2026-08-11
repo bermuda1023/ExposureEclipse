@@ -43,6 +43,7 @@ export function LiveStormPanel() {
   });
 
   const store = useLiveStormStore();
+  const chipStatus = useChipAvailability(store);
   const activeId = store.activeStormId;
   const impactStore = useHurricaneImpactStore();
   const scope = useEffectiveScope();
@@ -137,35 +138,29 @@ export function LiveStormPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.windMapMode, store.data, store.gfsGrid, store.ecmwfGrid]);
 
-  // Fetch the full bundle whenever activeId changes, throttled to once per
-  // 60s while a storm is live (cache).
+  // Fetch the FULL bundle whenever activeId changes, once per storm. Every
+  // sub-layer is fetched regardless of whether its chip is enabled — the
+  // availability signal (which chips should be greyed out) is derived from
+  // the bundle response, so we need it all up-front. Previously each
+  // include* flag was tied to a chip toggle, which meant switching a chip
+  // triggered a full refetch and empty responses were indistinguishable
+  // from "not fetched yet".
   useEffect(() => {
     if (!activeId) return;
     store.start(activeId);
     fetchLiveStormBundle(activeId, {
-      includeObs: store.showBuoys,
-      includeAlerts: store.showAlerts,
-      includeSst: store.showSst,
-      includeLand: store.showLand,
-      includeSurge: store.showSurge,
-      includeWindMap: store.showWindMap,
+      includeObs: true,
+      includeAlerts: true,
+      includeSst: true,
+      includeLand: true,
+      includeSurge: true,
+      includeWindMap: true,
     })
       .then(store.setData)
       .catch((e) => store.setError(String(e?.message ?? e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    activeId,
-    store.showBuoys, store.showAlerts, store.showSst, store.showLand,
-    store.showSurge, store.showWindMap,
-  ]);
-
-  // Lazy-fetch model ensemble tracks when the underwriter turns on the
-  // Model tracks chip — the a-deck fetch is not free (up to ~200 KB
-  // gzipped per storm), so pay it on demand.
-  useEffect(() => {
-    if (!activeId) return;
-    if (!store.showModelTracks) return;
-    if (store.modelTracks || store.modelTracksStatus === "loading") return;
+    // Also eager-fetch model tracks on storm select so the ensemble chips
+    // (Model tracks / envelopes / Strike prob) can be greyed out immediately
+    // if the a-deck comes back empty. The tracks payload is small and cached.
     const s = useLiveStormStore.getState();
     s.setModelTracksStatus("loading");
     fetchModelTracks(activeId)
@@ -174,9 +169,12 @@ export function LiveStormPanel() {
         s.setModelTracksStatus(r.tracks.length > 0 ? "ok" : "empty");
       })
       .catch(() => s.setModelTracksStatus("error"));
-  }, [
-    activeId, store.showModelTracks, store.modelTracks, store.modelTracksStatus,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId]);
+
+  // (Model tracks are now eagerly fetched in the bundle effect above so
+  // their availability drives chip greying-out on storm select. No lazy
+  // effect needed here.)
 
   // Same pattern for the ensemble strike-probability grid. Threshold change
   // invalidates the cache (via setStrikeThresholdNm in the store), so this
@@ -254,9 +252,17 @@ export function LiveStormPanel() {
       >
         <span>● Live storm</span>
         <button
-          onClick={() => setPickerOpen(false)}
+          onClick={() => {
+            // Full exit — clear the active storm so LiveStormLayer stops
+            // painting the map, then close the panel. Previously this only
+            // closed the panel, so the storm's overlays stayed visible
+            // with no obvious way to remove them short of hunting for the
+            // "Clear active storm" text link below.
+            useLiveStormStore.getState().clear();
+            setPickerOpen(false);
+          }}
           style={{ all: "unset", cursor: "pointer", color: "var(--ink-500)", fontWeight: 700 }}
-          title="Close"
+          title="Close and clear active storm"
         >
           ✕
         </button>
@@ -317,35 +323,35 @@ export function LiveStormPanel() {
                 so the underwriter can leave TWO on as a pre-invest signal
                 without wading past storm-specific chips. */}
             <ChipGroup label="Basin (no storm needed)">
-              <LayerChip store={store} k="showGTWO" label="Formation outlook (TWO)" hint="NHC 2/5-day outlook · yellow/orange/red = low/med/high chance" color="#f97316" />
+              <SmartChip store={store} status={chipStatus.showGTWO} k="showGTWO" label="Formation outlook (TWO)" hint="NHC 2/5-day outlook · yellow/orange/red = low/med/high chance" color="#f97316" />
               <GTWOWindowSelector store={store} />
             </ChipGroup>
 
             <ChipGroup label="Track & cone">
-              <LayerChip store={store} k="showForecastCone" label="NHC cone" hint="Cone of uncertainty" color="#475569" />
-              <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
-              <LayerChip store={store} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
+              <SmartChip store={store} status={chipStatus.showForecastCone} k="showForecastCone" label="NHC cone" hint="Cone of uncertainty" color="#475569" />
+              <SmartChip store={store} status={chipStatus.showForecastHistory} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
+              <SmartChip store={store} status={chipStatus.showWindField} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
             </ChipGroup>
 
             <ChipGroup label="Model ensemble">
-              <LayerChip store={store} k="showModelTracks" label="Model tracks" hint="GEFS + ECMWF-ENS + AI spaghetti" color="#a855f7" />
-              <LayerChip store={store} k="showEnsembleEnvelope" label="Consensus envelope" hint="Convex hull of every ensemble member" color="#7f1d1d" />
-              <LayerChip store={store} k="showAiEnvelope" label="AI-only envelope" hint="GraphCast + GenCast + AIFS + FourCastNet + Pangu" color="#a855f7" />
-              <LayerChip store={store} k="showStrikeProbability" label="Strike probability" hint="Ensemble P(track within threshold nm) by county" color="#dc2626" />
+              <SmartChip store={store} status={chipStatus.showModelTracks} k="showModelTracks" label="Model tracks" hint="GEFS + ECMWF-ENS + AI spaghetti" color="#a855f7" />
+              <SmartChip store={store} status={chipStatus.showEnsembleEnvelope} k="showEnsembleEnvelope" label="Consensus envelope" hint="Convex hull of every ensemble member" color="#7f1d1d" />
+              <SmartChip store={store} status={chipStatus.showAiEnvelope} k="showAiEnvelope" label="AI-only envelope" hint="GraphCast + GenCast + AIFS + FourCastNet + Pangu" color="#a855f7" />
+              <SmartChip store={store} status={chipStatus.showStrikeProbability} k="showStrikeProbability" label="Strike probability" hint="Ensemble P(track within threshold nm) by county" color="#dc2626" />
             </ChipGroup>
 
             <ChipGroup label="Threat products">
-              <LayerChip store={store} k="showWatchesWarnings" label="NHC watches/warnings" hint="Hurricane / TS / Storm Surge · NHC palette" color="#ec4899" />
-              <LayerChip store={store} k="showSurge" label="Peak surge" hint="NHC coastal inundation" color="#dc2626" />
-              <LayerChip store={store} k="showAlerts" label="Other NWS alerts" hint="Flood, tornado, wind..." color="#ea580c" />
+              <SmartChip store={store} status={chipStatus.showWatchesWarnings} k="showWatchesWarnings" label="NHC watches/warnings" hint="Hurricane / TS / Storm Surge · NHC palette" color="#ec4899" />
+              <SmartChip store={store} status={chipStatus.showSurge} k="showSurge" label="Peak surge" hint="NHC coastal inundation" color="#dc2626" />
+              <SmartChip store={store} status={chipStatus.showAlerts} k="showAlerts" label="Other NWS alerts" hint="Flood, tornado, wind..." color="#ea580c" />
             </ChipGroup>
 
             <ChipGroup label="Wind & observations">
-              <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
-              <LayerChip store={store} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
-              <LayerChip store={store} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
-              <LayerChip store={store} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
-              <LayerChip store={store} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
+              <SmartChip store={store} status={chipStatus.showWindMap} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
+              <SmartChip store={store} status={chipStatus.showWindParticles} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
+              <SmartChip store={store} status={chipStatus.showBuoys} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
+              <SmartChip store={store} status={chipStatus.showLand} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
+              <SmartChip store={store} status={chipStatus.showSst} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
               <WindMapModeSelector store={store} />
               <WindMapTimeSlider store={store} />
             </ChipGroup>
@@ -409,6 +415,182 @@ export function LiveStormPanel() {
  * label bar above a 2-col chip grid, matching the visual style of the
  * previous single "Layers" section but broken up for scanability.
  */
+/**
+ * Chip availability for the currently loaded storm bundle + model tracks.
+ *
+ * "Available" = the underlying feed returned at least one meaningful
+ * feature for this storm; "unavailable" = we know for certain the chip
+ * will paint nothing (either the data came back empty or the product is
+ * semantically inapplicable to the storm type — e.g. NHC cone doesn't
+ * exist for invests).
+ *
+ * Availability is only defined AFTER the bundle response arrives. Before
+ * that (or when no storm is selected) every chip is treated as available
+ * so the panel doesn't flash-grey-out during load.
+ */
+type ChipStatus = { available: boolean; reason?: string };
+type ChipMap = Partial<Record<ToggleKey, ChipStatus>>;
+
+function useChipAvailability(
+  store: ReturnType<typeof useLiveStormStore.getState>,
+): ChipMap {
+  const data = store.data;
+  const modelTracks = store.modelTracks;
+  const isInvest = data?.storm.classification === "INVEST";
+  const bundleLoaded = !!data;
+  const tracksLoaded =
+    store.modelTracksStatus === "ok" || store.modelTracksStatus === "empty";
+
+  const out: ChipMap = {};
+
+  // Basin overlays — GTWO works without a storm and is basin-scoped,
+  // never inappropriate to enable.
+  out.showGTWO = { available: true };
+
+  // Track & cone
+  if (isInvest) {
+    out.showForecastCone = {
+      available: false,
+      reason: "Invests are pre-advisory — no NHC cone product yet.",
+    };
+    out.showForecastHistory = {
+      available: false,
+      reason: "No prior NHC advisories for pre-advisory invests.",
+    };
+    out.showWindField = {
+      available: false,
+      reason: "Wind-field cones need an observed track ≥ 25 kt — invests are typically below that threshold.",
+    };
+  } else if (bundleLoaded) {
+    out.showForecastCone = data!.forecastCone
+      ? { available: true }
+      : {
+          available: false,
+          reason: "NHC cone product not available for this storm right now (typically only issued for active tropical cyclones).",
+        };
+    out.showForecastHistory = data!.forecasts.length > 1
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No prior advisories to compare — this is either the first advisory or a replay.",
+        };
+    const hasWindField =
+      data!.observedWindField.outerRings.length > 0
+      || data!.forecastWindField.outerRings.length > 0;
+    out.showWindField = hasWindField
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No observed track ≥ 25 kt yet — wind-field cones start once the storm reaches tropical depression strength.",
+        };
+  }
+
+  // Model ensemble (all four chips key off the same a-deck fetch)
+  if (tracksLoaded && modelTracks) {
+    const hasTracks = modelTracks.tracks.length > 0;
+    const hasEnvelope = modelTracks.ensembleEnvelope !== null;
+    const hasAiEnvelope = modelTracks.aiEnvelope !== null;
+    out.showModelTracks = hasTracks
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No a-deck rows for this system yet. Try again after the next NHC init cycle.",
+        };
+    out.showEnsembleEnvelope = hasEnvelope
+      ? { available: true }
+      : {
+          available: false,
+          reason: "Not enough ensemble members (GEFS + ECMWF-ENS + AI) returned tracks to build a consensus envelope.",
+        };
+    out.showAiEnvelope = hasAiEnvelope
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No AI models (GraphCast, GenCast, AIFS, FourCastNet, Pangu) present in this cycle's a-deck.",
+        };
+    // Strike probability requires ensemble members. We don't know for
+    // certain whether any coastal counties will be within threshold until
+    // /ensemble-risk runs, but if there's no ensemble at all, that's a
+    // definite no.
+    out.showStrikeProbability = hasEnvelope
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No ensemble members to derive strike probability from.",
+        };
+  } else if (store.modelTracksStatus === "error") {
+    const reason = "Model a-deck feed unreachable.";
+    out.showModelTracks = { available: false, reason };
+    out.showEnsembleEnvelope = { available: false, reason };
+    out.showAiEnvelope = { available: false, reason };
+    out.showStrikeProbability = { available: false, reason };
+  }
+
+  // Threat products
+  if (isInvest) {
+    const reason = "Pre-advisory system — no NHC-issued threat products until an advisory is issued.";
+    out.showWatchesWarnings = { available: false, reason };
+    out.showSurge = { available: false, reason };
+  } else if (bundleLoaded) {
+    out.showWatchesWarnings = data!.watchesWarnings.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No active NHC watches or warnings for this storm's coastline right now.",
+        };
+    out.showSurge = data!.peakSurge.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "NHC has not issued a peak-surge product for this storm (only issued when a surge threat exists).",
+        };
+  }
+  if (bundleLoaded) {
+    out.showAlerts = data!.alerts.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No non-hurricane NWS alerts (flood/tornado/wind) in this storm's bbox.",
+        };
+  }
+
+  // Wind & observations
+  if (bundleLoaded) {
+    out.showWindMap = data!.windMap.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No surface obs in this bbox — likely an open-ocean storm out of NDBC + land-station range.",
+        };
+    out.showWindParticles = data!.windMap.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "Wind particles are driven by the same obs pool as the wind-speed map — none available in this bbox.",
+        };
+    out.showBuoys = data!.buoys.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No NDBC buoys in this storm's bbox.",
+        };
+    out.showLand = data!.landStations.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No NWS land stations in this storm's bbox (likely open-ocean or non-CONUS).",
+        };
+    out.showSst = data!.sst.length > 0
+      ? { available: true }
+      : {
+          available: false,
+          reason: "SST grid unavailable for this bbox.",
+        };
+  }
+
+  return out;
+}
+
 function ChipGroup({
   label,
   children,
@@ -910,25 +1092,62 @@ function WindMapTimeSlider({
   );
 }
 
+/**
+ * LayerChip wrapper that pulls per-chip availability out of the map returned
+ * by useChipAvailability. Just spreads {disabled, disabledReason} onto the
+ * base LayerChip so the panel-level JSX stays terse.
+ */
+function SmartChip(props: {
+  store: ReturnType<typeof useLiveStormStore.getState>;
+  k: ToggleKey;
+  label: string;
+  hint?: string;
+  color: string;
+  status: ChipStatus | undefined;
+}) {
+  const { status, ...rest } = props;
+  const disabled = status ? !status.available : false;
+  return (
+    <LayerChip
+      {...rest}
+      disabled={disabled}
+      disabledReason={disabled ? status?.reason : undefined}
+    />
+  );
+}
+
 function LayerChip({
   store,
   k,
   label,
   hint,
   color,
+  disabled,
+  disabledReason,
 }: {
   store: ReturnType<typeof useLiveStormStore.getState>;
   k: ToggleKey;
   label: string;
   hint?: string;
   color: string;
+  // "Disabled" here means the underlying data returned nothing for this
+  // storm (or is semantically inapplicable, e.g. NHC cone for an invest).
+  // The chip is still CLICKABLE — the user might want to toggle it anyway
+  // to see the empty state on the map — but it's visually muted and the
+  // tooltip includes the reason so users don't wonder why nothing happens.
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const active = store[k] as boolean;
+  const baseTitle = hint ? `${label} — ${hint}` : label;
+  const title = disabled && disabledReason
+    ? `${baseTitle}\n\nNo data for this storm: ${disabledReason}`
+    : baseTitle;
   return (
     <button
       type="button"
       onClick={() => store.setToggle(k, !active)}
-      title={hint ? `${label} — ${hint}` : label}
+      title={title}
       style={{
         all: "unset",
         cursor: "pointer",
@@ -937,12 +1156,19 @@ function LayerChip({
         gap: 6,
         padding: "5px 7px",
         borderRadius: 4,
-        border: `1px solid ${active ? color : "var(--ink-200)"}`,
-        background: active ? "#fff" : "transparent",
+        border: `1px solid ${
+          disabled
+            ? "var(--ink-200)"
+            : active ? color : "var(--ink-200)"
+        }`,
+        background: disabled ? "var(--ink-50)" : active ? "#fff" : "transparent",
         fontSize: "0.7rem",
-        color: active ? "var(--ink-900)" : "var(--ink-500)",
-        opacity: active ? 1 : 0.7,
+        color: disabled
+          ? "var(--ink-400)"
+          : active ? "var(--ink-900)" : "var(--ink-500)",
+        opacity: disabled ? 0.55 : active ? 1 : 0.7,
         minHeight: 24,
+        textDecoration: disabled ? "line-through" : "none",
       }}
     >
       <span
@@ -951,8 +1177,10 @@ function LayerChip({
           width: 9,
           height: 9,
           borderRadius: 2,
-          background: active ? color : "transparent",
-          border: `1.5px solid ${color}`,
+          background: disabled
+            ? "transparent"
+            : active ? color : "transparent",
+          border: `1.5px solid ${disabled ? "var(--ink-300)" : color}`,
           flexShrink: 0,
         }}
       />
