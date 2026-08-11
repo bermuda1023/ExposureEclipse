@@ -214,6 +214,17 @@ export function LiveStormPanel() {
       .catch(() => s.setGTWOStatus("error"));
   }, [store.showGTWO, store.gtwoData, store.gtwoStatus]);
 
+  // Picker click handler. Guards against re-invoking start() on a storm
+  // that's already active — start() nulls the data/modelTracks slices as
+  // part of its state reset, but the fetch effect only fires when activeId
+  // changes, so re-clicking the same storm made the layers disappear
+  // without a refetch. Same-storm clicks are now a silent no-op; a
+  // "refresh" affordance would be a separate button, not an easy misclick.
+  const pickStorm = (id: string) => {
+    if (id === activeId) return;
+    useLiveStormStore.getState().start(id);
+  };
+
   if (!open) return null;
 
   return (
@@ -280,7 +291,7 @@ export function LiveStormPanel() {
                   label="Active in Atlantic"
                   rows={list.data.active}
                   activeId={activeId}
-                  onPick={(id) => useLiveStormStore.getState().start(id)}
+                  onPick={pickStorm}
                 />
               ) : (
                 <div
@@ -302,7 +313,7 @@ export function LiveStormPanel() {
                   rows={list.data.invests}
                   activeId={activeId}
                   variant="invest"
-                  onPick={(id) => useLiveStormStore.getState().start(id)}
+                  onPick={pickStorm}
                 />
               )}
               {list.data.replay.length > 0 && (
@@ -311,7 +322,7 @@ export function LiveStormPanel() {
                   rows={list.data.replay}
                   activeId={activeId}
                   variant="replay"
-                  onPick={(id) => useLiveStormStore.getState().start(id)}
+                  onPick={pickStorm}
                 />
               )}
             </>
@@ -699,6 +710,14 @@ function StormPicker({
   onPick: (id: string) => void;
   variant?: "active" | "invest" | "replay";
 }) {
+  // Loading state so we can show a spinner on the active picker button
+  // while the a-deck / bundle fetch is in flight — previously the button
+  // gave one instant colour change on click, then went silent for the
+  // 1-3 seconds of load, which read as "did my click even work?".
+  const isLoading = useLiveStormStore((s) => s.isLoading);
+  const modelTracksLoading = useLiveStormStore((s) => s.modelTracksStatus) === "loading";
+  const busy = isLoading || modelTracksLoading;
+
   // Distinct pastel per variant so the picker sections are instantly
   // distinguishable at a glance without a legend key. Invests get a
   // yellow tint that matches the NHC low-confidence TWO chip; replays
@@ -729,32 +748,84 @@ function StormPicker({
       <div style={{ display: "grid", gap: 4 }}>
         {rows.map((r) => {
           const isActive = activeId === r.stormId;
+          const showSpinner = isActive && busy;
           return (
             <button
               key={r.stormId}
               onClick={() => onPick(r.stormId)}
               style={{
                 all: "unset",
-                cursor: "pointer",
+                cursor: isActive ? "default" : "pointer",
                 padding: "4px 8px",
                 borderRadius: 4,
                 fontSize: "0.72rem",
                 color: isActive ? "var(--brand-700)" : "var(--ink-800)",
                 background: isActive ? "var(--brand-50)" : vs.bg,
                 border: `1px solid ${isActive ? vs.accent : vs.border}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 6,
               }}
               title={
-                variant === "invest"
+                isActive
+                  ? "Already selected."
+                  : variant === "invest"
                   ? "Pre-advisory invest — model tracks + strike probability available; NHC-issued products (cone, watches) start when an advisory does."
                   : undefined
               }
             >
-              {r.label}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.label}
+              </span>
+              {showSpinner && <PickerSpinner />}
+              {isActive && !showSpinner && (
+                <span
+                  aria-hidden
+                  style={{
+                    fontSize: "0.8rem",
+                    lineHeight: 1,
+                    color: "var(--brand-700)",
+                    fontWeight: 700,
+                  }}
+                >
+                  ●
+                </span>
+              )}
             </button>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/**
+ * Small inline spinner for the active picker button while its data is
+ * fetching. Pure CSS keyframe — no library dep.
+ */
+function PickerSpinner() {
+  return (
+    <>
+      <style>{`
+        @keyframes ee-storm-picker-spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+      <span
+        aria-label="Loading"
+        style={{
+          display: "inline-block",
+          width: 10,
+          height: 10,
+          borderRadius: "50%",
+          border: "2px solid var(--brand-200, #93c5fd)",
+          borderTopColor: "var(--brand-700, #1d4ed8)",
+          animation: "ee-storm-picker-spin 0.8s linear infinite",
+        }}
+      />
+    </>
   );
 }
 
