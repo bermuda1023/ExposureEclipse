@@ -11,13 +11,16 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchLiveStormBundle,
   fetchLiveStormList,
+  fetchModelTracks,
   fetchWindModelGrid,
   postWatchWarnExposure,
   type LiveStormBundle,
   type LiveStormRow,
+  type ModelFamily,
   type NHCWatchWarn,
   type WatchWarnExposureResponse,
 } from "../../api/live";
+import { FAMILY_COLOR } from "./ModelTrackLayer";
 import { fetchHurricaneImpact } from "../../api/hurricanes";
 import { useFiltersStore } from "../../state/filters";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
@@ -153,6 +156,25 @@ export function LiveStormPanel() {
     store.showSurge, store.showWindMap,
   ]);
 
+  // Lazy-fetch model ensemble tracks when the underwriter turns on the
+  // Model tracks chip — the a-deck fetch is not free (up to ~200 KB
+  // gzipped per storm), so pay it on demand.
+  useEffect(() => {
+    if (!activeId) return;
+    if (!store.showModelTracks) return;
+    if (store.modelTracks || store.modelTracksStatus === "loading") return;
+    const s = useLiveStormStore.getState();
+    s.setModelTracksStatus("loading");
+    fetchModelTracks(activeId)
+      .then((r) => {
+        s.setModelTracks(r);
+        s.setModelTracksStatus(r.tracks.length > 0 ? "ok" : "empty");
+      })
+      .catch(() => s.setModelTracksStatus("error"));
+  }, [
+    activeId, store.showModelTracks, store.modelTracks, store.modelTracksStatus,
+  ]);
+
   if (!open) return null;
 
   return (
@@ -249,6 +271,9 @@ export function LiveStormPanel() {
               <LayerChip store={store} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
               <LayerChip store={store} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
               <LayerChip store={store} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
+              <LayerChip store={store} k="showModelTracks" label="Model ensemble" hint="GEFS + ECMWF-ENS + AI spaghetti tracks" color="#a855f7" />
+              <LayerChip store={store} k="showEnsembleEnvelope" label="Consensus envelope" hint="Convex hull of every ensemble member" color="#7f1d1d" />
+              <LayerChip store={store} k="showAiEnvelope" label="AI-only envelope" hint="GraphCast + GenCast + AIFS + FourCastNet + Pangu" color="#a855f7" />
               <WindMapModeSelector store={store} />
               <WindMapTimeSlider store={store} />
               <LayerChip store={store} k="showWatchesWarnings" label="NHC watches/warnings" hint="Hurricane / TS / Storm Surge · NHC palette" color="#ec4899" />
@@ -281,6 +306,7 @@ export function LiveStormPanel() {
             <>
               <BundleSummary data={store.data} />
               <WatchWarnExposureSection data={store.data} />
+              {store.showModelTracks && <ModelTracksSection />}
               <button
                 onClick={runImpact}
                 style={{
@@ -896,6 +922,122 @@ function WatchWarnExposureSection({ data }: { data: LiveStormBundle }) {
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Family legend + toggles for the model ensemble spaghetti. Shows counts
+ * per family + current-cycle context, and lets an underwriter mute the
+ * fifty-strong ensembles when only the AI + deterministic + consensus
+ * signal is wanted (or the reverse).
+ */
+function ModelTracksSection() {
+  const status = useLiveStormStore((s) => s.modelTracksStatus);
+  const tracks = useLiveStormStore((s) => s.modelTracks);
+  const visible = useLiveStormStore((s) => s.visibleFamilies);
+  const toggleFamily = useLiveStormStore((s) => s.toggleFamily);
+
+  const familyLabel: Record<ModelFamily, string> = {
+    official: "NHC Official",
+    consensus: "Consensus (TVCN / HCCA)",
+    ai: "AI models",
+    gfs_det: "GFS deterministic",
+    gfs_mean: "GEFS mean",
+    gefs_ens: "GEFS members",
+    ecmwf_det: "ECMWF-HRES",
+    ecmwf_mean: "ECMWF-ENS mean",
+    ecmwf_ens: "ECMWF-ENS members",
+    regional: "Regional (HWRF / HMON / HAFS)",
+    cmc: "CMC (Canadian)",
+    ukmet: "UKMO",
+    navgem: "NAVGEM",
+    baseline: "Baselines (CLIPER / SHIPS)",
+    analysis: "Analysis (CARQ)",
+    other: "Other",
+  };
+
+  return (
+    <div
+      style={{
+        background: "#faf5ff",
+        border: "1px solid #d8b4fe",
+        borderRadius: 4,
+        padding: 8,
+        fontSize: "0.68rem",
+        color: "var(--ink-800)",
+        display: "grid",
+        gap: 4,
+      }}
+    >
+      <div style={{ fontWeight: 700, color: "#6b21a8", fontSize: "0.7rem" }}>
+        Model ensemble — GEFS · ECMWF-ENS · AI
+      </div>
+      {status === "loading" && <div>Loading a-deck…</div>}
+      {status === "error" && (
+        <div style={{ color: "var(--error-700)" }}>Could not load a-deck.</div>
+      )}
+      {status === "empty" && (
+        <div style={{ fontSize: "0.62rem", color: "#78350f", background: "#fef3c7", padding: 4, borderRadius: 3 }}>
+          No a-deck rows yet — very early in the storm's lifecycle. Check back
+          after the next NHC advisory.
+        </div>
+      )}
+      {tracks && tracks.tracks.length > 0 && (
+        <>
+          <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>
+            Init cycle {tracks.initCycle} · {tracks.tracks.length} tracks ·{" "}
+            {tracks.ensembleEnvelope
+              ? `${tracks.ensembleEnvelope.membersUsed}-member envelope`
+              : "envelope: n/a"}
+          </div>
+          <div style={{ display: "grid", gap: 2 }}>
+            {tracks.families.map((f) => {
+              const on = visible.has(f.family);
+              const color = FAMILY_COLOR[f.family] ?? "#a1a1aa";
+              return (
+                <label
+                  key={f.family}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    cursor: "pointer",
+                    padding: "2px 4px",
+                    borderRadius: 3,
+                    background: on ? "rgba(255,255,255,0.7)" : "transparent",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => toggleFamily(f.family)}
+                    style={{ cursor: "pointer" }}
+                  />
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 14,
+                      height: 3,
+                      background: color,
+                      borderRadius: 1,
+                    }}
+                  />
+                  <span style={{ flex: 1 }}>{familyLabel[f.family] ?? f.family}</span>
+                  <span style={{ color: "var(--ink-500)", fontSize: "0.62rem" }}>
+                    {f.trackCount}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          {tracks.notes.length > 0 && (
+            <div style={{ fontSize: "0.6rem", color: "var(--ink-500)", fontStyle: "italic" }}>
+              {tracks.notes[0]}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

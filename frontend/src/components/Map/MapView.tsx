@@ -33,6 +33,7 @@ import { HazardOverlayLayer } from "./HazardOverlayLayer";
 import { HazardOverlayLegend } from "./HazardOverlayLegend";
 import { LiveStormLayer } from "./LiveStormLayer";
 import { LiveStormPanel } from "./LiveStormPanel";
+import { ModelTrackLayer } from "./ModelTrackLayer";
 import { WildfireLayer } from "./WildfireLayer";
 import { WildfirePanel } from "./WildfirePanel";
 import { WildfireLegend } from "./WildfireLegend";
@@ -597,6 +598,7 @@ export function MapView({ data, isLoading, error }: Props) {
       <HazardOverlayLayer map={mapInstance} />
       <HazardOverlayLegend />
       <LiveStormLayer map={mapInstance} />
+      <ModelTrackLayer map={mapInstance} />
       <WindParticleLayer map={mapInstance} />
       <WildfireLayer map={mapInstance} />
       <FloodLayer map={mapInstance} />

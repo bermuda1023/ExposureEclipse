@@ -9,7 +9,13 @@
  */
 
 import { create } from "zustand";
-import type { LiveStormBundle, WindModelGrid, WindObs } from "../api/live";
+import type {
+  LiveStormBundle,
+  ModelFamily,
+  ModelTracksResponse,
+  WindModelGrid,
+  WindObs,
+} from "../api/live";
 
 export type WindMapMode =
   | "observed"
@@ -58,6 +64,16 @@ interface LiveStormState {
   // map highlights these obs and dims all others.
   highlightObs: WindObs[] | null;
 
+  // Model ensemble spaghetti (Phase 2). Lazily fetched when the panel
+  // "Model tracks" chip is enabled. Family visibility is per-family so the
+  // legend chips can toggle GEFS members separately from AI models etc.
+  modelTracks: ModelTracksResponse | null;
+  modelTracksStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  visibleFamilies: Set<ModelFamily>;
+  showModelTracks: boolean;
+  showEnsembleEnvelope: boolean;
+  showAiEnvelope: boolean;
+
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
   setError: (msg: string) => void;
@@ -72,6 +88,12 @@ interface LiveStormState {
   setEcmwfGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
   setHighlightObs: (obs: WindObs[] | null) => void;
   setWindMapFrameIndex: (i: number) => void;
+  setModelTracks: (r: ModelTracksResponse | null) => void;
+  setModelTracksStatus: (
+    s: "idle" | "loading" | "ok" | "empty" | "error",
+  ) => void;
+  toggleFamily: (family: ModelFamily) => void;
+  setVisibleFamilies: (families: Set<ModelFamily>) => void;
 }
 
 export type ToggleKey =
@@ -85,7 +107,10 @@ export type ToggleKey =
   | "showForecastCone"
   | "showSurge"
   | "showWindMap"
-  | "showWindParticles";
+  | "showWindParticles"
+  | "showModelTracks"
+  | "showEnsembleEnvelope"
+  | "showAiEnvelope";
 
 export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   activeStormId: null,
@@ -115,6 +140,24 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   ecmwfGridStatus: "idle" as const,
   windMapFrameIndex: 0,
   highlightObs: null,
+  modelTracks: null,
+  modelTracksStatus: "idle" as const,
+  // Defaults: hide the fifty-strong GEFS + ECMWF members initially so the
+  // panel doesn't paint fifty overlapping lines the first time it opens.
+  // AI models and official + consensus are ON by default — they're the
+  // signal an underwriter actually reads first.
+  visibleFamilies: new Set<ModelFamily>([
+    "official",
+    "consensus",
+    "ai",
+    "gfs_det",
+    "ecmwf_det",
+    "gfs_mean",
+    "ecmwf_mean",
+  ]),
+  showModelTracks: false,
+  showEnsembleEnvelope: false,
+  showAiEnvelope: false,
 
   start: (stormId) =>
     set({
@@ -130,6 +173,8 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       windMapFrameIndex: 0,
       highlightObs: null,
       windMapMode: "observed",
+      modelTracks: null,
+      modelTracksStatus: "idle",
     }),
   setData: (data) => set({ data, isLoading: false, error: null }),
   setError: (msg) => set({ error: msg, isLoading: false }),
@@ -151,4 +196,14 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   setEcmwfGridStatus: (s) => set({ ecmwfGridStatus: s }),
   setHighlightObs: (obs) => set({ highlightObs: obs }),
   setWindMapFrameIndex: (i) => set({ windMapFrameIndex: i }),
+  setModelTracks: (r) => set({ modelTracks: r }),
+  setModelTracksStatus: (s) => set({ modelTracksStatus: s }),
+  toggleFamily: (family) => {
+    const cur = get().visibleFamilies;
+    const next = new Set(cur);
+    if (next.has(family)) next.delete(family);
+    else next.add(family);
+    set({ visibleFamilies: next });
+  },
+  setVisibleFamilies: (families) => set({ visibleFamilies: families }),
 }));

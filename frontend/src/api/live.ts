@@ -249,6 +249,84 @@ export interface LiveStormBundle {
   windObs: WindObs[];
 }
 
+// ─────────── ATCF a-deck spaghetti tracks (GEFS/ECMWF-ENS/AI) ───────────
+
+export type ModelFamily =
+  | "official"
+  | "consensus"
+  | "ai"
+  | "gfs_det"
+  | "gfs_mean"
+  | "gefs_ens"
+  | "ecmwf_det"
+  | "ecmwf_mean"
+  | "ecmwf_ens"
+  | "regional"
+  | "cmc"
+  | "ukmet"
+  | "navgem"
+  | "baseline"
+  | "analysis"
+  | "other";
+
+export interface ModelFix {
+  hoursOut: number;
+  lat: number;
+  lon: number;
+  windKt: number;
+  pressureMb: number | null;
+}
+
+export interface ModelTrack {
+  techId: string;
+  label: string;
+  family: ModelFamily;
+  initCycle: string;
+  fixes: ModelFix[];
+}
+
+export interface EnvelopeAnchor {
+  hoursOut: number;
+  lat: number;
+  lon: number;
+}
+
+export interface EnsembleEnvelope {
+  membersUsed: number;
+  ring: [number, number][];        // closed lon/lat ring
+  anchorHulls: Record<string, EnvelopeAnchor[]>;
+}
+
+export interface ModelFamilySummary {
+  family: ModelFamily;
+  trackCount: number;
+  techIds: string[];
+}
+
+export interface ModelTracksResponse {
+  stormId: string;
+  initCycle: string | null;
+  availableCycles: string[];
+  tracks: ModelTrack[];
+  families: ModelFamilySummary[];
+  ensembleEnvelope: EnsembleEnvelope | null;
+  aiEnvelope: EnsembleEnvelope | null;
+  notes: string[];
+  attribution: string;
+}
+
+export const fetchModelTracks = (
+  stormId: string,
+  options: { initCycle?: string; includeBaselines?: boolean } = {},
+) =>
+  apiGet<ModelTracksResponse>(
+    `/live/storms/${encodeURIComponent(stormId)}/model-tracks`,
+    {
+      initCycle: options.initCycle,
+      includeBaselines: options.includeBaselines ?? false,
+    },
+  );
+
 export const fetchLiveStormList = () =>
   apiGet<LiveStormListResponse>("/live/storms");
 

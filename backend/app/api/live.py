@@ -26,6 +26,14 @@ from ..services.live_hurricane import (
     replay_summaries,
     storm_and_forecasts,
 )
+from ..services.atcf_adecks import (
+    FAMILY_ORDER,
+    MODEL_LABEL,
+    ModelTrack,
+    fetch_model_tracks,
+    list_available_cycles,
+)
+from ..services.ensemble_envelope import build_envelope
 from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.nhc_watch_warn import split_watches_warnings
 from ..services.sea_surface_temp import sst_field
@@ -790,6 +798,194 @@ def wind_forecast_at_point(
                 wind_gust_kt=f.wind_gust_kt,
             )
             for f in result.forecasts
+        ],
+    )
+
+
+# ─────────────────── model ensemble spaghetti tracks ───────────────────
+
+
+class ModelFixOut(CamelModel):
+    hours_out: int
+    lat: float
+    lon: float
+    wind_kt: int
+    pressure_mb: int | None
+
+
+class ModelTrackOut(CamelModel):
+    """One model's projected track for the storm's chosen init cycle."""
+
+    tech_id: str          # ATCF 4-char id (OFCL, AVNO, ECMF, AP01, GRAP, ...)
+    label: str            # human-readable ("NHC Official", "GEFS member 01")
+    family: str           # taxonomy bucket: official/consensus/ai/gefs_ens/...
+    init_cycle: str       # "YYYY-MM-DDTHHZ"
+    fixes: list[ModelFixOut]
+
+
+class EnvelopeAnchorOut(CamelModel):
+    hours_out: int
+    lat: float
+    lon: float
+
+
+class EnsembleEnvelopeOut(CamelModel):
+    """Data-driven consensus envelope — convex hull of every ensemble
+    member's position at every lead-time anchor. Narrow where members
+    agree, wide where they disagree. Complements NHC's climatological
+    cone; does not replace it."""
+
+    members_used: int
+    ring: list[list[float]]      # closed [[lon, lat], ...]
+    # Per-anchor hull vertices, exposed so the frontend can dot them out.
+    anchor_hulls: dict[str, list[EnvelopeAnchorOut]]
+
+
+class ModelFamilySummaryOut(CamelModel):
+    """One row per family present in the response — drives the legend + chip
+    group renders on the frontend."""
+
+    family: str
+    track_count: int
+    tech_ids: list[str]
+
+
+class ModelTracksResponse(CamelModel):
+    storm_id: str
+    init_cycle: str | None       # "YYYY-MM-DDTHHZ", null if a-deck unavailable
+    available_cycles: list[str]  # most recent first
+    tracks: list[ModelTrackOut]
+    families: list[ModelFamilySummaryOut]
+    ensemble_envelope: EnsembleEnvelopeOut | None
+    ai_envelope: EnsembleEnvelopeOut | None
+    notes: list[str]
+    attribution: str = (
+        "NHC ATCF aid_public a-decks (deterministic + GEFS + ECMWF-ENS + "
+        "AI models where NCEP publishes them)."
+    )
+
+
+@router.get(
+    "/storms/{atcf_id}/model-tracks",
+    response_model=ModelTracksResponse,
+)
+def model_tracks(
+    atcf_id: str,
+    init_cycle: str | None = Query(default=None, alias="initCycle"),
+    include_baselines: bool = Query(default=False, alias="includeBaselines"),
+) -> ModelTracksResponse:
+    """Per-model projected tracks for one storm's latest init cycle.
+
+    Fetches the per-storm a-deck (``https://ftp.nhc.noaa.gov/atcf/aid_public
+    /aal{NN}{YYYY}.dat.gz``), collapses rows to (tech id × lead time), groups
+    by family for the legend, and returns both the individual member tracks
+    (spaghetti input) and a data-driven consensus envelope. Degrades to an
+    empty response when the a-deck is unavailable (very early in a storm's
+    lifecycle) — the frontend must handle empty gracefully.
+
+    ``initCycle`` (YYYYMMDDHH) restricts to a specific model cycle. Default:
+    the latest cycle present in the file.
+    """
+    tracks = fetch_model_tracks(
+        atcf_id,
+        init_cycle=init_cycle,
+        include_baselines=include_baselines,
+    )
+    cycles = list_available_cycles(atcf_id, limit=8)
+    notes: list[str] = []
+
+    if not tracks:
+        notes.append(
+            "No a-deck data available yet. Very-early-lifecycle storms may "
+            "not be in the aid_public archive for a cycle or two after "
+            "genesis; some subtropical / demonstration storms are also "
+            "excluded from the ATCF."
+        )
+        return ModelTracksResponse(
+            storm_id=atcf_id.upper(),
+            init_cycle=None,
+            available_cycles=cycles,
+            tracks=[],
+            families=[],
+            ensemble_envelope=None,
+            ai_envelope=None,
+            notes=notes,
+        )
+
+    # Group tech ids by family for the legend row.
+    family_tech: dict[str, list[str]] = {}
+    for t in tracks:
+        family_tech.setdefault(t.family, []).append(t.tech_id)
+
+    fam_rank = {f: i for i, f in enumerate(FAMILY_ORDER)}
+    families = [
+        ModelFamilySummaryOut(
+            family=fam,
+            track_count=len(techs),
+            tech_ids=sorted(techs),
+        )
+        for fam, techs in sorted(family_tech.items(), key=lambda kv: fam_rank.get(kv[0], 99))
+    ]
+
+    def _envelope_out(env) -> EnsembleEnvelopeOut | None:
+        if env is None:
+            return None
+        return EnsembleEnvelopeOut(
+            members_used=env.members_used,
+            ring=[[round(lon, 3), round(lat, 3)] for (lon, lat) in env.ring],
+            anchor_hulls={
+                str(h): [
+                    EnvelopeAnchorOut(hours_out=p.hours_out, lat=p.lat, lon=p.lon)
+                    for p in verts
+                ]
+                for h, verts in env.anchor_hulls.items()
+            },
+        )
+
+    # Full ensemble envelope: GEFS + ECMWF-ENS + AI models together.
+    ens_env = build_envelope(tracks)
+    # AI-only envelope: interesting stand-alone signal — "how much do the
+    # newest AI models agree with each other?". Often tighter than the NWP
+    # ensembles' spaghetti, sometimes surprisingly not.
+    ai_env = build_envelope(
+        tracks, include_families=frozenset({"ai"}), min_members=2,
+    )
+
+    if ens_env is None:
+        notes.append(
+            "Ensemble consensus envelope not built — fewer than 5 ensemble "
+            "members returned tracks for this cycle."
+        )
+
+    tracks_out = [_track_out(t) for t in tracks]
+
+    return ModelTracksResponse(
+        storm_id=atcf_id.upper(),
+        init_cycle=tracks[0].init_cycle if tracks else None,
+        available_cycles=cycles,
+        tracks=tracks_out,
+        families=families,
+        ensemble_envelope=_envelope_out(ens_env),
+        ai_envelope=_envelope_out(ai_env),
+        notes=notes,
+    )
+
+
+def _track_out(t: ModelTrack) -> ModelTrackOut:
+    return ModelTrackOut(
+        tech_id=t.tech_id,
+        label=t.label if t.label else MODEL_LABEL.get(t.tech_id, t.tech_id),
+        family=t.family,
+        init_cycle=t.init_cycle,
+        fixes=[
+            ModelFixOut(
+                hours_out=f.hours_out,
+                lat=round(f.lat, 3),
+                lon=round(f.lon, 3),
+                wind_kt=f.wind_kt,
+                pressure_mb=f.pressure_mb,
+            )
+            for f in t.fixes
         ],
     )
 
