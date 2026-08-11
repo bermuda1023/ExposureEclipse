@@ -34,6 +34,11 @@ from ..services.atcf_adecks import (
     list_available_cycles,
 )
 from ..services.ensemble_envelope import build_envelope
+from ..services.ensemble_risk import (
+    ATLANTIC_COASTAL_STATES,
+    DEFAULT_STRIKE_THRESHOLD_NM,
+    compute_ensemble_risk,
+)
 from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.nhc_watch_warn import split_watches_warnings
 from ..services.sea_surface_temp import sst_field
@@ -987,6 +992,137 @@ def _track_out(t: ModelTrack) -> ModelTrackOut:
             )
             for f in t.fixes
         ],
+    )
+
+
+# ─────────────────── ensemble strike-probability + intensity spread ───────────────────
+
+
+class CountyStrikeProbOut(CamelModel):
+    geoid: str
+    geography_id: str
+    name: str
+    state_usps: str
+    centroid_lat: float
+    centroid_lon: float
+    strike_probability: float   # 0..1 — fraction of ensemble members within threshold
+    member_count: int           # members whose track passes within threshold
+    ensemble_total: int
+    max_intensity_kt: int       # peak wind kt of any passing member near the county
+
+
+class IntensityStatOut(CamelModel):
+    hours_out: int
+    member_count: int
+    min_kt: int
+    mean_kt: float
+    max_kt: int
+    std_kt: float
+
+
+class EnsembleRiskResponse(CamelModel):
+    storm_id: str
+    init_cycle: str | None
+    ensemble_total: int
+    threshold_nm: float
+    strike_by_county: list[CountyStrikeProbOut]
+    intensity_by_lead: list[IntensityStatOut]
+    notes: list[str]
+    attribution: str = (
+        "Derived from GEFS + ECMWF-ENS + AI member tracks in the NHC "
+        "ATCF a-deck. Strike = track passes within threshold nm of the "
+        "county centroid at any lead time ≥ 24h; probability is the "
+        "fraction of considered members that struck."
+    )
+
+
+@router.get(
+    "/storms/{atcf_id}/ensemble-risk",
+    response_model=EnsembleRiskResponse,
+)
+def ensemble_risk_endpoint(
+    atcf_id: str,
+    threshold_nm: float = Query(
+        default=DEFAULT_STRIKE_THRESHOLD_NM,
+        ge=10.0, le=200.0,
+        alias="thresholdNm",
+    ),
+    all_states: bool = Query(default=False, alias="allStates"),
+) -> EnsembleRiskResponse:
+    """Per-county ensemble strike probability + per-lead intensity spread.
+
+    Restricted to Atlantic + Gulf coastal states by default; set
+    ``allStates=true`` to walk the full US county set (slower). Threshold
+    is in nautical miles from the county centroid to the nearest point on
+    each member's track. Default 60 nm ≈ R64 envelope of a mature hurricane.
+    """
+    tracks = fetch_model_tracks(atcf_id)
+    notes: list[str] = []
+    if not tracks:
+        notes.append(
+            "No a-deck data available for this storm. Ensemble-risk aggregates "
+            "require at least a few ensemble members' worth of a-deck rows."
+        )
+        return EnsembleRiskResponse(
+            storm_id=atcf_id.upper(),
+            init_cycle=None,
+            ensemble_total=0,
+            threshold_nm=threshold_nm,
+            strike_by_county=[],
+            intensity_by_lead=[],
+            notes=notes,
+        )
+    coastal = None if all_states else ATLANTIC_COASTAL_STATES
+    risk = compute_ensemble_risk(
+        tracks,
+        threshold_nm=threshold_nm,
+        coastal_states=coastal,
+    )
+    if risk.ensemble_total == 0:
+        notes.append(
+            "A-deck rows found but no ensemble members (GEFS / ECMWF-ENS / "
+            "AI) present — the strike-probability aggregate needs multiple "
+            "independent forecasts."
+        )
+    elif not risk.strike_by_county:
+        notes.append(
+            "No ensemble member's track passed within "
+            f"{threshold_nm:.0f} nm of any coastal county centroid. Increase "
+            "the threshold, or the storm may be too far out or on a "
+            "sea-only trajectory."
+        )
+    return EnsembleRiskResponse(
+        storm_id=atcf_id.upper(),
+        init_cycle=risk.init_cycle,
+        ensemble_total=risk.ensemble_total,
+        threshold_nm=risk.threshold_nm,
+        strike_by_county=[
+            CountyStrikeProbOut(
+                geoid=s.geoid,
+                geography_id=s.geography_id,
+                name=s.name,
+                state_usps=s.state_usps,
+                centroid_lat=s.centroid_lat,
+                centroid_lon=s.centroid_lon,
+                strike_probability=s.strike_probability,
+                member_count=s.member_count,
+                ensemble_total=s.ensemble_total,
+                max_intensity_kt=s.max_intensity_kt,
+            )
+            for s in risk.strike_by_county
+        ],
+        intensity_by_lead=[
+            IntensityStatOut(
+                hours_out=i.hours_out,
+                member_count=i.member_count,
+                min_kt=i.min_kt,
+                mean_kt=i.mean_kt,
+                max_kt=i.max_kt,
+                std_kt=i.std_kt,
+            )
+            for i in risk.intensity_by_lead
+        ],
+        notes=notes,
     )
 
 

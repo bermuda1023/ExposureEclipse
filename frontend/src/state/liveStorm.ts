@@ -10,6 +10,7 @@
 
 import { create } from "zustand";
 import type {
+  EnsembleRiskResponse,
   LiveStormBundle,
   ModelFamily,
   ModelTracksResponse,
@@ -73,6 +74,12 @@ interface LiveStormState {
   showModelTracks: boolean;
   showEnsembleEnvelope: boolean;
   showAiEnvelope: boolean;
+  // Ensemble strike-probability grid (Phase 3). Same lazy-fetch pattern
+  // as the model tracks — one endpoint call per storm per threshold.
+  ensembleRisk: EnsembleRiskResponse | null;
+  ensembleRiskStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  showStrikeProbability: boolean;
+  strikeThresholdNm: number;
 
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
@@ -94,6 +101,11 @@ interface LiveStormState {
   ) => void;
   toggleFamily: (family: ModelFamily) => void;
   setVisibleFamilies: (families: Set<ModelFamily>) => void;
+  setEnsembleRisk: (r: EnsembleRiskResponse | null) => void;
+  setEnsembleRiskStatus: (
+    s: "idle" | "loading" | "ok" | "empty" | "error",
+  ) => void;
+  setStrikeThresholdNm: (nm: number) => void;
 }
 
 export type ToggleKey =
@@ -110,7 +122,8 @@ export type ToggleKey =
   | "showWindParticles"
   | "showModelTracks"
   | "showEnsembleEnvelope"
-  | "showAiEnvelope";
+  | "showAiEnvelope"
+  | "showStrikeProbability";
 
 export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   activeStormId: null,
@@ -158,6 +171,10 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   showModelTracks: false,
   showEnsembleEnvelope: false,
   showAiEnvelope: false,
+  ensembleRisk: null,
+  ensembleRiskStatus: "idle" as const,
+  showStrikeProbability: false,
+  strikeThresholdNm: 60,
 
   start: (stormId) =>
     set({
@@ -175,6 +192,8 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       windMapMode: "observed",
       modelTracks: null,
       modelTracksStatus: "idle",
+      ensembleRisk: null,
+      ensembleRiskStatus: "idle",
     }),
   setData: (data) => set({ data, isLoading: false, error: null }),
   setError: (msg) => set({ error: msg, isLoading: false }),
@@ -206,4 +225,12 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     set({ visibleFamilies: next });
   },
   setVisibleFamilies: (families) => set({ visibleFamilies: families }),
+  setEnsembleRisk: (r) => set({ ensembleRisk: r }),
+  setEnsembleRiskStatus: (s) => set({ ensembleRiskStatus: s }),
+  setStrikeThresholdNm: (nm) => set({
+    strikeThresholdNm: nm,
+    // Changing the threshold invalidates the cached result.
+    ensembleRisk: null,
+    ensembleRiskStatus: "idle",
+  }),
 }));

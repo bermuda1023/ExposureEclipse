@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  fetchEnsembleRisk,
   fetchLiveStormBundle,
   fetchLiveStormList,
   fetchModelTracks,
@@ -175,6 +176,26 @@ export function LiveStormPanel() {
     activeId, store.showModelTracks, store.modelTracks, store.modelTracksStatus,
   ]);
 
+  // Same pattern for the ensemble strike-probability grid. Threshold change
+  // invalidates the cache (via setStrikeThresholdNm in the store), so this
+  // effect re-fires when either the toggle or the threshold changes.
+  useEffect(() => {
+    if (!activeId) return;
+    if (!store.showStrikeProbability) return;
+    if (store.ensembleRisk || store.ensembleRiskStatus === "loading") return;
+    const s = useLiveStormStore.getState();
+    s.setEnsembleRiskStatus("loading");
+    fetchEnsembleRisk(activeId, { thresholdNm: store.strikeThresholdNm })
+      .then((r) => {
+        s.setEnsembleRisk(r);
+        s.setEnsembleRiskStatus(r.strikeByCounty.length > 0 ? "ok" : "empty");
+      })
+      .catch(() => s.setEnsembleRiskStatus("error"));
+  }, [
+    activeId, store.showStrikeProbability, store.strikeThresholdNm,
+    store.ensembleRisk, store.ensembleRiskStatus,
+  ]);
+
   if (!open) return null;
 
   return (
@@ -274,6 +295,7 @@ export function LiveStormPanel() {
               <LayerChip store={store} k="showModelTracks" label="Model ensemble" hint="GEFS + ECMWF-ENS + AI spaghetti tracks" color="#a855f7" />
               <LayerChip store={store} k="showEnsembleEnvelope" label="Consensus envelope" hint="Convex hull of every ensemble member" color="#7f1d1d" />
               <LayerChip store={store} k="showAiEnvelope" label="AI-only envelope" hint="GraphCast + GenCast + AIFS + FourCastNet + Pangu" color="#a855f7" />
+              <LayerChip store={store} k="showStrikeProbability" label="Strike probability" hint="Ensemble P(track within threshold nm) by county" color="#dc2626" />
               <WindMapModeSelector store={store} />
               <WindMapTimeSlider store={store} />
               <LayerChip store={store} k="showWatchesWarnings" label="NHC watches/warnings" hint="Hurricane / TS / Storm Surge · NHC palette" color="#ec4899" />
@@ -307,6 +329,7 @@ export function LiveStormPanel() {
               <BundleSummary data={store.data} />
               <WatchWarnExposureSection data={store.data} />
               {store.showModelTracks && <ModelTracksSection />}
+              {store.showStrikeProbability && <EnsembleRiskSection />}
               <button
                 onClick={runImpact}
                 style={{
@@ -1039,6 +1062,212 @@ function ModelTracksSection() {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Ensemble-risk summary section: threshold slider, top-10 exposed counties,
+ * and an intensity-spread sparkline (min/mean/max wind kt per lead time).
+ *
+ * The sparkline is inline SVG rather than a chart library to stay under
+ * the frontend deps discipline the rest of the panel keeps.
+ */
+function EnsembleRiskSection() {
+  const status = useLiveStormStore((s) => s.ensembleRiskStatus);
+  const risk = useLiveStormStore((s) => s.ensembleRisk);
+  const threshold = useLiveStormStore((s) => s.strikeThresholdNm);
+  const setThreshold = useLiveStormStore((s) => s.setStrikeThresholdNm);
+
+  const top = (risk?.strikeByCounty ?? []).slice(0, 8);
+
+  return (
+    <div
+      style={{
+        background: "#fff1f2",
+        border: "1px solid #fda4af",
+        borderRadius: 4,
+        padding: 8,
+        fontSize: "0.68rem",
+        color: "var(--ink-800)",
+        display: "grid",
+        gap: 6,
+      }}
+    >
+      <div style={{ fontWeight: 700, color: "#9f1239", fontSize: "0.7rem" }}>
+        Ensemble strike probability + intensity spread
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ color: "var(--ink-500)", fontSize: "0.62rem", textTransform: "uppercase" }}>
+          Threshold
+        </span>
+        <input
+          type="range"
+          min={20}
+          max={150}
+          step={10}
+          value={threshold}
+          onChange={(e) => setThreshold(+e.target.value)}
+          style={{ flex: 1, accentColor: "#dc2626" }}
+        />
+        <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{threshold} nm</span>
+      </div>
+
+      {status === "loading" && <div>Computing…</div>}
+      {status === "error" && (
+        <div style={{ color: "var(--error-700)" }}>Could not compute risk aggregates.</div>
+      )}
+      {status === "empty" && risk && (
+        <div style={{ fontSize: "0.62rem", color: "#78350f", background: "#fef3c7", padding: 4, borderRadius: 3 }}>
+          {risk.notes[0] ?? "No counties within threshold."}
+        </div>
+      )}
+      {risk && risk.strikeByCounty.length > 0 && (
+        <>
+          <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>
+            {risk.ensembleTotal} ensemble members · {risk.strikeByCounty.length} coastal counties within {risk.thresholdNm.toFixed(0)} nm
+          </div>
+          <div style={{ display: "grid", gap: 2 }}>
+            {top.map((c) => (
+              <div
+                key={c.geoid}
+                style={{ display: "flex", justifyContent: "space-between", fontSize: "0.66rem" }}
+              >
+                <span>
+                  <strong>{c.name}</strong>, {c.stateUsps}
+                </span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  <span style={{ color: c.strikeProbability >= 0.6 ? "#7f1d1d" : c.strikeProbability >= 0.3 ? "#b45309" : "#475569", fontWeight: 700 }}>
+                    {(c.strikeProbability * 100).toFixed(0)}%
+                  </span>
+                  <span style={{ color: "var(--ink-500)" }}>
+                    {" "}· {c.memberCount}/{c.ensembleTotal} · peak {c.maxIntensityKt} kt
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+          {risk.strikeByCounty.length > top.length && (
+            <div style={{ fontSize: "0.6rem", color: "var(--ink-500)" }}>
+              +{risk.strikeByCounty.length - top.length} more counties on the map
+            </div>
+          )}
+          {risk.intensityByLead.length > 0 && (
+            <IntensitySparkline stats={risk.intensityByLead} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Compact SVG intensity-spread chart. X = lead time (h), Y = wind kt.
+ *  Shaded band = min→max across ensemble members; line = mean. */
+function IntensitySparkline({
+  stats,
+}: {
+  stats: import("../../api/live").IntensityStat[];
+}) {
+  if (stats.length < 2) return null;
+  const w = 320;
+  const h = 90;
+  const pad = { l: 32, r: 8, t: 8, b: 20 };
+  const iw = w - pad.l - pad.r;
+  const ih = h - pad.t - pad.b;
+
+  const maxHours = Math.max(...stats.map((s) => s.hoursOut));
+  const maxKt = Math.max(...stats.map((s) => s.maxKt), 100);
+  const minKt = 0;
+
+  const x = (hours: number) => pad.l + (hours / maxHours) * iw;
+  const y = (kt: number) => pad.t + ih - ((kt - minKt) / (maxKt - minKt)) * ih;
+
+  // Band polygon (min → max envelope across lead times).
+  const upper = stats.map((s) => `${x(s.hoursOut)},${y(s.maxKt)}`).join(" ");
+  const lower = stats
+    .slice()
+    .reverse()
+    .map((s) => `${x(s.hoursOut)},${y(s.minKt)}`)
+    .join(" ");
+
+  // Mean line.
+  const meanPath = stats
+    .map((s, i) => `${i === 0 ? "M" : "L"}${x(s.hoursOut)},${y(s.meanKt)}`)
+    .join(" ");
+
+  // Y-axis category-boundary reference lines (34 kt = TS, 64 kt = Cat 1,
+  // 96 kt = Cat 3). Helps a reader place mean intensity in context without
+  // needing a full grid.
+  const yRefs = [34, 64, 96].filter((v) => v < maxKt);
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div
+        style={{
+          fontSize: "0.62rem",
+          color: "var(--ink-500)",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+        }}
+      >
+        Intensity spread (kt) by lead time
+      </div>
+      <svg width={w} height={h} style={{ maxWidth: "100%", height: "auto" }}>
+        {yRefs.map((v) => (
+          <g key={v}>
+            <line
+              x1={pad.l}
+              x2={w - pad.r}
+              y1={y(v)}
+              y2={y(v)}
+              stroke="#e2e8f0"
+              strokeDasharray="2 2"
+            />
+            <text
+              x={pad.l - 3}
+              y={y(v) + 3}
+              fontSize="8"
+              textAnchor="end"
+              fill="#94a3b8"
+            >
+              {v}
+            </text>
+          </g>
+        ))}
+        <polygon
+          points={`${upper} ${lower}`}
+          fill="#fda4af"
+          fillOpacity={0.35}
+          stroke="none"
+        />
+        <path d={meanPath} stroke="#dc2626" strokeWidth={2} fill="none" />
+        {stats.map((s) => (
+          <circle
+            key={s.hoursOut}
+            cx={x(s.hoursOut)}
+            cy={y(s.meanKt)}
+            r={2.5}
+            fill="#dc2626"
+          />
+        ))}
+        {stats.map((s) => (
+          <text
+            key={`t-${s.hoursOut}`}
+            x={x(s.hoursOut)}
+            y={h - 6}
+            fontSize="8"
+            textAnchor="middle"
+            fill="#64748b"
+          >
+            T+{s.hoursOut}h
+          </text>
+        ))}
+      </svg>
+      <div style={{ fontSize: "0.6rem", color: "var(--ink-500)" }}>
+        Band = min→max across ensemble; line = mean.
+      </div>
     </div>
   );
 }

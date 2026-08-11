@@ -327,6 +327,53 @@ export const fetchModelTracks = (
     },
   );
 
+// ─────────── ensemble strike-probability + intensity spread ───────────
+
+export interface CountyStrikeProb {
+  geoid: string;
+  geographyId: string;
+  name: string;
+  stateUsps: string;
+  centroidLat: number;
+  centroidLon: number;
+  strikeProbability: number;   // 0..1
+  memberCount: number;
+  ensembleTotal: number;
+  maxIntensityKt: number;
+}
+
+export interface IntensityStat {
+  hoursOut: number;
+  memberCount: number;
+  minKt: number;
+  meanKt: number;
+  maxKt: number;
+  stdKt: number;
+}
+
+export interface EnsembleRiskResponse {
+  stormId: string;
+  initCycle: string | null;
+  ensembleTotal: number;
+  thresholdNm: number;
+  strikeByCounty: CountyStrikeProb[];
+  intensityByLead: IntensityStat[];
+  notes: string[];
+  attribution: string;
+}
+
+export const fetchEnsembleRisk = (
+  stormId: string,
+  options: { thresholdNm?: number; allStates?: boolean } = {},
+) =>
+  apiGet<EnsembleRiskResponse>(
+    `/live/storms/${encodeURIComponent(stormId)}/ensemble-risk`,
+    {
+      thresholdNm: options.thresholdNm,
+      allStates: options.allStates ?? false,
+    },
+  );
+
 export const fetchLiveStormList = () =>
   apiGet<LiveStormListResponse>("/live/storms");
 
