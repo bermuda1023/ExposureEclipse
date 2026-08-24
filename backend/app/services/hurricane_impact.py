@@ -24,6 +24,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
+from ..brand import USER_AGENT
 from .hurdat2 import category_for_wind
 from .ibtracs import (
     Storm,
@@ -171,7 +172,7 @@ def county_centroids() -> dict[str, CountyMeta]:
     """Live-fetch us-atlas counties + build a {geoid: CountyMeta} index."""
     req = urllib.request.Request(
         COUNTIES_TOPO_URL,
-        headers={"User-Agent": "exposure-eclipse-impact/1.0"},
+        headers={"User-Agent": USER_AGENT},
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
         topo = json.load(resp)

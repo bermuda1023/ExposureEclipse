@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
+from ..brand import USER_AGENT
+
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 FETCH_TIMEOUT_S = 15
 
@@ -86,7 +88,7 @@ def _fetch_open_meteo_hourly(lat: float, lon: float, model_key: str) -> dict | N
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(
-        url, headers={"User-Agent": "exposure-eclipse-forecast/1.0"},
+        url, headers={"User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
@@ -354,7 +356,7 @@ def _fetch_bulk_chunk(
     }
     url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(
-        url, headers={"User-Agent": "exposure-eclipse-forecast/1.0"},
+        url, headers={"User-Agent": USER_AGENT},
     )
     items: tuple[dict, ...] = ()
     for attempt in range(_RETRY_ATTEMPTS + 1):

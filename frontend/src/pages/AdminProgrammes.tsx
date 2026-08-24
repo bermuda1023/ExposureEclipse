@@ -4,7 +4,7 @@
  * Production flow this stands in for:
  *   Inwards business system → exports treaty extract (xlsx/csv) → ops drops
  *   the file here → maps each programme to its EDM (server + database) →
- *   exposure-eclipse pulls facts via the mapped EDM going forward.
+ *   Peril Vista pulls facts via the mapped EDM going forward.
  *
  * Today the file/datafeed is manual; long-term it'll be an automated feed
  * that lands rows here and only the EDM linkage step needs human review.
@@ -19,6 +19,8 @@ import {
   type EDMLinkInput,
   type TreatyView,
 } from "../api/admin";
+import { BRAND } from "../brand";
+import { BrandMark } from "../components/layout/BrandMark";
 
 const STATUS_BADGE: Record<string, { bg: string; fg: string; border: string }> = {
   mapped: { bg: "#e8f7ec", fg: "#066c2f", border: "#5cba6a" },
@@ -68,13 +70,16 @@ export function AdminProgrammes() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1500, margin: "0 auto", display: "grid", gap: 16 }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-        <div>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <a href="/" aria-label={BRAND.name}><BrandMark size={32} /></a>
+          <div>
           <h1 style={{ margin: 0, fontSize: 22, color: "var(--ink-900)" }}>Programmes · admin</h1>
           <p style={{ margin: "4px 0 0", color: "var(--ink-600)", fontSize: 13 }}>
             Treaty metadata (broker / cedent / layers) joined to the EDM linkage map. Click a row to edit its
             server + database mapping; auto-suggest uses the existing cedents.
           </p>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <a

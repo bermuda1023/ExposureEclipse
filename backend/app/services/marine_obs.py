@@ -21,20 +21,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import lru_cache
 
+from ..brand import USER_AGENT as NWS_USER_AGENT
+
 NDBC_LATEST_URL = "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
 NWS_STATIONS_URL = "https://api.weather.gov/stations"
-# Per NWS docs (api.weather.gov Content Negotiation):
-#   > User-Agent tells a website what type of device you are using so it
-#   > can tailor the best experience for you. […] the more unique to your
-#   > application […] the less likely it will be affected by a security
-#   > event. If you include contact information (website or email), we
-#   > can contact you if your string is associated to a security event.
-# Keep the URL identifying and a real contact so a rate-limit or security
-# flag lands in an inbox we actually check.
-NWS_USER_AGENT = (
-    "ExposureEclipse/1.0 (+https://github.com/bermuda1023/ExposureEclipse; "
-    "contact james.anfossi@accountingbda.com)"
-)
 FETCH_TIMEOUT_S = 30
 
 
@@ -112,7 +102,7 @@ def _ndbc_all() -> list[BuoyObservation]:
     if hit is not None and (now - hit[0]) < _NDBC_CACHE_TTL_S:
         return hit[1]
 
-    req = urllib.request.Request(NDBC_LATEST_URL, headers={"User-Agent": "eclipse/1.0"})
+    req = urllib.request.Request(NDBC_LATEST_URL, headers={"User-Agent": NWS_USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:
             text = r.read().decode("utf-8", errors="replace")

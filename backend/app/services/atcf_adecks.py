@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Iterable
 
+from ..brand import USER_AGENT
+
 ADECK_URL_TEMPLATE = (
     "https://ftp.nhc.noaa.gov/atcf/aid_public/a{basin}{cy:02d}{year}.dat.gz"
 )
@@ -195,7 +197,7 @@ def _download_adeck(basin: str, cy: int, year: int) -> bytes | None:
 
     url = ADECK_URL_TEMPLATE.format(basin=basin.lower(), cy=cy, year=year)
     req = urllib.request.Request(
-        url, headers={"User-Agent": "exposure-eclipse-live/1.0"},
+        url, headers={"User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:

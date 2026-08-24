@@ -1,8 +1,8 @@
 {
-  "name": "exposure-eclipse-frontend",
+  "name": "peril-vista-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "Exposure Eclipse — Property Cat exposure management workbench (React + Vite frontend).",
+  "description": "Peril Vista — Property Cat exposure management workbench (React + Vite frontend).",
   "type": "module",
   "scripts": {
     "dev": "vite",

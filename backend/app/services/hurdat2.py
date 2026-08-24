@@ -20,6 +20,8 @@ import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 
+from ..brand import USER_AGENT
+
 HURDAT2_URL = "https://www.nhc.noaa.gov/data/hurdat/hurdat2-1851-2025-02272026.txt"
 FETCH_TIMEOUT_S = 30
 MIN_YEAR = 1950
@@ -139,7 +141,7 @@ def fetch_and_parse() -> list[Storm]:
     """Live-fetch + parse HURDAT2. Memoised per-process (cold start cost only)."""
     req = urllib.request.Request(
         HURDAT2_URL,
-        headers={"User-Agent": "exposure-eclipse-hurdat2/1.0"},
+        headers={"User-Agent": USER_AGENT},
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
         raw = resp.read().decode("utf-8", errors="replace")

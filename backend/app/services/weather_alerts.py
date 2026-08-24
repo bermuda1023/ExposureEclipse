@@ -21,6 +21,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from ..brand import USER_AGENT as NWS_USER_AGENT
+
 
 class AlertFeedUnavailable(RuntimeError):
     """The NWS alerts feed could not be reached or parsed.
@@ -30,12 +32,6 @@ class AlertFeedUnavailable(RuntimeError):
     """
 
 
-# A real contact, matching marine_obs.py — NWS asks for one and may throttle
-# or block placeholder agents, which would take the flood overlay down.
-NWS_USER_AGENT = (
-    "ExposureEclipse/1.0 (+https://github.com/bermuda1023/ExposureEclipse; "
-    "contact james.anfossi@accountingbda.com)"
-)
 NWS_ALERTS_URL = "https://api.weather.gov/alerts/active"
 FETCH_TIMEOUT_S = 30
 

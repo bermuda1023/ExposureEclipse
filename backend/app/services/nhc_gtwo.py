@@ -24,6 +24,7 @@ import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 
+from ..brand import USER_AGENT
 from .nhc_gis import _extract_coord_list, _iter_placemarks, _kml_from_kmz
 
 FETCH_TIMEOUT_S = 20
@@ -134,7 +135,7 @@ def _download_kml(url: str) -> bytes | None:
     """Fetch a single GTWO KMZ and return the extracted KML bytes; None on
     any network / HTTP failure."""
     req = urllib.request.Request(
-        url, headers={"User-Agent": "exposure-eclipse-live/1.0"},
+        url, headers={"User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:

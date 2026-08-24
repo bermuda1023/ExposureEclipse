@@ -7,6 +7,7 @@
  */
 
 import { useState } from "react";
+import { BRAND } from "../../brand";
 import { downloadExcelExport } from "../../api/exports";
 import { useFiltersStore } from "../../state/filters";
 import { useSelectionStore } from "../../state/selection";
@@ -60,7 +61,7 @@ export function ExportButton() {
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = "exposure-eclipse-export.xlsx";
+            a.download = BRAND.exportFilename;
             a.click();
             URL.revokeObjectURL(url);
           } catch (e) {

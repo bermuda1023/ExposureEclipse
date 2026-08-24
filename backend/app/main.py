@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .brand import BRAND_NAME, SERVICE_ID
 from .api import (
     admin,
     calc,
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 app = FastAPI(
-    title="Exposure Eclipse API",
+    title=f"{BRAND_NAME} API",
     version="0.1.0",
     description="Property Cat exposure management workbench — backend API.",
     docs_url="/api/docs",
@@ -73,7 +74,7 @@ def health() -> dict[str, object]:
 
     body: dict[str, object] = {
         "status": "ok",
-        "service": "exposure-eclipse-backend",
+        "service": SERVICE_ID,
         "version": app.version,
         "dataProvider": settings.data_provider,
         "factCacheMaxDatasets": settings.fact_cache_max_datasets,

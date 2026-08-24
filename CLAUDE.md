@@ -1,11 +1,11 @@
-# CLAUDE.md — Exposure Eclipse operating manual
+# CLAUDE.md — Peril Vista operating manual
 
 > Auto-loaded into every conversation. Read it fully before writing code.
 > The contract is **this file + `docs/CONTRACTS.md` + `docs/DATA_MODEL.md`**.
 
 ## What you're building
 
-**Exposure Eclipse** — a web-based Property Cat exposure management workbench
+**Peril Vista** — a web-based Property Cat exposure management workbench
 for reinsurance underwriters. Turns ERT/EDM exposure outputs into an
 interactive Mapbox choropleth + pivot + Excel-export pipeline, overlays
 historical hurricane tracks + asymmetric wind-field cones, runs deterministic

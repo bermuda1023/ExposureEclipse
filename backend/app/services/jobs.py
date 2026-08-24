@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ..brand import BRAND_NAME
 from ..config import get_settings
 from ..models.enums import AggregationLevel, JobStatus, Peril
 from ..models.jobs import (
@@ -240,7 +241,7 @@ class JobRegistry:
         settings = get_settings()
         try:
             record.email_sent = self._email.send_error_report(
-                subject=f"[Exposure Eclipse] ERT job failed: {record.edm_database_name}",
+                subject=f"[{BRAND_NAME}] ERT job failed: {record.edm_database_name}",
                 technical={
                     "serverName": record.server_name,
                     "databaseName": record.edm_database_name,

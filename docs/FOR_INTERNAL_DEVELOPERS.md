@@ -1,4 +1,4 @@
-# Exposure Eclipse — Guide for Internal Software Developers
+# Peril Vista — Guide for Internal Software Developers
 
 **Audience:** engineers evaluating, reviewing, or extending this codebase —
 including people skeptical of “AI-built” software.
@@ -11,7 +11,7 @@ so you can form an independent technical judgment.
 
 ## 1. What you are looking at (one paragraph)
 
-**Exposure Eclipse** is a web workbench for **property catastrophe reinsurance
+**Peril Vista** is a web workbench for **property catastrophe reinsurance
 underwriters**. It turns **pre-aggregated ERT/EDM exposure cuts** into:
 
 - Mapbox choropleth (state/county TIV and related metrics)

@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import lru_cache
 
+from ..brand import USER_AGENT
+
 FETCH_TIMEOUT_S = 30
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 
@@ -57,7 +59,7 @@ class NHCSurgePolygon:
 @lru_cache(maxsize=64)
 def _download(url: str) -> bytes:
     req = urllib.request.Request(
-        url, headers={"User-Agent": "exposure-eclipse-live/1.0"}
+        url, headers={"User-Agent": USER_AGENT}
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
         return resp.read()

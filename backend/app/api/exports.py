@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from ..brand import EXPORT_FILENAME
 from ..providers import ExposureDataProvider, get_provider
 from ..services.export_excel import build_export_xlsx
 
@@ -24,7 +25,7 @@ def export_excel(
 ) -> StreamingResponse:
     """Build the workbook synchronously and stream it back."""
     xlsx_bytes = build_export_xlsx(payload, provider)
-    filename = "exposure-eclipse-export.xlsx"
+    filename = EXPORT_FILENAME
     return StreamingResponse(
         iter([xlsx_bytes]),
         media_type=_XLSX_CONTENT_TYPE,

@@ -30,6 +30,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+from ..brand import USER_AGENT
+
 IBTRACS_URL = (
     "https://www.ncei.noaa.gov/data/"
     "international-best-track-archive-for-climate-stewardship-ibtracs/"
@@ -94,7 +96,7 @@ def _parse_csv() -> tuple[
 ]:
     """Single-pass fetch + parse → (rmax_idx, r64_mean_idx, r64_quads_idx, storms)."""
     req = urllib.request.Request(
-        IBTRACS_URL, headers={"User-Agent": "exposure-eclipse-ibtracs/1.0"}
+        IBTRACS_URL, headers={"User-Agent": USER_AGENT}
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
         raw = resp.read().decode("utf-8", errors="replace")

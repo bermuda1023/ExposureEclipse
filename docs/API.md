@@ -38,7 +38,7 @@ IED, failed ERT job, county fallback) are NOT HTTP errors — they ride in
 ```json
 {
   "status": "ok",
-  "service": "exposure-eclipse-backend",
+  "service": "peril-vista-backend",
   "version": "0.1.0",
   "dataProvider": "mock",
   "factCacheMaxDatasets": 256,

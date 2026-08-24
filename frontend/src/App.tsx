@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { BRAND } from "./brand";
 import { Shell } from "./components/layout/Shell";
 import { AdminProgrammes } from "./pages/AdminProgrammes";
 import { FundAnalysis } from "./pages/FundAnalysis";
@@ -20,6 +21,17 @@ function usePath(): string {
 
 export default function App() {
   const path = usePath();
+  useEffect(() => {
+    const page =
+      path.startsWith("/admin/programmes")
+        ? "Programmes"
+        : path.startsWith("/fund-analysis")
+          ? "Fund Portfolio Optimizer"
+          : path.startsWith("/methodology")
+            ? "Methodology"
+            : null;
+    document.title = page ? `${page} · ${BRAND.name}` : BRAND.name;
+  }, [path]);
   if (path.startsWith("/admin/programmes")) return <AdminProgrammes />;
   if (path.startsWith("/fund-analysis")) return <FundAnalysis />;
   if (path.startsWith("/methodology")) return <Methodology />;

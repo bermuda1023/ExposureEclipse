@@ -176,7 +176,7 @@ class ConnectionRegistry:
         except ImportError as exc:  # pragma: no cover — optional dep
             raise RuntimeError(
                 "pyodbc is required for SQL Server access. "
-                "Install with: pip install 'exposure-eclipse-backend[sql]'"
+                "Install with: pip install 'peril-vista-backend[sql]'"
             ) from exc
 
         cfg = self.get(server_name)

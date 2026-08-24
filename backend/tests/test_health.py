@@ -14,7 +14,7 @@ def test_health_returns_ok() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["service"] == "exposure-eclipse-backend"
+    assert body["service"] == "peril-vista-backend"
     assert "dataProvider" in body
 
 

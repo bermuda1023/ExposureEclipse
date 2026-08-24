@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
+from ..brand import USER_AGENT
 from .hurdat2 import category_for_wind
 from .hurricane_impact import (
     ConeQuad,
@@ -179,7 +180,7 @@ class ForecastTrack:
 def _fetch_current_storms_raw() -> dict:
     req = urllib.request.Request(
         CURRENT_STORMS_URL,
-        headers={"User-Agent": "exposure-eclipse-live/1.0"},
+        headers={"User-Agent": USER_AGENT},
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
         return json.loads(resp.read().decode("utf-8"))

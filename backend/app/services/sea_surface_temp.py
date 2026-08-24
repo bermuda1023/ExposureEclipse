@@ -21,6 +21,8 @@ import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 
+from ..brand import USER_AGENT as MUR_USER_AGENT
+
 
 @dataclass(slots=True, frozen=True)
 class SSTPoint:
@@ -137,7 +139,6 @@ def sst_at_point(lat: float, lon: float) -> SSTPoint:
 MUR_BASE = (
     "https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41mday.csv"
 )
-MUR_USER_AGENT = "exposure-eclipse-sst/1.0"
 MUR_TIMEOUT_S = 30
 # Peak-hurricane month with reliable late-summer Atlantic warmth — used for
 # the demo when we want a "what the ocean looks like during a hurricane".

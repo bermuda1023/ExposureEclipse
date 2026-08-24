@@ -1,4 +1,4 @@
-# Exposure Eclipse
+# Peril Vista
 
 Web-based **Property Cat exposure management workbench** for reinsurance
 underwriters. Turns ERT/EDM exposure outputs into an interactive Mapbox

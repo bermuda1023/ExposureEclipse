@@ -1,4 +1,4 @@
-# GLOSSARY — Exposure Eclipse
+# GLOSSARY — Peril Vista
 
 Domain terms an engineer must understand to build this correctly.
 

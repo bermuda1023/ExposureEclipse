@@ -2,7 +2,7 @@
  * Methodology & data-sources reference.
  *
  * A single, structured page detailing every calculation, every external
- * data source, and every assumption baked into Exposure Eclipse. Intended
+ * data source, and every assumption baked into Peril Vista. Intended
  * to be the authoritative "how does this number get produced" resource
  * for anyone who has to defend the platform in a client conversation.
  *
@@ -10,6 +10,9 @@
  * instantly and is straightforward to keep in sync with the code that
  * actually produces the numbers.
  */
+
+import { BRAND } from "../brand";
+import { BrandMark } from "../components/layout/BrandMark";
 
 export function Methodology() {
   return (
@@ -25,7 +28,9 @@ export function Methodology() {
     >
       <TopNav />
 
-      <header style={{ marginBottom: 32 }}>
+      <header style={{ marginBottom: 32, display: "flex", alignItems: "flex-start", gap: 14 }}>
+        <BrandMark size={40} />
+        <div>
         <div
           style={{
             fontSize: "0.7rem",
@@ -35,7 +40,7 @@ export function Methodology() {
             letterSpacing: "0.08em",
           }}
         >
-          Exposure Eclipse
+          {BRAND.name}
         </div>
         <h1 style={{ margin: "6px 0", fontSize: "1.8rem" }}>
           Methodology &amp; data sources
@@ -45,6 +50,7 @@ export function Methodology() {
           When the code changes, this page should change with it — treat any
           drift as a bug.
         </p>
+        </div>
       </header>
 
       <TOC />
@@ -628,7 +634,7 @@ function TopNav() {
           fontWeight: 700,
         }}
       >
-        ← Back to Exposure map
+        ← Back to {BRAND.name}
       </a>
     </nav>
   );

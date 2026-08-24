@@ -35,6 +35,8 @@ import {
   type RobustnessResponse,
   type RollingStatsResponse,
 } from "../api/fundAnalysis";
+import { BRAND } from "../brand";
+import { BrandMark } from "../components/layout/BrandMark";
 
 // Sensible priors for short-history / illiquid assets.
 const DEFAULT_OVERRIDES: Record<string, AssumptionOverrideIn> = {
@@ -624,15 +626,18 @@ export function FundAnalysis() {
 function Header({ asOf }: { asOf: string | undefined }) {
   return (
     <header style={S.header}>
-      <div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <a href="/" aria-label={BRAND.name}><BrandMark size={32} /></a>
+        <div>
         <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
-          <a href="/" style={{ color: "#1e40af", textDecoration: "none" }}>← Back to Exposure Eclipse</a>
+          <a href="/" style={{ color: "#1e40af", textDecoration: "none" }}>← Back to {BRAND.name}</a>
         </div>
         <h1 style={{ margin: 0, fontSize: "1.4rem" }}>Fund Portfolio Optimizer</h1>
         <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.8rem" }}>
           Markowitz efficient frontier + interactive builder across 7 hedge funds + S&P 500 + US Aggregate Bonds.
           {asOf && <> · Data as of <b>{asOf}</b>.</>}
         </p>
+        </div>
       </div>
     </header>
   );

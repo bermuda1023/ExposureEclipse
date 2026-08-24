@@ -29,6 +29,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from ..brand import USER_AGENT
+
 
 class InundationUnavailable(RuntimeError):
     """The NWM inundation service could not be reached or parsed.
@@ -199,7 +201,7 @@ def fetch_inundation(
             params["maxAllowableOffset"] = str(simplify_deg)
         req = urllib.request.Request(
             NWM_INUNDATION_URL + "?" + urllib.parse.urlencode(params),
-            headers={"User-Agent": "ExposureEclipse/1.0", "Accept": "application/geo+json"},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/geo+json"},
         )
         try:
             with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as r:

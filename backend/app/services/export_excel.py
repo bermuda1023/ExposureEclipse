@@ -23,6 +23,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from ..brand import BRAND_NAME
+
 from ..api.exposures import (  # reuse router builders so export numbers match the wire
     exposures_detail as _build_detail,
     exposures_map as _build_map,
@@ -147,7 +149,7 @@ def build_export_xlsx(payload: dict, provider: ExposureDataProvider) -> bytes:
         "Summary",
         [
             ("Generated at (UTC)", timestamp),
-            ("Service", "Exposure Eclipse"),
+            ("Service", BRAND_NAME),
             ("Dataset ID", payload.get("datasetId")),
             ("Dataset Group ID", payload.get("datasetGroupId")),
             ("Comparison Dataset ID", payload.get("comparisonDatasetId")),
@@ -356,7 +358,7 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         "Summary",
         [
             ("Generated at (UTC)", timestamp),
-            ("Service", "Exposure Eclipse — Hurricane Impact"),
+            ("Service", f"{BRAND_NAME} — Hurricane Impact"),
             ("Storm ID", impact.get("stormId")),
             ("Storm Name", impact.get("stormName")),
             ("Year", impact.get("year")),

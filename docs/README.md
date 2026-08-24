@@ -1,4 +1,4 @@
-# Exposure Eclipse — documentation index
+# Peril Vista — documentation index
 
 | Doc | Audience | Purpose |
 |---|---|---|

@@ -3,7 +3,7 @@
 Production flow:
   Inwards business system → exports treaty extract (CSV / XLSX) →
   Admin imports into this service → analyst maps each programme to a
-  SQL server + EDM database → exposure-eclipse pulls facts via the
+  SQL server + EDM database → Peril Vista pulls facts via the
   mapped EDM going forward.
 
 For v1 we ship a JSON-backed mock — both the treaty list and the

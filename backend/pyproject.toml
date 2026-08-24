@@ -1,7 +1,7 @@
 [project]
-name = "exposure-eclipse-backend"
+name = "peril-vista-backend"
 version = "0.1.0"
-description = "Exposure Eclipse — Property Cat exposure management workbench (FastAPI backend)"
+description = "Peril Vista — Property Cat exposure management workbench (FastAPI backend)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

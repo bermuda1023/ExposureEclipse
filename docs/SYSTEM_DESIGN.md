@@ -1,8 +1,8 @@
-# Exposure Eclipse — System Design Document
+# Peril Vista — System Design Document
 
 | Field | Value |
 |---|---|
-| **Title** | Exposure Eclipse System Design |
+| **Title** | Peril Vista System Design |
 | **Author** | Architecture (synthesized from codebase + docs) |
 | **Date** | 2026-07-10 |
 | **Status** | Approved (design review) — rev 3 |
@@ -15,7 +15,7 @@
 
 ## Overview
 
-**Exposure Eclipse** is a web-based **Property Catastrophe (Property Cat) exposure management workbench** for reinsurance underwriters. It consumes **pre-aggregated ERT/EDM exposure cuts** and presents them as an interactive Mapbox choropleth, pivot workbench, detail panel, and multi-sheet Excel export — with hurricane impact (NOAA IBTrACS), hazard climatology overlays (tornado / hail / wildfire), live/replay storm context (NHC, NWS, NDBC, SST), and a deterministic excess-of-loss (XOL) layer-calc engine.
+**Peril Vista** is a web-based **Property Catastrophe (Property Cat) exposure management workbench** for reinsurance underwriters. It consumes **pre-aggregated ERT/EDM exposure cuts** and presents them as an interactive Mapbox choropleth, pivot workbench, detail panel, and multi-sheet Excel export — with hurricane impact (NOAA IBTrACS), hazard climatology overlays (tornado / hail / wildfire), live/replay storm context (NHC, NWS, NDBC, SST), and a deterministic excess-of-loss (XOL) layer-calc engine.
 
 **V1 is a mock-data prototype with a real multi-EDM data plane.** The default `MockExposureDataProvider` serves fixtures under `mockdata/`. The same `ExposureDataProvider` ABC is satisfied by `hybrid` and `sqlserver` modes that load pre-aggregated cuts from many SQL Server databases via a multi-host connection registry, process-local fact cache (LRU/TTL/single-flight), and parallel multi-deal load. Auth is intentionally out of scope for the offline demo.
 

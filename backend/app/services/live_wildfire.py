@@ -35,9 +35,9 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-# ─────────────────────────── sources ───────────────────────────
+from ..brand import USER_AGENT
 
-USER_AGENT = "exposure-eclipse/1.0 (contact: support@example.invalid)"
+# ─────────────────────────── sources ───────────────────────────
 # Must stay well under vercel.json `maxDuration` — a per-request timeout longer
 # than the function budget can only ever produce a 504 with nothing cached.
 FETCH_TIMEOUT_S = 8
