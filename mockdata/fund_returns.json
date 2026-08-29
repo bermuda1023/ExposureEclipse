@@ -7336,6 +7336,569 @@
       "source": "May 2026 factsheet"
     },
     {
+      "id": "blue_outlier",
+      "name": "Blue Outlier Capital Fund, LP",
+      "kind": "hedge_fund",
+      "strategy": "Long/short value equity, 20-50 names; opportunistic options overlay",
+      "manager": "Ryan Rahinsky (Blue Outlier Capital)",
+      "minInvestment": 200000,
+      "aumMillions": null,
+      "fees": "0% mgmt / 20% perf (annual, HWM)",
+      "lockup": "None",
+      "inception": "2023-01",
+      "returns": [
+        {
+          "month": "2023-01",
+          "ret": 0.0213
+        },
+        {
+          "month": "2023-02",
+          "ret": -0.0042
+        },
+        {
+          "month": "2023-03",
+          "ret": -0.0063
+        },
+        {
+          "month": "2023-04",
+          "ret": -0.016
+        },
+        {
+          "month": "2023-05",
+          "ret": -0.1786
+        },
+        {
+          "month": "2023-06",
+          "ret": 0.1123
+        },
+        {
+          "month": "2023-07",
+          "ret": 0.1063
+        },
+        {
+          "month": "2023-08",
+          "ret": 0.2007
+        },
+        {
+          "month": "2023-09",
+          "ret": 0.1458
+        },
+        {
+          "month": "2023-10",
+          "ret": -0.0815
+        },
+        {
+          "month": "2023-11",
+          "ret": 0.137
+        },
+        {
+          "month": "2023-12",
+          "ret": 0.0897
+        },
+        {
+          "month": "2024-01",
+          "ret": -0.0055
+        },
+        {
+          "month": "2024-02",
+          "ret": 0.0702
+        },
+        {
+          "month": "2024-03",
+          "ret": 0.0195
+        },
+        {
+          "month": "2024-04",
+          "ret": 0.0285
+        },
+        {
+          "month": "2024-05",
+          "ret": -0.0308
+        },
+        {
+          "month": "2024-06",
+          "ret": -0.1339
+        },
+        {
+          "month": "2024-07",
+          "ret": 0.0205
+        },
+        {
+          "month": "2024-08",
+          "ret": -0.0558
+        },
+        {
+          "month": "2024-09",
+          "ret": 0.032
+        },
+        {
+          "month": "2024-10",
+          "ret": 0.1222
+        },
+        {
+          "month": "2024-11",
+          "ret": 0.6285
+        },
+        {
+          "month": "2024-12",
+          "ret": -0.1414
+        },
+        {
+          "month": "2025-01",
+          "ret": 0.0751
+        },
+        {
+          "month": "2025-02",
+          "ret": -0.2368
+        },
+        {
+          "month": "2025-03",
+          "ret": 0.0244
+        },
+        {
+          "month": "2025-04",
+          "ret": 0.1016
+        },
+        {
+          "month": "2025-05",
+          "ret": 0.4387
+        },
+        {
+          "month": "2025-06",
+          "ret": -0.0195
+        },
+        {
+          "month": "2025-07",
+          "ret": 0.1122
+        },
+        {
+          "month": "2025-08",
+          "ret": -0.0387
+        },
+        {
+          "month": "2025-09",
+          "ret": 0.0043
+        },
+        {
+          "month": "2025-10",
+          "ret": -0.0508
+        },
+        {
+          "month": "2025-11",
+          "ret": -0.2301
+        },
+        {
+          "month": "2025-12",
+          "ret": -0.0875
+        },
+        {
+          "month": "2026-01",
+          "ret": 0.1205
+        },
+        {
+          "month": "2026-02",
+          "ret": -0.0117
+        },
+        {
+          "month": "2026-03",
+          "ret": -0.3174
+        },
+        {
+          "month": "2026-04",
+          "ret": 0.1812
+        },
+        {
+          "month": "2026-05",
+          "ret": 0.2354
+        },
+        {
+          "month": "2026-06",
+          "ret": 0.0125
+        }
+      ],
+      "source": "Blue Outlier tear sheet June 2026 (net) + Q2 2026 letter",
+      "warning": "HIGH VOL \u2014 51% max drawdown (net). Option overlay can produce extreme monthly moves (e.g. Mar 2026 -32%). LP inception Jan 2023 (~42 months); 2020-22 proof-of-concept GROSS account excluded.",
+      "docs": [
+        {
+          "label": "Tear sheet (Jun 2026)",
+          "url": "/fund-docs/blue-outlier-tear-sheet-june-2026.pdf"
+        },
+        {
+          "label": "Q2 2026 letter",
+          "url": "/fund-docs/blue-outlier-q2-2026-letter.pdf"
+        }
+      ]
+    },
+    {
+      "id": "adar1",
+      "name": "ADAR1 Partners, LP",
+      "kind": "hedge_fund",
+      "strategy": "Healthcare / biotech long/short (event-driven + fundamental)",
+      "manager": "Daniel Schneeberger, MD, MBA (ADAR1 Capital Management)",
+      "minInvestment": 1000000,
+      "aumMillions": null,
+      "fees": "1.5% mgmt / 20% perf (25% perf through 2022)",
+      "lockup": "12mo / 25% fund-level gate; quarterly thereafter (45d notice)",
+      "inception": "2019-03",
+      "returns": [
+        {
+          "month": "2019-03",
+          "ret": 0.024
+        },
+        {
+          "month": "2019-04",
+          "ret": 0.034
+        },
+        {
+          "month": "2019-05",
+          "ret": 0.017
+        },
+        {
+          "month": "2019-06",
+          "ret": 0.009
+        },
+        {
+          "month": "2019-07",
+          "ret": 0.024
+        },
+        {
+          "month": "2019-08",
+          "ret": 0.02
+        },
+        {
+          "month": "2019-09",
+          "ret": 0.018
+        },
+        {
+          "month": "2019-10",
+          "ret": 0.015
+        },
+        {
+          "month": "2019-11",
+          "ret": 0.032
+        },
+        {
+          "month": "2019-12",
+          "ret": 0.033
+        },
+        {
+          "month": "2020-01",
+          "ret": 0.006
+        },
+        {
+          "month": "2020-02",
+          "ret": -0.04
+        },
+        {
+          "month": "2020-03",
+          "ret": -0.043
+        },
+        {
+          "month": "2020-04",
+          "ret": 0.103
+        },
+        {
+          "month": "2020-05",
+          "ret": 0.064
+        },
+        {
+          "month": "2020-06",
+          "ret": 0.006
+        },
+        {
+          "month": "2020-07",
+          "ret": -0.011
+        },
+        {
+          "month": "2020-08",
+          "ret": -0.009
+        },
+        {
+          "month": "2020-09",
+          "ret": 0.048
+        },
+        {
+          "month": "2020-10",
+          "ret": 0.038
+        },
+        {
+          "month": "2020-11",
+          "ret": 0.05
+        },
+        {
+          "month": "2020-12",
+          "ret": 0.057
+        },
+        {
+          "month": "2021-01",
+          "ret": 0.052
+        },
+        {
+          "month": "2021-02",
+          "ret": 0.041
+        },
+        {
+          "month": "2021-03",
+          "ret": -0.012
+        },
+        {
+          "month": "2021-04",
+          "ret": 0.059
+        },
+        {
+          "month": "2021-05",
+          "ret": 0.113
+        },
+        {
+          "month": "2021-06",
+          "ret": 0.045
+        },
+        {
+          "month": "2021-07",
+          "ret": -0.012
+        },
+        {
+          "month": "2021-08",
+          "ret": 0.023
+        },
+        {
+          "month": "2021-09",
+          "ret": 0.023
+        },
+        {
+          "month": "2021-10",
+          "ret": 0.051
+        },
+        {
+          "month": "2021-11",
+          "ret": -0.029
+        },
+        {
+          "month": "2021-12",
+          "ret": 0.008
+        },
+        {
+          "month": "2022-01",
+          "ret": -0.028
+        },
+        {
+          "month": "2022-02",
+          "ret": 0.015
+        },
+        {
+          "month": "2022-03",
+          "ret": 0.024
+        },
+        {
+          "month": "2022-04",
+          "ret": -0.027
+        },
+        {
+          "month": "2022-05",
+          "ret": -0.031
+        },
+        {
+          "month": "2022-06",
+          "ret": -0.001
+        },
+        {
+          "month": "2022-07",
+          "ret": 0.071
+        },
+        {
+          "month": "2022-08",
+          "ret": 0.016
+        },
+        {
+          "month": "2022-09",
+          "ret": 0.018
+        },
+        {
+          "month": "2022-10",
+          "ret": 0.08
+        },
+        {
+          "month": "2022-11",
+          "ret": 0.109
+        },
+        {
+          "month": "2022-12",
+          "ret": 0.133
+        },
+        {
+          "month": "2023-01",
+          "ret": 0.032
+        },
+        {
+          "month": "2023-02",
+          "ret": 0.004
+        },
+        {
+          "month": "2023-03",
+          "ret": 0.031
+        },
+        {
+          "month": "2023-04",
+          "ret": 0.037
+        },
+        {
+          "month": "2023-05",
+          "ret": 0.027
+        },
+        {
+          "month": "2023-06",
+          "ret": 0.005
+        },
+        {
+          "month": "2023-07",
+          "ret": 0.084
+        },
+        {
+          "month": "2023-08",
+          "ret": 0.017
+        },
+        {
+          "month": "2023-09",
+          "ret": -0.003
+        },
+        {
+          "month": "2023-10",
+          "ret": -0.067
+        },
+        {
+          "month": "2023-11",
+          "ret": 0.043
+        },
+        {
+          "month": "2023-12",
+          "ret": 0.087
+        },
+        {
+          "month": "2024-01",
+          "ret": 0.027
+        },
+        {
+          "month": "2024-02",
+          "ret": 0.054
+        },
+        {
+          "month": "2024-03",
+          "ret": 0.021
+        },
+        {
+          "month": "2024-04",
+          "ret": -0.05
+        },
+        {
+          "month": "2024-05",
+          "ret": -0.002
+        },
+        {
+          "month": "2024-06",
+          "ret": -0.002
+        },
+        {
+          "month": "2024-07",
+          "ret": 0.054
+        },
+        {
+          "month": "2024-08",
+          "ret": 0.017
+        },
+        {
+          "month": "2024-09",
+          "ret": 0.02
+        },
+        {
+          "month": "2024-10",
+          "ret": 0.017
+        },
+        {
+          "month": "2024-11",
+          "ret": 0.01
+        },
+        {
+          "month": "2024-12",
+          "ret": -0.039
+        },
+        {
+          "month": "2025-01",
+          "ret": -0.031
+        },
+        {
+          "month": "2025-02",
+          "ret": 0.006
+        },
+        {
+          "month": "2025-03",
+          "ret": -0.046
+        },
+        {
+          "month": "2025-04",
+          "ret": 0.085
+        },
+        {
+          "month": "2025-05",
+          "ret": -0.056
+        },
+        {
+          "month": "2025-06",
+          "ret": 0.029
+        },
+        {
+          "month": "2025-07",
+          "ret": 0.179
+        },
+        {
+          "month": "2025-08",
+          "ret": 0.051
+        },
+        {
+          "month": "2025-09",
+          "ret": 0.117
+        },
+        {
+          "month": "2025-10",
+          "ret": 0.133
+        },
+        {
+          "month": "2025-11",
+          "ret": 0.042
+        },
+        {
+          "month": "2025-12",
+          "ret": 0.017
+        },
+        {
+          "month": "2026-01",
+          "ret": -0.015
+        },
+        {
+          "month": "2026-02",
+          "ret": 0.07
+        },
+        {
+          "month": "2026-03",
+          "ret": -0.006
+        },
+        {
+          "month": "2026-04",
+          "ret": 0.021
+        },
+        {
+          "month": "2026-05",
+          "ret": 0.018
+        }
+      ],
+      "source": "ADAR1 Firm Overview Jun 2026, slide 12 (net through May 2026; excludes side pockets)",
+      "docs": [
+        {
+          "label": "Firm overview (Jun 2026)",
+          "url": "/fund-docs/adar1-firm-overview-2026-06.pdf"
+        }
+      ]
+    },
+    {
       "id": "spy",
       "name": "S&P 500 Total Return (SPY)",
       "kind": "reference",

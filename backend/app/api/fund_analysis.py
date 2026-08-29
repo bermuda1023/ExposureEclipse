@@ -1,7 +1,7 @@
 """Fund-analysis endpoints — the portfolio-optimization workbench.
 
 Serves:
-- GET  /api/fund-analysis/assets    → catalog of the 6 hedge funds + SPY + AGG
+- GET  /api/fund-analysis/assets    → catalog of live hedge funds + SPY + AGG
 - POST /api/fund-analysis/optimize  → run MVO on the selected subset and
                                        return efficient frontier + max-Sharpe
                                        + min-variance portfolios, along with
@@ -50,6 +50,11 @@ router = APIRouter(prefix="/fund-analysis", tags=["fund-analysis"])
 # ─────────────────────── wire types ───────────────────────
 
 
+class FundDocOut(CamelModel):
+    label: str
+    url: str
+
+
 class AssetOut(CamelModel):
     id: str
     name: str
@@ -66,6 +71,7 @@ class AssetOut(CamelModel):
     annualised_vol: float
     source: str
     warning: str | None = None
+    docs: list[FundDocOut] = Field(default_factory=list)
 
 
 class AssetsResponse(CamelModel):
@@ -277,6 +283,7 @@ def list_assets() -> AssetsResponse:
                 annualised_vol=stat.annualised_vol,
                 source=a["source"],
                 warning=a.get("warning"),
+                docs=a.get("docs") or [],
             )
         )
     return AssetsResponse(

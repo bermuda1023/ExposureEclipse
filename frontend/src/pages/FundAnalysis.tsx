@@ -82,6 +82,12 @@ const DEFAULT_PER_ASSET_BENCHMARKS: Record<string, string> = {
   orbis_equity: "msci_world",
   // Multi-asset balanced fund → use the multi-strategy hedge fund index
   orbis_balanced: "hfrx_global",
+  // Blue Outlier tear sheet benches vs SPY and IWM (Russell 2000);
+  // IWM is the closer style match (small/mid value + options overlay).
+  blue_outlier: "r2k",
+  // ADAR1 deck benches vs S&P 500 TR and XBI; SPY is the closest
+  // index we carry (XBI is not in the catalog).
+  adar1: "spy",
 };
 
 const CURRENCY = (v: number) =>
@@ -103,6 +109,8 @@ const ASSET_COLOR: Record<string, string> = {
   contrarius: "#0f766e",
   orbis_equity: "#9333ea",
   orbis_balanced: "#c026d3",
+  blue_outlier: "#0369a1",
+  adar1: "#0d9488",
   spy: "#64748b",
   agg: "#a3a3a3",
 };
@@ -118,18 +126,21 @@ const SHORT_NAME: Record<string, string> = {
   contrarius: "Contrarius",
   orbis_equity: "Orbis Equity",
   orbis_balanced: "Orbis Balanced",
+  blue_outlier: "Blue Outlier",
+  adar1: "ADAR1",
   spy: "S&P 500",
   agg: "US Bonds",
 };
 
 export function FundAnalysis() {
-  // Default: check the 7 funds + SPY + AGG. HFRX / R2K / RMC / MDY are
+  // Default: live managers + SPY + AGG. HFRX / R2K / RMC / MDY are
   // available in the catalog + benchmark dropdown but unchecked so the
   // asset picker stays readable.
   const [selected, setSelected] = useState<Set<string>>(
     new Set([
       "gator", "bireme", "upslope", "primary_commodity", "cedar_creek",
       "cas_sosin", "alluvial", "contrarius", "orbis_equity", "orbis_balanced",
+      "blue_outlier", "adar1",
       "spy", "agg",
     ]),
   );
@@ -317,6 +328,26 @@ export function FundAnalysis() {
                         <span style={S.chipMuted}>{a.strategy}</span>
                       </div>
                       {a.warning && <div style={S.warn}>{a.warning}</div>}
+                      {a.docs && a.docs.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                          {a.docs.map((d) => (
+                            <a
+                              key={d.url}
+                              href={d.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                fontSize: "0.72rem",
+                                fontWeight: 600,
+                                color: "var(--brand-700)",
+                                textDecoration: "none",
+                              }}
+                            >
+                              {d.label} ↗
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td style={S.tdNum}>{PCT(a.annualisedReturn)}</td>
                     <td style={S.tdNum}>{PCT(a.annualisedVol)}</td>
@@ -634,7 +665,7 @@ function Header({ asOf }: { asOf: string | undefined }) {
         </div>
         <h1 style={{ margin: 0, fontSize: "1.4rem" }}>Fund Portfolio Optimizer</h1>
         <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.8rem" }}>
-          Markowitz efficient frontier + interactive builder across 7 hedge funds + S&P 500 + US Aggregate Bonds.
+          Markowitz efficient frontier + interactive builder across live hedge funds + S&P 500 + US Aggregate Bonds.
           {asOf && <> · Data as of <b>{asOf}</b>.</>}
         </p>
         </div>

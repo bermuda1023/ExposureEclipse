@@ -4,6 +4,11 @@ import { apiGet, apiPost } from "./client";
 
 export type AssetKind = "hedge_fund" | "reference";
 
+export interface FundDoc {
+  label: string;
+  url: string;
+}
+
 export interface FundAsset {
   id: string;
   name: string;
@@ -20,6 +25,7 @@ export interface FundAsset {
   annualisedVol: number;
   source: string;
   warning: string | null;
+  docs?: FundDoc[];
 }
 
 export interface AssetsResponse {

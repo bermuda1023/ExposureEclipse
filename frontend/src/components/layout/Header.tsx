@@ -47,7 +47,7 @@ export function Header() {
             fontSize: "0.72rem",
             letterSpacing: 0.2,
           }}
-          title="Portfolio Optimizer — efficient frontier across CAS + 6 other funds + SPY + AGG"
+          title="Portfolio Optimizer — efficient frontier across live hedge funds + SPY + AGG"
         >
           📊 Fund Portfolio Optimizer
         </a>

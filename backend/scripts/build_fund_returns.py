@@ -238,6 +238,29 @@ ALLUVIAL = _mk_series([
     (2026, [0.039, 0.035, -0.043, 0.044, 0.028, None, None, None, None, None, None, None]),
 ])
 
+# Blue Outlier Capital Fund, LP — monthly NET returns from the June 2026
+# tear sheet (inception 13 Jan 2023). 2020–22 "proof of concept" monthlies
+# on that sheet are a different GROSS account and are intentionally omitted.
+BLUE_OUTLIER = _mk_series([
+    (2023, [0.0213, -0.0042, -0.0063, -0.0160, -0.1786, 0.1123, 0.1063, 0.2007, 0.1458, -0.0815, 0.1370, 0.0897]),
+    (2024, [-0.0055, 0.0702, 0.0195, 0.0285, -0.0308, -0.1339, 0.0205, -0.0558, 0.0320, 0.1222, 0.6285, -0.1414]),
+    (2025, [0.0751, -0.2368, 0.0244, 0.1016, 0.4387, -0.0195, 0.1122, -0.0387, 0.0043, -0.0508, -0.2301, -0.0875]),
+    (2026, [0.1205, -0.0117, -0.3174, 0.1812, 0.2354, 0.0125, None, None, None, None, None, None]),
+])
+
+# ADAR1 Partners, LP — monthly NET from Firm Overview Jun 2026 slide 12
+# (inception 5 Mar 2019; through May 2026; excludes side pockets).
+ADAR1 = _mk_series([
+    (2019, [None, None, 0.024, 0.034, 0.017, 0.009, 0.024, 0.020, 0.018, 0.015, 0.032, 0.033]),
+    (2020, [0.006, -0.040, -0.043, 0.103, 0.064, 0.006, -0.011, -0.009, 0.048, 0.038, 0.050, 0.057]),
+    (2021, [0.052, 0.041, -0.012, 0.059, 0.113, 0.045, -0.012, 0.023, 0.023, 0.051, -0.029, 0.008]),
+    (2022, [-0.028, 0.015, 0.024, -0.027, -0.031, -0.001, 0.071, 0.016, 0.018, 0.080, 0.109, 0.133]),
+    (2023, [0.032, 0.004, 0.031, 0.037, 0.027, 0.005, 0.084, 0.017, -0.003, -0.067, 0.043, 0.087]),
+    (2024, [0.027, 0.054, 0.021, -0.050, -0.002, -0.002, 0.054, 0.017, 0.020, 0.017, 0.010, -0.039]),
+    (2025, [-0.031, 0.006, -0.046, 0.085, -0.056, 0.029, 0.179, 0.051, 0.117, 0.133, 0.042, 0.017]),
+    (2026, [-0.015, 0.070, -0.006, 0.021, 0.018, None, None, None, None, None, None, None]),
+])
+
 
 # ────────────── SPY (S&P 500 TR) + AGG (US Aggregate Bond) proxy ──────────────
 
@@ -697,6 +720,46 @@ def main() -> None:
                 "inception": "2017-01",
                 "returns": ALLUVIAL,
                 "source": "May 2026 factsheet",
+            },
+            {
+                "id": "blue_outlier",
+                "name": "Blue Outlier Capital Fund, LP",
+                "kind": "hedge_fund",
+                "strategy": "Long/short value equity, 20-50 names; opportunistic options overlay",
+                "manager": "Ryan Rahinsky (Blue Outlier Capital)",
+                "minInvestment": 200_000,
+                "aumMillions": None,
+                "fees": "0% mgmt / 20% perf (annual, HWM)",
+                "lockup": "None",
+                "inception": "2023-01",
+                "returns": BLUE_OUTLIER,
+                "source": "Blue Outlier tear sheet June 2026 (net) + Q2 2026 letter",
+                "warning": (
+                    "HIGH VOL — 51% max drawdown (net). Option overlay can produce "
+                    "extreme monthly moves (e.g. Mar 2026 -32%). LP inception Jan 2023 "
+                    "(~42 months); 2020-22 proof-of-concept GROSS account excluded."
+                ),
+                "docs": [
+                    {"label": "Tear sheet (Jun 2026)", "url": "/fund-docs/blue-outlier-tear-sheet-june-2026.pdf"},
+                    {"label": "Q2 2026 letter", "url": "/fund-docs/blue-outlier-q2-2026-letter.pdf"},
+                ],
+            },
+            {
+                "id": "adar1",
+                "name": "ADAR1 Partners, LP",
+                "kind": "hedge_fund",
+                "strategy": "Healthcare / biotech long/short (event-driven + fundamental)",
+                "manager": "Daniel Schneeberger, MD, MBA (ADAR1 Capital Management)",
+                "minInvestment": 1_000_000,
+                "aumMillions": None,
+                "fees": "1.5% mgmt / 20% perf (25% perf through 2022)",
+                "lockup": "12mo / 25% fund-level gate; quarterly thereafter (45d notice)",
+                "inception": "2019-03",
+                "returns": ADAR1,
+                "source": "ADAR1 Firm Overview Jun 2026, slide 12 (net through May 2026; excludes side pockets)",
+                "docs": [
+                    {"label": "Firm overview (Jun 2026)", "url": "/fund-docs/adar1-firm-overview-2026-06.pdf"},
+                ],
             },
             {
                 "id": "spy",
