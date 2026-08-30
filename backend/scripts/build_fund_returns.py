@@ -594,10 +594,7 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Global all-cap value long/short",
                 "manager": "Evan Tindell",
-                # PDF says Qualified Clients only (SEC threshold: $2.2M net worth)
-                # — that's an INVESTOR-eligibility test, not a ticket-size minimum.
-                # No ticket $ stated on the PDF; default to 250k.
-                "minInvestment": 250_000,
+                "minInvestment": 500_000,
                 "aumMillions": 133,
                 "fees": "1% mgmt / 10% perf",
                 "lockup": "Qualified Client only",

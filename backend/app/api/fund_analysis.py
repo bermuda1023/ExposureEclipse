@@ -18,7 +18,6 @@ infeasible.
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -297,8 +296,14 @@ class CustomPortfolioResponse(CamelModel):
 # ─────────────────────── data cache ───────────────────────
 
 
-@lru_cache(maxsize=1)
+_catalog_mtime: float = 0.0
+_catalog_cache: dict | None = None
+
+
 def _load_catalog() -> dict:
+    """Reload when fund_returns.json changes so ticket-size edits take effect
+    without a process restart."""
+    global _catalog_mtime, _catalog_cache
     path = Path(__file__).resolve().parents[3] / "mockdata" / "fund_returns.json"
     if not path.exists():
         raise HTTPException(
@@ -308,7 +313,11 @@ def _load_catalog() -> dict:
                 "message": "fund_returns.json missing — run scripts/build_fund_returns.py",
             },
         )
-    return json.loads(path.read_text(encoding="utf-8"))
+    mtime = path.stat().st_mtime
+    if _catalog_cache is None or mtime != _catalog_mtime:
+        _catalog_cache = json.loads(path.read_text(encoding="utf-8"))
+        _catalog_mtime = mtime
+    return _catalog_cache
 
 
 def _asset_by_id(catalog: dict) -> dict[str, dict]:
@@ -830,7 +839,9 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
         from ..services.portfolio_math import enforce_min_investments
 
         min_map = {
-            a: min_inv_override.get(a, idx[a]["minInvestment"]) for a in weights
+            a: min_inv_override.get(a, idx[a]["minInvestment"])
+            for a in weights
+            if a != CASH_ID
         }
         weights, dropped = enforce_min_investments(weights, req.total_capital, min_map)
         violations = dropped

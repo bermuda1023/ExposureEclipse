@@ -51,6 +51,8 @@ const DEFAULT_OVERRIDES: Record<string, AssumptionOverrideIn> = {
 // No default concentration caps — user can set them per-asset in the
 // Concentration Caps card if they want to limit exposure to high-vol
 // funds like CAS Sosin.
+const DEFAULT_HF_CAP = 0.25;
+
 const DEFAULT_MAX_WEIGHTS: MaxWeightIn[] = [];
 
 // Per-fund default IR benchmarks drawn from each fund's own PDF:
@@ -227,6 +229,7 @@ export function FundAnalysis() {
       maxNames,
       maxIlliquidWeight: maxIlliquid,
       allowCash,
+      defaultMaxWeight: DEFAULT_HF_CAP,
     });
   };
 
@@ -257,7 +260,7 @@ export function FundAnalysis() {
       samples: 30_000,
       fofFee,
       maxNames,
-      defaultMaxWeight: 0.25,
+      defaultMaxWeight: DEFAULT_HF_CAP,
       maxIlliquidWeight: maxIlliquid,
       allowCash,
       objective,
@@ -402,6 +405,16 @@ export function FundAnalysis() {
                 const cagr = win?.annualisedReturn ?? a.annualisedReturn;
                 const vol = win?.annualisedVol ?? a.annualisedVol;
                 const nMo = win?.nMonths ?? a.nMonths;
+                const cap = maxWeights[a.id] ?? (a.kind === "hedge_fund" ? DEFAULT_HF_CAP : 1);
+                const capDollars = cap * totalCapital;
+                const ticketBlocked = !!(
+                  respectMin &&
+                  selected.has(a.id) &&
+                  eff > 0 &&
+                  totalCapital > 0 &&
+                  capDollars + 0.5 < eff &&
+                  (currentInvestments[a.id] ?? 0) <= 0
+                );
                 return (
                   <tr key={a.id} style={selected.has(a.id) ? S.rowOn : S.rowOff}>
                     <td>
@@ -484,11 +497,15 @@ export function FundAnalysis() {
                             </button>
                           )}
                         </div>
-                        {respectMin && eff > 0 && totalCapital > 0 && (
-                          <span style={S.floorHint}>
-                            → soft floor {PCT(eff / totalCapital, 2)}
+                        {ticketBlocked ? (
+                          <span style={S.ticketBlocked} title="Concentration cap is below this fund's minimum — the optimizer will exclude it rather than size a stub.">
+                            excluded: {PCT(cap, 0)} cap = {CURRENCY(capDollars)} vs min {CURRENCY(eff)}
                           </span>
-                        )}
+                        ) : respectMin && eff > 0 && totalCapital > 0 ? (
+                          <span style={S.floorHint}>
+                            → ticket floor {PCT(eff / totalCapital, 2)} ({CURRENCY(eff)})
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -679,6 +696,12 @@ export function FundAnalysis() {
             <input type="checkbox" checked={respectMin} onChange={(e) => setRespectMin(e.target.checked)} />
             Respect fund minimum investments
           </label>
+          <p style={S.hint}>
+            When on, a suggested book never holds a name between $0 and its minimum. If the
+            concentration cap is below the ticket (Bireme $500k vs 25% of a $1M book = $250k), that
+            name is excluded — raise capital or the cap to include it. Positions you already hold
+            are grandfathered.
+          </p>
 
           <button
             type="button"
@@ -745,8 +768,10 @@ export function FundAnalysis() {
         <section style={S.card}>
           <h2 style={S.h2}>Concentration caps</h2>
           <p style={S.hint}>
-            Hard ceiling per name. Hedge funds default to 25% so a FoF cannot become a single-manager
-            bet. Clear a row for no cap (indexes are uncapped).
+            Hard ceiling per name. Hedge funds default to {PCT(DEFAULT_HF_CAP, 0)} even if this row
+            is blank, so a FoF cannot become a single-manager bet. Clear a row only after setting a
+            custom cap, or raise the cap if a ticket cannot fit (e.g. $500k min on a $1M book needs
+            at least 50%). Indexes are uncapped.
           </p>
           <table style={S.table}>
             <thead>
@@ -762,7 +787,7 @@ export function FundAnalysis() {
                   <td style={S.tdNum}>
                     <PercentInput
                       value={maxWeights[a.id] ?? null}
-                      placeholder="none"
+                      placeholder={a.kind === "hedge_fund" ? PCT(DEFAULT_HF_CAP, 0) : "none"}
                       onChange={(v) => setMaxWeight(a.id, v)}
                       max={1}
                     />
@@ -1847,9 +1872,19 @@ function PortfolioCard({
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ id, w, proposed, current, delta }) => (
-            <tr key={id}>
-              <td style={{ ...S.td, color: ASSET_COLOR[id], fontWeight: 600 }}>{SHORT_NAME[id] ?? id}</td>
+          {rows.map(({ id, w, proposed, current, delta }) => {
+            const minInv = assetById[id]?.minInvestment ?? 0;
+            const below = violators.has(id) || (proposed > 0.5 && minInv > 0 && proposed + 0.5 < minInv);
+            return (
+            <tr key={id} style={below ? { background: "#fef3c7" } : undefined}>
+              <td style={{ ...S.td, color: ASSET_COLOR[id], fontWeight: 600 }}>
+                {SHORT_NAME[id] ?? id}
+                {below && minInv > 0 && (
+                  <div style={{ fontSize: "0.62rem", color: "#92400e", fontWeight: 600 }}>
+                    below min {CURRENCY(minInv)}
+                  </div>
+                )}
+              </td>
               <td style={S.tdNum}>{PCT(w, 1)}</td>
               <td style={S.tdNum}>{CURRENCY(proposed)}</td>
               {hasCurrent && <td style={S.tdNumMuted}>{current > 0 ? CURRENCY(current) : "—"}</td>}
@@ -1862,13 +1897,9 @@ function PortfolioCard({
                   {Math.abs(delta) < 0.5 ? "—" : (delta > 0 ? "+" : "") + CURRENCY(delta)}
                 </td>
               )}
-              {violators.has(id) && (
-                <td style={S.tdNum}>
-                  <span style={S.warnPill} title={`Below min ${CURRENCY(assetById[id]?.minInvestment ?? 0)}`}>⚠</span>
-                </td>
-              )}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </section>
@@ -2403,15 +2434,22 @@ function InteractiveBuilder({
           <tbody>
             {ids.map((id) => {
               const w = normalised[id] ?? 0;
+              const minInv = minInvOverrides[id] ?? assetById[id]?.minInvestment ?? 0;
+              const dollars = w * capital;
+              const belowTicket = !!(
+                respectMin && minInv > 0 && dollars > 0.5 && dollars + 0.5 < minInv
+              );
               return (
-                <tr key={id}>
+                <tr key={id} style={belowTicket ? { background: "#fef3c7" } : undefined}>
                   <td style={{ ...S.td, color: ASSET_COLOR[id], fontWeight: 600 }}>
                     {SHORT_NAME[id] ?? assetById[id]?.name.split(" ")[0]}
                     {assetById[id]?.illiquid && (
                       <div style={{ fontSize: "0.62rem", color: "#b45309", fontWeight: 600 }}>lockup</div>
                     )}
-                    {assetById[id]?.minInvestment ? (
-                      <div style={{ fontSize: "0.62rem", color: "#64748b" }}>min {CURRENCY(assetById[id]!.minInvestment)}</div>
+                    {minInv > 0 ? (
+                      <div style={{ fontSize: "0.62rem", color: belowTicket ? "#92400e" : "#64748b" }}>
+                        min {CURRENCY(minInv)}{belowTicket ? " — below ticket" : ""}
+                      </div>
                     ) : null}
                   </td>
                   <td style={S.td}>
@@ -2909,6 +2947,15 @@ const S: Record<string, React.CSSProperties> = {
     fontFamily: "monospace",
     fontStyle: "italic",
     lineHeight: 1,
+  },
+  ticketBlocked: {
+    fontSize: "0.6rem",
+    color: "#b45309",
+    fontFamily: "monospace",
+    fontStyle: "italic",
+    lineHeight: 1.2,
+    maxWidth: 180,
+    textAlign: "right" as const,
   },
   chartTooltip: {
     marginTop: 4,

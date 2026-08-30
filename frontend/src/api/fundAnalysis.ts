@@ -244,6 +244,7 @@ export interface RobustnessRequest {
   maxNames?: number;
   maxIlliquidWeight?: number;
   allowCash?: boolean;
+  defaultMaxWeight?: number;
   overrides: AssumptionOverrideIn[];
   maxWeights: MaxWeightIn[];
   minInvestmentOverrides: MinInvestmentOverrideIn[];

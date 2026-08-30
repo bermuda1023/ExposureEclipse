@@ -883,7 +883,7 @@
       "kind": "hedge_fund",
       "strategy": "Global all-cap value long/short",
       "manager": "Evan Tindell",
-      "minInvestment": 250000,
+      "minInvestment": 500000,
       "aumMillions": 133,
       "fees": "1% mgmt / 10% perf",
       "lockup": "Qualified Client only",

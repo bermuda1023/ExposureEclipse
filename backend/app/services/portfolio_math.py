@@ -8,8 +8,9 @@ Design rules (personal multi-fund use)
   overlap is short; never treat n&lt;3 as ρ=0 (that overstates diversification).
 * **Path metrics** (Sortino, max DD, IR, realized Sharpe) use the **common
   monthly intersection** of assets with weight &gt; 0 — same universe.
-* **Min investment**: soft participation floors + hard post-pass enforcement
-  (zero out sub-ticket weights and renormalize so winners are feasible).
+* **Min investment**: last-word hard tickets. A name is never left at
+  0 < $alloc < min. If the weight cap makes the ticket infeasible, the
+  name is excluded (not stub-sized). Existing holdings are grandfathered.
 * **New-cash mode**: existing holdings fixed; sample only free-weight on
   new capital (true “where does new money go?”).
 """
@@ -549,40 +550,90 @@ def _sample_dirichlet(n: int, alpha: float, rng: random.Random) -> list[float]:
     return [x / s for x in xs]
 
 
+def ticket_infeasible(
+    asset_id: str,
+    *,
+    total_capital: float,
+    min_investment: dict[str, float],
+    max_weights: dict[str, float],
+) -> bool:
+    """True when a name cannot meet its ticket under the weight cap / capital."""
+    if asset_id == CASH_ID:
+        return False
+    mi = min_investment.get(asset_id, 0.0)
+    if mi <= 0 or total_capital <= 0:
+        return False
+    if mi > total_capital + 0.5:
+        return True
+    cap = max_weights.get(asset_id, 1.0)
+    return cap * total_capital + 0.5 < mi
+
+
+def below_ticket(
+    weights: dict[str, float],
+    total_capital: float,
+    min_investment: dict[str, float],
+) -> list[str]:
+    bad: list[str] = []
+    for a, wt in weights.items():
+        if a == CASH_ID or wt <= 1e-9:
+            continue
+        mi = min_investment.get(a, 0.0)
+        if mi > 0 and wt * total_capital + 0.5 < mi:
+            bad.append(a)
+    return bad
+
+
+def _absorb_mass(weights: dict[str, float], mass: float) -> dict[str, float] | None:
+    """Put dropped weight into cash when the sleeve exists, else renormalize."""
+    if mass <= 1e-15:
+        return weights
+    w = dict(weights)
+    if CASH_ID in w:
+        w[CASH_ID] = w.get(CASH_ID, 0.0) + mass
+        return w
+    s = sum(w.values())
+    if s <= 1e-15:
+        return None
+    return {a: v / s for a, v in w.items()}
+
+
 def enforce_min_investments(
     weights: dict[str, float],
     total_capital: float,
     min_investment: dict[str, float],
+    *,
+    protected: Sequence[str] | None = None,
 ) -> tuple[dict[str, float], list[str]]:
-    """Hard ticket rule: if 0 &lt; $alloc &lt; min, drop fund and renormalize.
+    """Hard ticket rule: if 0 &lt; $alloc &lt; min, drop the fund.
 
-    Returns (feasible_weights, dropped_ids). Dropped means "can't hold at
-    ticket size given capital" — not left as a soft violation flag.
+    Protected names (existing holdings / hard floors) and cash are left as-is.
+    Dropped mass goes to cash when cash is in the book; otherwise remaining
+    names are renormalized.
+
+    Returns (feasible_weights, dropped_ids).
     """
     if total_capital <= 0:
         return weights, []
+    prot = {a for a in (protected or ()) if a}
+    prot.add(CASH_ID)
     w = dict(weights)
     dropped: list[str] = []
-    changed = True
-    # Iterate because renormalization can push another line under min.
-    for _ in range(len(w) + 2):
-        if not changed:
-            break
-        changed = False
-        for a, wt in list(w.items()):
-            mi = min_investment.get(a, 0.0)
-            if mi <= 0 or wt <= 1e-9:
-                continue
-            if wt * total_capital + 0.5 < mi:
-                w[a] = 0.0
-                dropped.append(a)
-                changed = True
-        s = sum(w.values())
-        if s <= 0:
-            return {a: 0.0 for a in weights}, dropped
-        if changed:
-            w = {a: v / s for a, v in w.items()}
-    return w, dropped
+    mass = 0.0
+    for a, wt in list(w.items()):
+        if a in prot or wt <= 1e-9:
+            continue
+        mi = min_investment.get(a, 0.0)
+        if mi > 0 and wt * total_capital + 0.5 < mi:
+            mass += wt
+            w[a] = 0.0
+            dropped.append(a)
+    if not dropped:
+        return w, []
+    absorbed = _absorb_mass(w, mass)
+    if absorbed is None:
+        return {a: 0.0 for a in weights}, dropped
+    return absorbed, dropped
 
 
 def project_max_weights(
@@ -609,6 +660,197 @@ def project_max_weights(
             return None
         for a in free:
             w[a] += excess * (room[a] / room_sum)
+    s = sum(w.values())
+    if s <= 0:
+        return None
+    return {a: v / s for a, v in w.items()}
+
+
+def _apply_cardinality(
+    weights: dict[str, float],
+    *,
+    max_names: int | None,
+    hard_min_weights: dict[str, float],
+) -> dict[str, float] | None:
+    """Drop the smallest optional names until ``max_names`` non-cash holdings remain."""
+    if max_names is None or max_names <= 0:
+        return weights
+    w = dict(weights)
+    held = [a for a, wt in w.items() if wt > 1e-6 and a != CASH_ID]
+    if len(held) <= max_names:
+        return w
+    protected = {a for a in held if hard_min_weights.get(a, 0.0) > 1e-9}
+    droppable = sorted((a for a in held if a not in protected), key=lambda a: w[a])
+    n_drop = len(held) - max_names
+    if n_drop > len(droppable):
+        return None
+    dropped = droppable[:n_drop]
+    mass = sum(w[a] for a in dropped)
+    for a in dropped:
+        w[a] = 0.0
+    return _absorb_mass(w, mass)
+
+
+def _apply_illiquid_cap(
+    weights: dict[str, float],
+    *,
+    illiquid_set: set[str],
+    max_illiquid_weight: float,
+    hard_min_weights: dict[str, float],
+) -> dict[str, float] | None:
+    """Scale locked-up names down to the sleeve cap; leftover goes to cash/liquid."""
+    if not illiquid_set or max_illiquid_weight >= 1.0 - 1e-9:
+        return weights
+    w = dict(weights)
+    illiq = sum(w.get(a, 0.0) for a in illiquid_set)
+    if illiq <= max_illiquid_weight + 1e-9:
+        return w
+    if illiq <= 1e-12:
+        return None
+    scale = max_illiquid_weight / illiq
+    for a in illiquid_set:
+        new_w = w.get(a, 0.0) * scale
+        if hard_min_weights.get(a, 0.0) > new_w + 1e-9:
+            return None
+        w[a] = new_w
+    freed = illiq - max_illiquid_weight
+    # Do not renormalize the whole book — that would scale illiquid names
+    # back above the sleeve cap. Park leftover in cash, else in liquid names.
+    if CASH_ID in w:
+        w[CASH_ID] = w.get(CASH_ID, 0.0) + freed
+        return w
+    liquid = [a for a in w if a not in illiquid_set]
+    if not liquid:
+        return None
+    liq_sum = sum(w[a] for a in liquid) or 1.0
+    for a in liquid:
+        w[a] += freed * (w[a] / liq_sum)
+    s = sum(w.values())
+    if s <= 0:
+        return None
+    return {a: v / s for a, v in w.items()}
+
+
+def _finalize_feasible_weights(
+    weights: dict[str, float],
+    *,
+    max_weights: dict[str, float],
+    min_investment_dollars: dict[str, float],
+    total_capital: float,
+    hard_min_weights: dict[str, float],
+    max_names: int | None,
+    illiquid_set: set[str],
+    max_illiquid_weight: float,
+) -> dict[str, float] | None:
+    """Project cap / ticket / cardinality / illiquid until stable.
+
+    Tickets are the last word: a sample that still has 0 < $ < min after
+    every other constraint is rejected rather than returned as a stub.
+    Existing holdings (hard floors) are grandfathered through the ticket
+    check so a no-sell book is not forced to liquidate a sub-ticket line.
+    """
+    w = dict(weights)
+    protected = [a for a, f in hard_min_weights.items() if f > 1e-9]
+
+    if min_investment_dollars and total_capital > 0:
+        mass = 0.0
+        for a in list(w):
+            if a == CASH_ID or a in protected or w[a] <= 1e-9:
+                continue
+            if ticket_infeasible(
+                a,
+                total_capital=total_capital,
+                min_investment=min_investment_dollars,
+                max_weights=max_weights,
+            ):
+                mass += w[a]
+                w[a] = 0.0
+        if mass > 0:
+            absorbed = _absorb_mass(w, mass)
+            if absorbed is None:
+                return None
+            w = absorbed
+
+    prev: tuple[tuple[str, float], ...] | None = None
+    for _ in range(24):
+        projected = project_max_weights(w, max_weights)
+        if projected is None:
+            return None
+        w = projected
+
+        if total_capital > 0 and min_investment_dollars:
+            w, _dropped = enforce_min_investments(
+                w,
+                total_capital,
+                min_investment_dollars,
+                protected=protected,
+            )
+            if sum(w.values()) <= 0:
+                return None
+
+        for a, f in hard_min_weights.items():
+            if w.get(a, 0.0) + 1e-9 < f:
+                return None
+
+        s = sum(w.values())
+        if s <= 0:
+            return None
+        w = {a: v / s for a, v in w.items()}
+
+        trimmed = _apply_cardinality(
+            w, max_names=max_names, hard_min_weights=hard_min_weights
+        )
+        if trimmed is None:
+            return None
+        w = trimmed
+
+        capped = _apply_illiquid_cap(
+            w,
+            illiquid_set=illiquid_set,
+            max_illiquid_weight=max_illiquid_weight,
+            hard_min_weights=hard_min_weights,
+        )
+        if capped is None:
+            return None
+        w = capped
+
+        key = tuple(sorted((a, round(wt, 8)) for a, wt in w.items() if wt > 1e-9))
+        if key == prev:
+            break
+        prev = key
+
+    if total_capital > 0 and min_investment_dollars:
+        leftover = [
+            a
+            for a in below_ticket(w, total_capital, min_investment_dollars)
+            if a not in protected
+        ]
+        if leftover:
+            w, _ = enforce_min_investments(
+                w,
+                total_capital,
+                min_investment_dollars,
+                protected=protected,
+            )
+            projected = project_max_weights(w, max_weights)
+            if projected is None:
+                return None
+            w = projected
+            leftover = [
+                a
+                for a in below_ticket(w, total_capital, min_investment_dollars)
+                if a not in protected
+            ]
+            if leftover:
+                return None
+        for a, f in hard_min_weights.items():
+            if w.get(a, 0.0) + 1e-9 < f:
+                return None
+
+    s = sum(w.values())
+    if s <= 0:
+        return None
+    w = {a: (0.0 if v <= 1e-9 else v) for a, v in w.items()}
     s = sum(w.values())
     if s <= 0:
         return None
@@ -713,8 +955,23 @@ def compute_frontier(
             chosen = must + picked
             if CASH_ID in free_ids:
                 chosen = chosen + [CASH_ID]
+            if min_investment_dollars and total_capital > 0:
+                chosen = [
+                    a for a in chosen
+                    if a == CASH_ID
+                    or hard_min_weights.get(a, 0.0) > 1e-9
+                    or not ticket_infeasible(
+                        a,
+                        total_capital=total_capital,
+                        min_investment=min_investment_dollars,
+                        max_weights=max_weights,
+                    )
+                ]
             if not chosen:
-                chosen = list(free_ids)
+                chosen = [
+                    a for a in free_ids
+                    if a == CASH_ID or hard_min_weights.get(a, 0.0) > 1e-9
+                ] or list(free_ids)
             raw = _sample_dirichlet(len(chosen), alpha, rng)
             free_w = {i: 0.0 for i in ids}
             for c, wv in zip(chosen, raw):
@@ -725,8 +982,14 @@ def compute_frontier(
             for a in ids:
                 f = hard_min_weights.get(a, 0.0)
                 if free_w[a] > 0:
-                    # Soft min is absolute portfolio weight
-                    f = max(f, min_weights.get(a, 0.0))
+                    # Soft min is absolute portfolio weight, but never above
+                    # the name's cap — that combo is infeasible and would be
+                    # clipped below ticket.
+                    floor = min_weights.get(a, 0.0)
+                    cap = max_weights.get(a, 1.0)
+                    if floor > cap + 1e-12:
+                        floor = 0.0
+                    f = max(f, floor)
                 # Fixed holdings are part of floor for new-cash mode
                 f = max(f, fixed_weights.get(a, 0.0))
                 floors[a] = f
@@ -751,71 +1014,18 @@ def compute_frontier(
                     excess = max(0.0, base_w[a] - base) / non_floor_sum * headroom
                     weights[a] = base + excess
 
-        # Project max weights
-        projected = project_max_weights(weights, max_weights)
-        if projected is None:
+        weights = _finalize_feasible_weights(
+            weights,
+            max_weights=max_weights,
+            min_investment_dollars=min_investment_dollars,
+            total_capital=total_capital,
+            hard_min_weights=hard_min_weights,
+            max_names=max_names,
+            illiquid_set=illiquid_set,
+            max_illiquid_weight=max_illiquid_weight,
+        )
+        if weights is None:
             continue
-        weights = projected
-
-        # Hard ticket sizes
-        if total_capital > 0 and min_investment_dollars:
-            weights, _dropped = enforce_min_investments(
-                weights, total_capital, min_investment_dollars
-            )
-            if sum(weights.values()) <= 0:
-                continue
-            # Re-apply hard mins after ticket drop if needed
-            for a, f in hard_min_weights.items():
-                if weights.get(a, 0.0) + 1e-9 < f:
-                    # Infeasible after ticket enforcement
-                    weights = None  # type: ignore[assignment]
-                    break
-            if weights is None:
-                continue
-            s = sum(weights.values())
-            weights = {a: v / s for a, v in weights.items()}
-
-        # Cardinality: drop smallest optional names (keep cash + hard floors).
-        if max_names is not None and max_names > 0:
-            held = [
-                a for a, wt in weights.items()
-                if wt > 1e-6 and a != CASH_ID
-            ]
-            if len(held) > max_names:
-                protected = {a for a in held if hard_min_weights.get(a, 0.0) > 1e-9}
-                droppable = sorted(
-                    (a for a in held if a not in protected),
-                    key=lambda a: weights[a],
-                )
-                n_drop = len(held) - max_names
-                for a in droppable[:n_drop]:
-                    weights[a] = 0.0
-                s = sum(weights.values())
-                if s <= 0:
-                    continue
-                weights = {a: v / s for a, v in weights.items()}
-
-        # Illiquid sleeve cap — scale locked names down, give slack to liquid/cash.
-        if illiquid_set and max_illiquid_weight < 1.0 - 1e-9:
-            illiq = sum(weights.get(a, 0.0) for a in illiquid_set)
-            if illiq > max_illiquid_weight + 1e-9:
-                if illiq <= 1e-12:
-                    continue
-                scale = max_illiquid_weight / illiq
-                freed = illiq - max_illiquid_weight
-                liquid = [
-                    a for a in weights
-                    if a not in illiquid_set and a not in hard_min_weights
-                ]
-                if not liquid:
-                    continue
-                for a in illiquid_set:
-                    weights[a] = weights.get(a, 0.0) * scale
-                liq_sum = sum(weights[a] for a in liquid) or 1.0
-                for a in liquid:
-                    weights[a] += freed * (weights[a] / liq_sum)
-                s = sum(weights.values())
-                weights = {a: v / s for a, v in weights.items()}
 
         mu = portfolio_expected_return(weights, stats) - fof_fee
         vol_analytical = portfolio_vol(weights, stats, rho)
