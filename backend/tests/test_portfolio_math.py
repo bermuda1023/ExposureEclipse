@@ -34,7 +34,7 @@ def test_correlation_never_zero_on_tiny_overlap() -> None:
     b = _series("b", {"2020-01": 0.02, "2020-02": 0.00})
     r, n = pairwise_correlation(a, b)
     assert n < 3
-    assert abs(r - 0.35) < 1e-9  # prior, not 0
+    assert abs(r - 0.55) < 1e-9  # conservative FoF prior, not 0
 
 
 def test_correlation_shrinks_toward_prior() -> None:
@@ -43,9 +43,9 @@ def test_correlation_shrinks_toward_prior() -> None:
     months2 = {f"2020-{i:02d}": 0.01 * ((-1) ** (i + 1)) for i in range(1, 13)}  # inverse
     r, n = pairwise_correlation(_series("a", months), _series("b", months2), full_n=36)
     assert n == 12
-    # Empirical ~ -1, shrunk: w=12/36=0.33 → r ≈ 0.33*(-1)+0.67*0.35 < 0 but not -1
-    assert -1.0 < r < 0.0
+    # Empirical ~ -1, shrunk: w=12/36=0.33 → r ≈ 0.33*(-1)+0.67*0.55
     assert r > -0.9
+    assert abs(r - (12 / 36 * -1 + 24 / 36 * 0.55)) < 0.05
 
 
 def test_fee_parse() -> None:
@@ -96,3 +96,44 @@ def test_portfolio_monthly_intersection() -> None:
     series = portfolio_monthly_series({"a": 0.5, "b": 0.5}, {"a": a, "b": b})
     months = [m for m, _ in series]
     assert months == ["2020-02", "2020-03"]
+
+
+def test_short_track_mu_shrinks_toward_prior() -> None:
+    from app.services.portfolio_math import shrink_expected_return, MU_PRIOR
+
+    assert abs(shrink_expected_return(0.40, 0) - MU_PRIOR) < 1e-9
+    # 18 months → 18/60 = 0.3 weight on empirical
+    got = shrink_expected_return(0.40, 18)
+    assert abs(got - (0.3 * 0.40 + 0.7 * MU_PRIOR)) < 1e-9
+    # 60+ months → empirical
+    assert abs(shrink_expected_return(0.40, 60) - 0.40) < 1e-9
+
+
+def test_illiquid_lockup_parser() -> None:
+    from app.services.portfolio_math import is_illiquid_lockup
+
+    assert is_illiquid_lockup("None") is False
+    assert is_illiquid_lockup("Daily liquidity") is False
+    assert is_illiquid_lockup("12mo / 25% fund-level gate") is True
+    assert is_illiquid_lockup("1yr") is True
+
+
+def test_max_names_caps_holdings() -> None:
+    months = {f"2020-{i:02d}": 0.01 for i in range(1, 13)}
+    months.update({f"2021-{i:02d}": 0.008 for i in range(1, 13)})
+    ids = ["a", "b", "c", "d"]
+    series = {i: _series(i, {m: r + 0.001 * n for m, r in months.items()}) for n, i in enumerate(ids)}
+    stats = {i: compute_asset_stats(series[i]) for i in ids}
+    rho, _ = correlation_matrix(series)
+    _f, max_s, *_ = compute_frontier(
+        stats=stats,
+        rho=rho,
+        series_by_id=series,
+        samples=1500,
+        seed=2,
+        max_names=2,
+        min_investment_dollars={i: 0.0 for i in ids},
+        total_capital=1_000_000,
+    )
+    held = [i for i, w in max_s.weights.items() if w > 1e-6]
+    assert len(held) <= 2

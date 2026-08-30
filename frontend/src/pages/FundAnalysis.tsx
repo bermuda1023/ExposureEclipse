@@ -111,6 +111,7 @@ const ASSET_COLOR: Record<string, string> = {
   orbis_balanced: "#c026d3",
   blue_outlier: "#0369a1",
   adar1: "#0d9488",
+  cash: "#64748b",
   spy: "#64748b",
   agg: "#a3a3a3",
 };
@@ -128,28 +129,55 @@ const SHORT_NAME: Record<string, string> = {
   orbis_balanced: "Orbis Balanced",
   blue_outlier: "Blue Outlier",
   adar1: "ADAR1",
+  cash: "Cash",
   spy: "S&P 500",
   agg: "US Bonds",
 };
 
+const FOF_STORE = "perilvista.fof.v1";
+function loadFofStore(): Record<string, unknown> {
+  try {
+    return JSON.parse(localStorage.getItem(FOF_STORE) || "{}") as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 export function FundAnalysis() {
+  const stored = loadFofStore();
   // Default: live managers + SPY + AGG. HFRX / R2K / RMC / MDY are
   // available in the catalog + benchmark dropdown but unchecked so the
   // asset picker stays readable.
   const [selected, setSelected] = useState<Set<string>>(
-    new Set([
-      "gator", "bireme", "upslope", "primary_commodity", "cedar_creek",
-      "cas_sosin", "alluvial", "contrarius", "orbis_equity", "orbis_balanced",
-      "blue_outlier", "adar1",
-      "spy", "agg",
-    ]),
+    () => {
+      const s = stored.selected;
+      if (Array.isArray(s) && s.length) return new Set(s as string[]);
+      return new Set([
+        "gator", "bireme", "upslope", "primary_commodity", "cedar_creek",
+        "cas_sosin", "alluvial", "contrarius", "orbis_equity", "orbis_balanced",
+        "blue_outlier", "adar1",
+        "spy", "agg",
+      ]);
+    },
   );
-  const [newCapital, setNewCapital] = useState<number>(1_000_000);
-  const [currentInvestments, setCurrentInvestments] = useState<Record<string, number>>({});
+  const [newCapital, setNewCapital] = useState<number>(
+    () => (typeof stored.newCapital === "number" ? stored.newCapital : 1_000_000),
+  );
+  const [currentInvestments, setCurrentInvestments] = useState<Record<string, number>>(
+    () => (stored.currentInvestments && typeof stored.currentInvestments === "object"
+      ? stored.currentInvestments as Record<string, number>
+      : {}),
+  );
   const [noSell, setNoSell] = useState<boolean>(false);
   // Default: only allocate NEW capital; leave current holdings fixed (personal use).
   const [allocateNewOnly, setAllocateNewOnly] = useState<boolean>(true);
-  const [netOfFees, setNetOfFees] = useState<boolean>(true);
+  const [netOfFees, setNetOfFees] = useState<boolean>(false);
+  const [fofFee, setFofFee] = useState<number>(0);
+  const [maxNames, setMaxNames] = useState<number>(8);
+  const [maxIlliquid, setMaxIlliquid] = useState<number>(0.5);
+  const [allowCash, setAllowCash] = useState<boolean>(true);
+  const [objective, setObjective] = useState<"sharpe" | "sortino" | "ir" | "min_dd" | "min_var">("ir");
+  const [commonStartCharts, setCommonStartCharts] = useState<boolean>(true);
   const [historyWindow, setHistoryWindow] = useState<string | null>(null);   // null = all
   const [customWindowMonth, setCustomWindowMonth] = useState<string>("2019-01");
   const [benchmarkAssetId, setBenchmarkAssetId] = useState<string>("spy");
@@ -166,8 +194,6 @@ export function FundAnalysis() {
 
   const currentTotal = Object.values(currentInvestments).reduce((a, b) => a + b, 0);
   const totalCapital = currentTotal + newCapital;
-  const historyWindowStart =
-    historyWindow === "custom" ? customWindowMonth : historyWindow;
 
   const assetsQuery = useQuery({
     queryKey: ["fund-analysis", "assets"],
@@ -197,6 +223,10 @@ export function FundAnalysis() {
         .map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       newCapital,
       samplesPerScenario: 6000,
+      fofFee,
+      maxNames,
+      maxIlliquidWeight: maxIlliquid,
+      allowCash,
     });
   };
 
@@ -225,6 +255,12 @@ export function FundAnalysis() {
         .filter(([id]) => selected.has(id))
         .map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       samples: 30_000,
+      fofFee,
+      maxNames,
+      defaultMaxWeight: 0.25,
+      maxIlliquidWeight: maxIlliquid,
+      allowCash,
+      objective,
     });
   };
 
@@ -286,6 +322,53 @@ export function FundAnalysis() {
     return m;
   }, [assets]);
 
+  const commonStartOfSelected = useMemo(() => {
+    const funds = assets.filter((a) => selected.has(a.id) && a.kind === "hedge_fund" && a.inception);
+    if (!funds.length) return null;
+    return [...funds].map((a) => a.inception).sort()[funds.length - 1] ?? null;
+  }, [assets, selected]);
+
+  const historyWindowStart =
+    historyWindow === "custom"
+      ? customWindowMonth
+      : historyWindow === "common"
+        ? commonStartOfSelected
+        : historyWindow;
+
+  useEffect(() => {
+    if (!assets.length) return;
+    setMaxWeights((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const a of assets) {
+        if (a.kind === "hedge_fund" && next[a.id] === undefined) {
+          next[a.id] = 0.25;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [assets]);
+
+  useEffect(() => {
+    const payload = {
+      selected: [...selected],
+      newCapital,
+      currentInvestments,
+      objective,
+      fofFee,
+      maxNames,
+      maxIlliquid,
+      allowCash,
+      historyWindow,
+    };
+    try {
+      localStorage.setItem("perilvista.fof.v1", JSON.stringify(payload));
+    } catch {
+      /* ignore quota */
+    }
+  }, [selected, newCapital, currentInvestments, objective, fofFee, maxNames, maxIlliquid, allowCash, historyWindow]);
+
   const result = optimizeMutation.data;
 
   return (
@@ -326,6 +409,11 @@ export function FundAnalysis() {
                           {a.kind === "hedge_fund" ? "Hedge Fund" : "Reference"}
                         </span>
                         <span style={S.chipMuted}>{a.strategy}</span>
+                        {a.illiquid && (
+                          <span style={{ ...S.chip, background: "#b45309" }} title={a.lockup}>
+                            Lockup
+                          </span>
+                        )}
                       </div>
                       {a.warning && <div style={S.warn}>{a.warning}</div>}
                       {a.docs && a.docs.length > 0 && (
@@ -459,13 +547,60 @@ export function FundAnalysis() {
               : "If on, current holdings are floors — can add but not sell."}
           </p>
 
+          <label style={S.label}>
+            FoF objective (recommended book)
+            <select
+              value={objective}
+              onChange={(e) => setObjective(e.target.value as typeof objective)}
+              style={S.input}
+            >
+              <option value="ir">Max information ratio vs benchmark (default)</option>
+              <option value="sharpe">Max Sharpe</option>
+              <option value="sortino">Max Sortino</option>
+              <option value="min_dd">Min historical drawdown</option>
+              <option value="min_var">Min variance</option>
+            </select>
+          </label>
+
+          <label style={S.label}>
+            Max names in the book
+            <input
+              type="number"
+              min={2}
+              max={20}
+              value={maxNames}
+              onChange={(e) => setMaxNames(Math.max(2, Number(e.target.value) || 8))}
+              style={S.input}
+            />
+            <span style={S.hint}>Hard cardinality cap (cash does not count). Default 8.</span>
+          </label>
+
+          <label style={S.label}>
+            Max illiquid sleeve (12mo+ lockup)
+            <PercentInput value={maxIlliquid} placeholder="50%" onChange={(v) => setMaxIlliquid(v ?? 0.5)} max={1} />
+          </label>
+
+          <label style={S.labelRow}>
+            <input type="checkbox" checked={allowCash} onChange={(e) => setAllowCash(e.target.checked)} />
+            Allow leftover cash (earns the risk-free rate when a ticket does not fill)
+          </label>
+
+          <label style={S.label}>
+            Your FoF overlay fee (annual)
+            <PercentInput value={fofFee || null} placeholder="0%" onChange={(v) => setFofFee(v ?? 0)} max={0.1} />
+            <span style={S.hint}>
+              Manager monthlies are already net of GP fees. Use this only for <em>your</em> FoF layer
+              (e.g. 1%). Default 0.
+            </span>
+          </label>
+
           <label style={S.labelRow}>
             <input type="checkbox" checked={netOfFees} onChange={(e) => setNetOfFees(e.target.checked)} />
-            Net of management fees (haircut expected returns)
+            Re-apply GP management fees (usually off)
           </label>
           <p style={S.hint}>
-            Applies the listed mgmt fee as an annual drag on expected return. Perf fees are not
-            modeled (path-dependent).
+            Letters are already net. Leave off unless you want a sensitivity that double-counts GP
+            mgmt fees. Performance fees are never modeled on top.
           </p>
 
           <label style={S.label}>
@@ -475,9 +610,11 @@ export function FundAnalysis() {
               onChange={(e) => setHistoryWindow(e.target.value === "" ? null : e.target.value)}
               style={S.input}
             >
-              <option value="">All available history</option>
+              <option value="">All available history (μ uses each fund's full sample)</option>
+              <option value="common">Common start of selected hedge funds{commonStartOfSelected ? ` (${commonStartOfSelected})` : ""}</option>
+              <option value="2023-01">Since Jan 2023 (Blue Outlier inception)</option>
               <option value="2021-01">Since Jan 2021 (last ~5y)</option>
-              <option value="2019-01">Since Jan 2019 (last ~7y)</option>
+              <option value="2019-03">Since Mar 2019 (ADAR1 inception)</option>
               <option value="2016-01">Since Jan 2016 (last ~10y)</option>
               <option value="custom">Custom start month…</option>
             </select>
@@ -599,8 +736,8 @@ export function FundAnalysis() {
         <section style={S.card}>
           <h2 style={S.h2}>Concentration caps</h2>
           <p style={S.hint}>
-            Hard ceiling on any one asset's weight. Useful to prevent the optimizer from over-allocating
-            to volatile funds (default: CAS Sosin capped at 20%).
+            Hard ceiling per name. Hedge funds default to 25% so a FoF cannot become a single-manager
+            bet. Clear a row for no cap (indexes are uncapped).
           </p>
           <table style={S.table}>
             <thead>
@@ -638,6 +775,8 @@ export function FundAnalysis() {
           overrides={overrides}
           minInvOverrides={minInvOverrides}
           historyWindowStart={historyWindowStart}
+          commonStartCharts={commonStartCharts}
+          setCommonStartCharts={setCommonStartCharts}
           perAssetBenchmarks={perAssetBenchmarks}
           setPerAssetBenchmark={(id, bid) =>
             setPerAssetBenchmarks((prev) => ({ ...prev, [id]: bid }))
@@ -770,6 +909,8 @@ function ResultView({
   overrides,
   minInvOverrides,
   historyWindowStart,
+  commonStartCharts,
+  setCommonStartCharts,
   perAssetBenchmarks,
   setPerAssetBenchmark,
   robustness,
@@ -784,6 +925,8 @@ function ResultView({
   overrides: Record<string, AssumptionOverrideIn>;
   minInvOverrides: Record<string, number>;
   historyWindowStart: string | null;
+  commonStartCharts: boolean;
+  setCommonStartCharts: (v: boolean) => void;
   perAssetBenchmarks: Record<string, string>;
   setPerAssetBenchmark: (assetId: string, benchmarkAssetId: string) => void;
   robustness: RobustnessResponse | undefined;
@@ -852,13 +995,73 @@ function ResultView({
           {hasCurrent && <> · <strong>Current:</strong> {CURRENCY(result.currentTotal)} · <strong>New capital:</strong> {CURRENCY(result.newCapital)}</>}
         </div>
         <div>
-          <strong>History window:</strong> {historyWindowStart ?? "All"} · {result.effectiveWindowMonths} months in view
+          <strong>Score window (held names):</strong>{" "}
+          {result.scoreWindowStart && result.scoreWindowEnd
+            ? `${result.scoreWindowStart} → ${result.scoreWindowEnd} (${result.scoreWindowMonths} mo)`
+            : `${historyWindowStart ?? "All"} · ${result.effectiveWindowMonths} months`}
+          {result.recommended && (
+            <>
+              {" "}· {result.recommended.nNames} names
+              {result.recommended.cashWeight ? ` · cash ${PCT(result.recommended.cashWeight, 1)}` : ""}
+              {result.recommended.illiquidWeight ? ` · illiquid ${PCT(result.recommended.illiquidWeight, 1)}` : ""}
+            </>
+          )}
         </div>
       </section>
 
+      {result.recommended && (
+        <section style={{ ...S.card, borderColor: "#1e40af", boxShadow: "0 0 0 1px #1e40af33" }}>
+          <h2 style={S.h2}>Recommended FoF ({result.objective === "ir" ? "max IR vs benchmark" : result.objective})</h2>
+          <p style={S.hint}>
+            Scored on the overlapping months of names that actually receive weight — not the longest
+            fund in the picker. Short-track μ is shrunk toward 8%; hedge funds are capped at 25% unless
+            you override; GP fees are not double-counted.
+          </p>
+          <PortfolioCard
+            title="Recommended book"
+            subtitle={`${result.scoreWindowStart ?? "?"} → ${result.scoreWindowEnd ?? "?"} (${result.scoreWindowMonths} mo)`}
+            portfolio={result.recommended}
+            totalCapital={result.totalCapital}
+            currentInv={result.currentInvestments}
+            assetById={assetById}
+            accent="#1e40af"
+          />
+          {result.recommended.stress && result.recommended.stress.length > 0 && (
+            <table style={{ ...S.table, marginTop: 12 }}>
+              <thead>
+                <tr>
+                  <th style={S.th}>Stress</th>
+                  <th style={S.thNum}>Period return</th>
+                  <th style={S.thNum}>Max DD</th>
+                  <th style={S.th}>Coverage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.recommended.stress.map((s) => (
+                  <tr key={s.label}>
+                    <td style={S.td}>{s.label} ({s.start}–{s.end})</td>
+                    <td style={{ ...S.tdNum, color: (s.periodReturn ?? 0) < 0 ? "#dc2626" : "#059669" }}>
+                      {s.covered && s.periodReturn != null ? PCT(s.periodReturn) : "—"}
+                    </td>
+                    <td style={{ ...S.tdNum, color: "#dc2626" }}>
+                      {s.covered && s.maxDrawdown != null ? PCT(s.maxDrawdown) : "—"}
+                    </td>
+                    <td style={S.td}>{s.covered ? `${s.nMonths} mo` : "held names missing this window"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
       <section style={S.card}>
         <h2 style={S.h2}>Efficient frontier</h2>
-        <p style={S.hint}>Each dot = one random portfolio; curve = Pareto-optimal set. Red = Max Sharpe, purple = Max Sortino, green = Min Variance, teal = Min Drawdown, grey = individual assets.</p>
+        <p style={S.hint}>
+          Curve = best return per vol bin on the <b>same score window</b> as the recommended book.
+          Fund dots use each name&apos;s MVO μ (short-track shrunk) vs σ so they sit on the same
+          clock as the portfolios. Hover a point for weights.
+        </p>
         <FrontierChart result={result} assetById={assetById} />
       </section>
 
@@ -883,13 +1086,33 @@ function ResultView({
       <div style={S.grid2}>
         <section style={S.card}>
           <h2 style={S.h2}>Growth of $1 (log scale)</h2>
-          <p style={S.hint}>Compounded per-asset equity curves. Each fund starts at $1 on its inception month.</p>
-          <GrowthChart series={result.assetSeries} assetById={assetById} />
+          <label style={{ ...S.labelRow, marginBottom: 8 }}>
+            <input type="checkbox" checked={commonStartCharts} onChange={(e) => setCommonStartCharts(e.target.checked)} />
+            Rebase to common start (recommended window / latest shared month)
+          </label>
+          <p style={S.hint}>
+            FoF book and the IR benchmark overlay as thick lines. Individual funds are thinner.
+          </p>
+          <GrowthChart
+            series={result.assetSeries}
+            assetById={assetById}
+            commonStart={commonStartCharts}
+            windowStart={result.scoreWindowStart ?? null}
+            fof={result.recommendedSeries ?? null}
+            bench={result.benchmarkWindowSeries ?? null}
+          />
         </section>
         <section style={S.card}>
           <h2 style={S.h2}>Drawdown</h2>
-          <p style={S.hint}>Peak-to-trough loss over time. CAS Sosin's 2022 -77% is the standout risk in the set.</p>
-          <DrawdownChart series={result.assetSeries} assetById={assetById} />
+          <p style={S.hint}>Peak-to-trough on the same window as the growth chart. FoF overlay in navy.</p>
+          <DrawdownChart
+            series={result.assetSeries}
+            assetById={assetById}
+            commonStart={commonStartCharts}
+            windowStart={result.scoreWindowStart ?? null}
+            fof={result.recommendedSeries ?? null}
+            bench={result.benchmarkWindowSeries ?? null}
+          />
         </section>
       </div>
 
@@ -921,7 +1144,10 @@ function ResultView({
 
       <section style={S.card}>
         <h2 style={S.h2}>Correlation matrix</h2>
-        <p style={S.hint}>Pearson ρ over each pair's overlapping monthly history; correlation-cap overrides applied where set.</p>
+        <p style={S.hint}>
+          Pearson ρ over each pair&apos;s overlap (shrunk toward 0.55 when n is short). Cell shows ρ
+          and overlap months — treat n&lt;24 as low confidence.
+        </p>
         <CorrelationMatrix result={result} assetById={assetById} />
       </section>
 
@@ -947,9 +1173,10 @@ function ResultView({
           <thead>
             <tr>
               <th style={S.th}>Asset</th>
-              <th style={S.thNum}>μ (ann)</th>
+              <th style={S.thNum}>CAGR</th>
+              <th style={S.thNum}>MVO μ</th>
               <th style={S.thNum}>σ (ann)</th>
-              <th style={S.thNum}>Sharpe</th>
+              <th style={S.thNum}>Hist. Sharpe</th>
               <th style={S.th}>IR benchmark</th>
               <th style={S.thNum}>IR</th>
               <th style={S.thNum}>Tracking err.</th>
@@ -961,6 +1188,7 @@ function ResultView({
             {result.stats.map((s) => {
               const sharpe =
                 s.annualisedVol > 0 ? (s.annualisedReturn - result.riskFreeRate) / s.annualisedVol : 0;
+              const mvoMu = s.shrunkReturn ?? s.empiricalReturn;
               const seriesForAsset = result.assetSeries.find((x) => x.assetId === s.assetId);
               // Use the LIVE IR row (updated on-the-fly via /rescore-ir)
               // rather than the frozen server value from the last optimize.
@@ -975,6 +1203,7 @@ function ResultView({
                 <tr key={s.assetId}>
                   <td style={S.td}>{assetById[s.assetId]?.name ?? s.assetId}</td>
                   <td style={S.tdNum}>{PCT(s.annualisedReturn)}</td>
+                  <td style={S.tdNum} title="Short-track shrunk arithmetic μ used in the optimizer">{PCT(mvoMu)}</td>
                   <td style={S.tdNum}>{PCT(s.annualisedVol)}</td>
                   <td style={S.tdNum}>{sharpe.toFixed(2)}</td>
                   <td style={S.td}>
@@ -1644,13 +1873,18 @@ function FrontierChart({
   assetById: Record<string, FundAsset>;
 }) {
   const W = 780;
-  const H = 380;
+  const H = 400;
   const P = { top: 20, right: 20, bottom: 40, left: 60 };
   const iw = W - P.left - P.right;
   const ih = H - P.top - P.bottom;
+  const [hover, setHover] = useState<PortfolioPoint | null>(null);
 
   const points = [...result.frontier, result.maxSharpe, result.maxSortino, result.maxInformationRatio, result.minVariance, result.minDrawdown];
-  const assetDots = result.stats.map((s) => ({ id: s.assetId, vol: s.annualisedVol, ret: s.annualisedReturn }));
+  const assetDots = result.stats.map((s) => ({
+    id: s.assetId,
+    vol: s.annualisedVol,
+    ret: s.shrunkReturn ?? s.empiricalReturn ?? s.annualisedReturn,
+  }));
 
   const allVols = [...points.map((p) => p.annualisedVol), ...assetDots.map((d) => d.vol)];
   const allRets = [...points.map((p) => p.annualisedReturn), ...assetDots.map((d) => d.ret)];
@@ -1670,9 +1904,17 @@ function FrontierChart({
     .map((p, i) => `${i === 0 ? "M" : "L"}${x(p.annualisedVol)},${y(p.annualisedReturn)}`)
     .join(" ");
 
+  const topWeights = (p: PortfolioPoint) =>
+    Object.entries(p.weights)
+      .filter(([, w]) => w > 0.02)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([id, w]) => `${SHORT_NAME[id] ?? id} ${PCT(w, 0)}`)
+      .join(" · ");
+
   return (
-    <div style={{ overflowX: "auto" }}>
-      <svg width={W} height={H} style={{ display: "block", background: "#fafbfc" }}>
+    <div style={{ overflowX: "auto", position: "relative" }}>
+      <svg width={W} height={H} style={{ display: "block", background: "#fafbfc" }} onMouseLeave={() => setHover(null)}>
         {volTicks.map((v) => (
           <g key={`gx${v}`}>
             <line x1={x(v)} y1={P.top} x2={x(v)} y2={P.top + ih} stroke="#e2e8f0" strokeWidth={1} />
@@ -1686,8 +1928,18 @@ function FrontierChart({
           </g>
         ))}
         <text x={P.left + iw / 2} y={H - 6} textAnchor="middle" fontSize={12} fill="#334155">Volatility (annualised)</text>
-        <text x={14} y={P.top + ih / 2} transform={`rotate(-90 14 ${P.top + ih / 2})`} textAnchor="middle" fontSize={12} fill="#334155">Expected return (annualised)</text>
+        <text x={14} y={P.top + ih / 2} transform={`rotate(-90 14 ${P.top + ih / 2})`} textAnchor="middle" fontSize={12} fill="#334155">Return on score window (CAGR)</text>
         <path d={frontierPath} stroke="#1e40af" strokeWidth={2.5} fill="none" opacity={0.9} />
+        {result.frontier.map((p, i) => (
+          <circle
+            key={`f${i}`}
+            cx={x(p.annualisedVol)}
+            cy={y(p.annualisedReturn)}
+            r={6}
+            fill="transparent"
+            onMouseEnter={() => setHover(p)}
+          />
+        ))}
         {assetDots.map((d) => (
           <g key={d.id}>
             <circle cx={x(d.vol)} cy={y(d.ret)} r={5} fill={ASSET_COLOR[d.id] ?? "#94a3b8"} opacity={0.85} stroke="#fff" strokeWidth={1.5} />
@@ -1702,6 +1954,12 @@ function FrontierChart({
         <FrontierMarker x={x(result.minVariance.annualisedVol)} y={y(result.minVariance.annualisedReturn)} label="Min Var" color="#059669" />
         <FrontierMarker x={x(result.minDrawdown.annualisedVol)} y={y(result.minDrawdown.annualisedReturn)} label="Min DD" color="#0891b2" dy={28} />
       </svg>
+      {hover && (
+        <div style={S.chartTooltip}>
+          <b>{PCT(hover.annualisedReturn)} ret · {PCT(hover.annualisedVol)} vol · Sharpe {hover.sharpe.toFixed(2)}</b>
+          <div>{topWeights(hover)}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1715,14 +1973,48 @@ function FrontierMarker({ x, y, label, color, dy = 0 }: { x: number; y: number; 
   );
 }
 
+function rebaseSeries(s: AssetSeries, start: string | null): AssetSeries | null {
+  if (!s.months.length) return null;
+  let idx = 0;
+  if (start) {
+    idx = s.months.findIndex((m) => m >= start);
+    if (idx < 0) return null;
+  }
+  const months = s.months.slice(idx);
+  const eq0 = s.equity[idx] || 1;
+  const equity = s.equity.slice(idx).map((e) => e / eq0);
+  const peak: number[] = [];
+  let p = 1;
+  const drawdown = equity.map((e) => {
+    p = Math.max(p, e);
+    peak.push(p);
+    return e / p - 1;
+  });
+  return {
+    ...s,
+    months,
+    equity,
+    drawdown,
+    maxDrawdown: Math.min(...drawdown, 0),
+  };
+}
+
 // ─────────────────────── Growth-of-$1 chart ───────────────────────
 
 function GrowthChart({
   series,
   assetById,
+  commonStart,
+  windowStart,
+  fof,
+  bench,
 }: {
   series: AssetSeries[];
   assetById: Record<string, FundAsset>;
+  commonStart: boolean;
+  windowStart: string | null;
+  fof: AssetSeries | null;
+  bench: AssetSeries | null;
 }) {
   const W = 540;
   const H = 340;
@@ -1730,8 +2022,21 @@ function GrowthChart({
   const iw = W - P.left - P.right;
   const ih = H - P.top - P.bottom;
 
+  const start = commonStart
+    ? (windowStart ?? series.map((s) => s.months[0] ?? "").filter(Boolean).sort().at(-1) ?? null)
+    : null;
+  const shown = series
+    .map((s) => (commonStart ? rebaseSeries(s, start) : s))
+    .filter((s): s is AssetSeries => !!s);
+  const fofS = fof ? (commonStart ? rebaseSeries(fof, start) : fof) : null;
+  const benchS = bench ? (commonStart ? rebaseSeries(bench, start) : bench) : null;
+
   // Collect all months for x-axis span
-  const allMonths = Array.from(new Set(series.flatMap((s) => s.months))).sort();
+  const allMonths = Array.from(new Set([
+    ...shown.flatMap((s) => s.months),
+    ...(fofS?.months ?? []),
+    ...(benchS?.months ?? []),
+  ])).sort();
   if (allMonths.length === 0) return null;
   const minMonth = allMonths[0]!;
   const maxMonth = allMonths[allMonths.length - 1]!;
@@ -1742,7 +2047,7 @@ function GrowthChart({
   };
   const xMin = parseMonth(minMonth);
   const xMax = parseMonth(maxMonth);
-  const maxEq = Math.max(1, ...series.flatMap((s) => s.equity));
+  const maxEq = Math.max(1, ...shown.flatMap((s) => s.equity), ...(fofS?.equity ?? []), ...(benchS?.equity ?? []));
 
   const x = (m: string) => P.left + ((parseMonth(m) - xMin) / (xMax - xMin || 1)) * iw;
   const y = (v: number) => P.top + ih - (Math.log(v) / Math.log(maxEq)) * ih;
@@ -1775,7 +2080,7 @@ function GrowthChart({
         ))}
         <line x1={P.left} y1={y(1)} x2={P.left + iw} y2={y(1)} stroke="#cbd5e1" strokeDasharray="3,3" />
 
-        {series.map((s) => {
+        {shown.map((s) => {
           const d = s.months
             .map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${y(s.equity[i]!)}`)
             .join(" ");
@@ -1784,27 +2089,49 @@ function GrowthChart({
               key={s.assetId}
               d={d}
               stroke={ASSET_COLOR[s.assetId] ?? "#94a3b8"}
-              strokeWidth={1.6}
+              strokeWidth={1.2}
               fill="none"
-              opacity={0.9}
+              opacity={0.45}
             />
           );
         })}
+        {benchS && (
+          <path
+            d={benchS.months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${y(benchS.equity[i]!)}`).join(" ")}
+            stroke="#94a3b8"
+            strokeWidth={2}
+            fill="none"
+          />
+        )}
+        {fofS && (
+          <path
+            d={fofS.months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${y(fofS.equity[i]!)}`).join(" ")}
+            stroke="#1e40af"
+            strokeWidth={2.4}
+            fill="none"
+          />
+        )}
 
         {/* legend */}
-        {series.map((s, i) => (
+        {fofS && (
+          <g>
+            <line x1={P.left + iw + 10} y1={P.top + 12} x2={P.left + iw + 25} y2={P.top + 12} stroke="#1e40af" strokeWidth={2.4} />
+            <text x={P.left + iw + 30} y={P.top + 15} fontSize={10} fill="#1e40af" fontWeight={700}>FoF</text>
+          </g>
+        )}
+        {shown.slice(0, 8).map((s, i) => (
           <g key={`leg${s.assetId}`}>
             <line
               x1={P.left + iw + 10}
-              y1={P.top + 12 + i * 16}
+              y1={P.top + 12 + (i + 1) * 16}
               x2={P.left + iw + 25}
-              y2={P.top + 12 + i * 16}
+              y2={P.top + 12 + (i + 1) * 16}
               stroke={ASSET_COLOR[s.assetId] ?? "#94a3b8"}
               strokeWidth={2}
             />
             <text
               x={P.left + iw + 30}
-              y={P.top + 15 + i * 16}
+              y={P.top + 15 + (i + 1) * 16}
               fontSize={10}
               fill="#334155"
             >
@@ -1826,9 +2153,17 @@ function GrowthChart({
 function DrawdownChart({
   series,
   assetById,
+  commonStart,
+  windowStart,
+  fof,
+  bench,
 }: {
   series: AssetSeries[];
   assetById: Record<string, FundAsset>;
+  commonStart: boolean;
+  windowStart: string | null;
+  fof: AssetSeries | null;
+  bench: AssetSeries | null;
 }) {
   const W = 540;
   const H = 340;
@@ -1836,7 +2171,20 @@ function DrawdownChart({
   const iw = W - P.left - P.right;
   const ih = H - P.top - P.bottom;
 
-  const allMonths = Array.from(new Set(series.flatMap((s) => s.months))).sort();
+  const start = commonStart
+    ? (windowStart ?? series.map((s) => s.months[0] ?? "").filter(Boolean).sort().at(-1) ?? null)
+    : null;
+  const shown = series
+    .map((s) => (commonStart ? rebaseSeries(s, start) : s))
+    .filter((s): s is AssetSeries => !!s);
+  const fofS = fof ? (commonStart ? rebaseSeries(fof, start) : fof) : null;
+  const benchS = bench ? (commonStart ? rebaseSeries(bench, start) : bench) : null;
+
+  const allMonths = Array.from(new Set([
+    ...shown.flatMap((s) => s.months),
+    ...(fofS?.months ?? []),
+    ...(benchS?.months ?? []),
+  ])).sort();
   if (allMonths.length === 0) return null;
   const minMonth = allMonths[0]!;
   const maxMonth = allMonths[allMonths.length - 1]!;
@@ -1848,7 +2196,12 @@ function DrawdownChart({
   const xMin = parseMonth(minMonth);
   const xMax = parseMonth(maxMonth);
 
-  const worstDD = Math.min(...series.flatMap((s) => s.drawdown), -0.05);
+  const worstDD = Math.min(
+    ...shown.flatMap((s) => s.drawdown),
+    ...(fofS?.drawdown ?? []),
+    ...(benchS?.drawdown ?? []),
+    -0.05,
+  );
 
   const x = (m: string) => P.left + ((parseMonth(m) - xMin) / (xMax - xMin || 1)) * iw;
   const y = (v: number) => P.top + (v / worstDD) * ih;
@@ -1877,16 +2230,32 @@ function DrawdownChart({
           </g>
         ))}
 
-        {series.map((s) => {
+        {shown.map((s) => {
           const d = s.months
             .map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${y(s.drawdown[i]!)}`)
             .join(" ");
           return (
-            <path key={s.assetId} d={d} stroke={ASSET_COLOR[s.assetId] ?? "#94a3b8"} strokeWidth={1.4} fill="none" opacity={0.85} />
+            <path key={s.assetId} d={d} stroke={ASSET_COLOR[s.assetId] ?? "#94a3b8"} strokeWidth={1.1} fill="none" opacity={0.4} />
           );
         })}
+        {benchS && (
+          <path
+            d={benchS.months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${y(benchS.drawdown[i]!)}`).join(" ")}
+            stroke="#94a3b8"
+            strokeWidth={1.8}
+            fill="none"
+          />
+        )}
+        {fofS && (
+          <path
+            d={fofS.months.map((m, i) => `${i === 0 ? "M" : "L"}${x(m)},${y(fofS.drawdown[i]!)}`).join(" ")}
+            stroke="#1e40af"
+            strokeWidth={2.2}
+            fill="none"
+          />
+        )}
 
-        {series.map((s, i) => (
+        {shown.slice(0, 8).map((s, i) => (
           <g key={`leg${s.assetId}`}>
             <line x1={P.left + iw + 10} y1={P.top + 12 + i * 16} x2={P.left + iw + 25} y2={P.top + 12 + i * 16} stroke={ASSET_COLOR[s.assetId] ?? "#94a3b8"} strokeWidth={2} />
             <text x={P.left + iw + 30} y={P.top + 15 + i * 16} fontSize={10} fill="#334155">
@@ -1926,10 +2295,12 @@ function InteractiveBuilder({
 }) {
   const ids = result.stats.map((s) => s.assetId);
 
-  // Seed weights from Max Sharpe by default.
+  // Seed weights from the recommended FoF book.
   const [weights, setWeights] = useState<Record<string, number>>(() => {
+    const seed = result.recommended ?? result.maxSharpe;
     const w: Record<string, number> = {};
-    ids.forEach((id) => (w[id] = result.maxSharpe.weights[id] ?? 0));
+    ids.forEach((id) => (w[id] = seed.weights[id] ?? 0));
+    if ((seed.cashWeight ?? 0) > 0) w.cash = seed.cashWeight ?? 0;
     return w;
   });
 
@@ -1949,7 +2320,8 @@ function InteractiveBuilder({
         respectMinInvestment: respectMin,
         historyWindowStart,
         benchmarkAssetId: result.benchmarkAssetId,
-        netOfFees: true,
+        netOfFees: false,
+        fofFee: result.fofFee ?? 0,
         overrides: Object.values(overrides),
         minInvestmentOverrides: Object.entries(minInvOverrides).map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       })
@@ -1972,6 +2344,11 @@ function InteractiveBuilder({
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
       <div>
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          {result.recommended && (
+            <button style={{ ...S.pillBtn, background: "#dbeafe", borderColor: "#93c5fd" }} onClick={() => seedFrom(result.recommended!)}>
+              Seed: Recommended
+            </button>
+          )}
           <button style={S.pillBtn} onClick={() => seedFrom(result.maxSharpe)}>Seed: Max Sharpe</button>
           <button style={S.pillBtn} onClick={() => seedFrom(result.maxSortino)}>Seed: Max Sortino</button>
           <button style={S.pillBtn} onClick={() => seedFrom(result.maxInformationRatio)}>Seed: Max IR</button>
@@ -2009,6 +2386,12 @@ function InteractiveBuilder({
                 <tr key={id}>
                   <td style={{ ...S.td, color: ASSET_COLOR[id], fontWeight: 600 }}>
                     {SHORT_NAME[id] ?? assetById[id]?.name.split(" ")[0]}
+                    {assetById[id]?.illiquid && (
+                      <div style={{ fontSize: "0.62rem", color: "#b45309", fontWeight: 600 }}>lockup</div>
+                    )}
+                    {assetById[id]?.minInvestment ? (
+                      <div style={{ fontSize: "0.62rem", color: "#64748b" }}>min {CURRENCY(assetById[id]!.minInvestment)}</div>
+                    ) : null}
                   </td>
                   <td style={S.td}>
                     <input
@@ -2329,6 +2712,7 @@ function CorrelationMatrix({
               </td>
               {ids.map((j) => {
                 const r = result.correlation[i][j];
+                const n = result.overlapMonths?.[i]?.[j];
                 return (
                   <td key={j} style={{
                     ...S.tdNum,
@@ -2336,8 +2720,13 @@ function CorrelationMatrix({
                     color: Math.abs(r) > 0.5 ? "white" : "#334155",
                     fontWeight: i === j ? 700 : 500,
                     fontSize: "0.72rem",
-                  }}>
+                  }}
+                    title={i === j ? `${n} months` : `ρ=${r.toFixed(2)} over ${n} overlapping months`}
+                  >
                     {r.toFixed(2)}
+                    {i !== j && n != null && (
+                      <div style={{ fontSize: "0.58rem", opacity: 0.85, fontWeight: 400 }}>n={n}</div>
+                    )}
                   </td>
                 );
               })}

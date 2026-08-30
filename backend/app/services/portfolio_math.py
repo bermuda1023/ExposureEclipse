@@ -81,9 +81,24 @@ class PortfolioPoint:
 # ─────────────────────── stats ───────────────────────
 
 # Correlation: shrink empirical ρ toward this prior when overlap is thin.
-CORR_PRIOR = 0.35
+# 0.55 is conservative for a fund-of-equity-managers book (the old 0.35
+# overstated diversification on short overlaps).
+CORR_PRIOR = 0.55
 CORR_FULL_N = 36  # full weight on empirical at this many overlapping months
 CORR_MIN_N = 3
+
+# Short-track μ shrink: pull arithmetic expected return toward a modest
+# hedge-fund prior so an 18-month 40% CAGR does not dominate MVO.
+MU_PRIOR = 0.08
+MU_FULL_N = 60
+
+CASH_ID = "cash"
+
+STRESS_WINDOWS: tuple[tuple[str, str, str], ...] = (
+    ("2020", "2020-01", "2020-12"),
+    ("2022", "2022-01", "2022-12"),
+    ("2025h1", "2025-01", "2025-06"),
+)
 
 
 def _monthly_stats(returns: Sequence[float]) -> tuple[float, float]:
@@ -130,6 +145,144 @@ def compute_asset_stats(series: ReturnSeries, fee_drag: float = 0.0) -> AssetSta
         max_month=months[-1],
         fee_drag=fee_drag,
     )
+
+
+def shrink_expected_return(
+    empirical: float,
+    n_months: int,
+    *,
+    prior: float = MU_PRIOR,
+    full_n: int = MU_FULL_N,
+) -> float:
+    """Blend empirical arithmetic μ toward ``prior`` when history is short."""
+    if n_months <= 0:
+        return prior
+    w = min(1.0, n_months / float(full_n))
+    return w * empirical + (1.0 - w) * prior
+
+
+def apply_mu_shrink(stat: AssetStat, *, prior: float = MU_PRIOR) -> AssetStat:
+    """Return a copy with expected_return shrunk; CAGR (display) unchanged."""
+    shrunk = shrink_expected_return(stat.expected_return, stat.n_months, prior=prior)
+    return AssetStat(
+        asset_id=stat.asset_id,
+        n_months=stat.n_months,
+        monthly_mean=shrunk / 12.0,
+        monthly_std=stat.monthly_std,
+        annualised_return=stat.annualised_return,
+        expected_return=shrunk,
+        annualised_vol=stat.annualised_vol,
+        min_month=stat.min_month,
+        max_month=stat.max_month,
+        fee_drag=stat.fee_drag,
+    )
+
+
+def is_illiquid_lockup(lockup: str | None) -> bool:
+    """True when the lockup is a multi-month hard lock (FoF liquidity sleeve)."""
+    s = (lockup or "").strip().lower()
+    if not s or s in ("none", "n/a", "daily liquidity", "daily"):
+        return False
+    if any(tok in s for tok in ("12mo", "12 mo", "12-month", "12 months", "1yr", "1 yr", "1-year", "1 year")):
+        return True
+    if "lockup" in s and "none" not in s:
+        return True
+    return False
+
+
+def make_cash_stat(risk_free_rate: float) -> AssetStat:
+    monthly = (1.0 + risk_free_rate) ** (1.0 / 12.0) - 1.0
+    return AssetStat(
+        asset_id=CASH_ID,
+        n_months=999,
+        monthly_mean=monthly,
+        monthly_std=0.0,
+        annualised_return=risk_free_rate,
+        expected_return=risk_free_rate,
+        annualised_vol=0.0,
+        min_month="",
+        max_month="",
+        fee_drag=0.0,
+    )
+
+
+def make_cash_series(months: Sequence[str], risk_free_rate: float) -> ReturnSeries:
+    monthly = (1.0 + risk_free_rate) ** (1.0 / 12.0) - 1.0
+    return ReturnSeries(
+        asset_id=CASH_ID,
+        returns={m: monthly for m in months},
+    )
+
+
+def inject_cash(
+    stats: dict[str, AssetStat],
+    rho: dict[str, dict[str, float]],
+    series_by_id: dict[str, ReturnSeries],
+    risk_free_rate: float,
+) -> None:
+    """Add a zero-vol cash sleeve in-place (μ = RF, ρ = 0)."""
+    stats[CASH_ID] = make_cash_stat(risk_free_rate)
+    union: list[str] = sorted({m for s in series_by_id.values() for m in s.returns})
+    series_by_id[CASH_ID] = make_cash_series(union, risk_free_rate)
+    if CASH_ID not in rho:
+        rho[CASH_ID] = {}
+    for i in list(rho):
+        rho[i][CASH_ID] = 0.0
+        rho[CASH_ID][i] = 0.0
+    rho[CASH_ID][CASH_ID] = 1.0
+
+
+def apply_fof_fee_monthly(returns: Sequence[float], fof_fee_annual: float) -> list[float]:
+    if fof_fee_annual <= 0:
+        return list(returns)
+    drag = fof_fee_annual / 12.0
+    return [r - drag for r in returns]
+
+
+def score_window(monthly: list[tuple[str, float]]) -> tuple[str | None, str | None, int]:
+    if not monthly:
+        return None, None, 0
+    return monthly[0][0], monthly[-1][0], len(monthly)
+
+
+def stress_results(
+    weights: dict[str, float],
+    series_by_id: dict[str, ReturnSeries],
+) -> list[dict]:
+    """Period return + max DD for the canned FoF stress windows."""
+    path = portfolio_monthly_series(weights, series_by_id)
+    by_month = {m: r for m, r in path}
+    out: list[dict] = []
+    for label, start, end in STRESS_WINDOWS:
+        rets = [by_month[m] for m in sorted(by_month) if start <= m <= end]
+        if len(rets) < 3:
+            out.append(
+                {
+                    "label": label,
+                    "start": start,
+                    "end": end,
+                    "nMonths": len(rets),
+                    "periodReturn": None,
+                    "maxDrawdown": None,
+                    "covered": False,
+                }
+            )
+            continue
+        cum = 1.0
+        for r in rets:
+            cum *= 1 + r
+        out.append(
+            {
+                "label": label,
+                "start": start,
+                "end": end,
+                "nMonths": len(rets),
+                "periodReturn": cum - 1.0,
+                "maxDrawdown": max_drawdown_from_monthly(rets),
+                "covered": True,
+            }
+        )
+    return out
 
 
 def _apply_overrides(
@@ -477,6 +630,10 @@ def compute_frontier(
     fixed_weights: dict[str, float] | None = None,
     samples: int = 40_000,
     seed: int = 42,
+    max_names: int | None = None,
+    illiquid_ids: Sequence[str] | None = None,
+    max_illiquid_weight: float = 1.0,
+    fof_fee: float = 0.0,
 ) -> tuple[
     list[PortfolioPoint],
     PortfolioPoint,
@@ -489,8 +646,14 @@ def compute_frontier(
 
     ``fixed_weights`` + ``free_weight``: new-cash mode. Sample only the free
     sleeve (sum free_weight), then final w = fixed + free_sample.
+
+    FoF knobs: ``max_names`` caps how many non-cash funds can hold weight;
+    ``illiquid_ids`` + ``max_illiquid_weight`` cap the locked-up sleeve;
+    ``fof_fee`` is an annual overlay subtracted from path monthlies and μ
+    (GP fees are assumed already in the net series).
     """
     ids = list(stats)
+    illiquid_set = set(illiquid_ids or ())
     n = len(ids)
     empty = PortfolioPoint({}, 0.0, 0.0, 0.0, 0.0)
     if n == 0:
@@ -528,6 +691,7 @@ def compute_frontier(
 
     # Assets we can put free capital into (not locked 100% fixed).
     free_ids = [i for i in ids if free_weight > 1e-12]
+    fund_free_ids = [i for i in free_ids if i != CASH_ID]
 
     for k in range(samples):
         alpha = alpha_choices[k % len(alpha_choices)]
@@ -538,11 +702,17 @@ def compute_frontier(
             sfix = sum(weights.values()) or 1.0
             weights = {i: weights[i] / sfix for i in ids}
         else:
-            chosen = [
-                i
-                for i in free_ids
-                if i in hard_min_weights or rng.random() < 0.65
-            ]
+            must = [i for i in fund_free_ids if hard_min_weights.get(i, 0.0) > 1e-9]
+            optional = [i for i in fund_free_ids if i not in must]
+            picked = [i for i in optional if rng.random() < 0.65]
+            if max_names is not None and max_names > 0:
+                slots = max(0, max_names - len(must))
+                if len(picked) > slots:
+                    rng.shuffle(picked)
+                    picked = picked[:slots]
+            chosen = must + picked
+            if CASH_ID in free_ids:
+                chosen = chosen + [CASH_ID]
             if not chosen:
                 chosen = list(free_ids)
             raw = _sample_dirichlet(len(chosen), alpha, rng)
@@ -605,7 +775,49 @@ def compute_frontier(
             s = sum(weights.values())
             weights = {a: v / s for a, v in weights.items()}
 
-        mu = portfolio_expected_return(weights, stats)
+        # Cardinality: drop smallest optional names (keep cash + hard floors).
+        if max_names is not None and max_names > 0:
+            held = [
+                a for a, wt in weights.items()
+                if wt > 1e-6 and a != CASH_ID
+            ]
+            if len(held) > max_names:
+                protected = {a for a in held if hard_min_weights.get(a, 0.0) > 1e-9}
+                droppable = sorted(
+                    (a for a in held if a not in protected),
+                    key=lambda a: weights[a],
+                )
+                n_drop = len(held) - max_names
+                for a in droppable[:n_drop]:
+                    weights[a] = 0.0
+                s = sum(weights.values())
+                if s <= 0:
+                    continue
+                weights = {a: v / s for a, v in weights.items()}
+
+        # Illiquid sleeve cap — scale locked names down, give slack to liquid/cash.
+        if illiquid_set and max_illiquid_weight < 1.0 - 1e-9:
+            illiq = sum(weights.get(a, 0.0) for a in illiquid_set)
+            if illiq > max_illiquid_weight + 1e-9:
+                if illiq <= 1e-12:
+                    continue
+                scale = max_illiquid_weight / illiq
+                freed = illiq - max_illiquid_weight
+                liquid = [
+                    a for a in weights
+                    if a not in illiquid_set and a not in hard_min_weights
+                ]
+                if not liquid:
+                    continue
+                for a in illiquid_set:
+                    weights[a] = weights.get(a, 0.0) * scale
+                liq_sum = sum(weights[a] for a in liquid) or 1.0
+                for a in liquid:
+                    weights[a] += freed * (weights[a] / liq_sum)
+                s = sum(weights.values())
+                weights = {a: v / s for a, v in weights.items()}
+
+        mu = portfolio_expected_return(weights, stats) - fof_fee
         vol_analytical = portfolio_vol(weights, stats, rho)
 
         sortino = 0.0
@@ -618,7 +830,12 @@ def compute_frontier(
         # same universe as Sortino / DD / IR.
         if series_by_id is not None:
             monthly_series = portfolio_monthly_series(weights, series_by_id)
-            monthly_rets = [r for _, r in monthly_series]
+            monthly_rets = apply_fof_fee_monthly(
+                [r for _, r in monthly_series], fof_fee
+            )
+            monthly_series = [
+                (m, monthly_rets[i]) for i, (m, _) in enumerate(monthly_series)
+            ]
             if len(monthly_rets) >= MIN_MONTHS_FOR_TAIL_METRICS:
                 sortino = sortino_from_monthly(monthly_rets, mar_annual=risk_free_rate)
                 mdd = max_drawdown_from_monthly(monthly_rets)

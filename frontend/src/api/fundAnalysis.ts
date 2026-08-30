@@ -26,6 +26,7 @@ export interface FundAsset {
   source: string;
   warning: string | null;
   docs?: FundDoc[];
+  illiquid?: boolean;
 }
 
 export interface AssetsResponse {
@@ -68,7 +69,7 @@ export interface OptimizeRequest {
   noSell: boolean;
   /** Default true: only deploy new capital; keep current holdings fixed. */
   allocateNewCapitalOnly: boolean;
-  /** Default true: haircut expected returns by mgmt fee. */
+  /** Catalog monthlies are already net of GP fees. Default false (do not haircut again). */
   netOfFees: boolean;
   historyWindowStart: string | null;
   benchmarkAssetId: string;
@@ -79,6 +80,12 @@ export interface OptimizeRequest {
   maxWeights: MaxWeightIn[];
   minInvestmentOverrides: MinInvestmentOverrideIn[];
   samples: number;
+  fofFee?: number;
+  maxNames?: number;
+  defaultMaxWeight?: number;
+  maxIlliquidWeight?: number;
+  allowCash?: boolean;
+  objective?: "sharpe" | "sortino" | "ir" | "min_dd" | "min_var";
 }
 
 export interface PortfolioPoint {
@@ -92,6 +99,23 @@ export interface PortfolioPoint {
   trackingError: number;
   maxDrawdown: number;
   violatesMinInvestment: string[];
+  scoreWindowStart?: string | null;
+  scoreWindowEnd?: string | null;
+  scoreWindowMonths?: number;
+  nNames?: number;
+  cashWeight?: number;
+  illiquidWeight?: number;
+  stress?: StressRow[];
+}
+
+export interface StressRow {
+  label: string;
+  start: string;
+  end: string;
+  nMonths: number;
+  periodReturn: number | null;
+  maxDrawdown: number | null;
+  covered: boolean;
 }
 
 export interface AssetSeries {
@@ -111,6 +135,7 @@ export interface CustomPortfolioRequest {
   historyWindowStart: string | null;
   benchmarkAssetId?: string;
   netOfFees?: boolean;
+  fofFee?: number;
   overrides: AssumptionOverrideIn[];
   minInvestmentOverrides: MinInvestmentOverrideIn[];
 }
@@ -135,6 +160,7 @@ export interface AssetStat {
   minMonth: string;
   maxMonth: string;
   empiricalReturn: number;
+  shrunkReturn?: number;
   empiricalVol: number;
   isOverridden: boolean;
   informationRatio: number;
@@ -163,6 +189,16 @@ export interface OptimizeResponse {
   assetSeries: AssetSeries[];
   historyWindowStart: string | null;
   effectiveWindowMonths: number;
+  recommended?: PortfolioPoint | null;
+  objective?: string;
+  scoreWindowStart?: string | null;
+  scoreWindowEnd?: string | null;
+  scoreWindowMonths?: number;
+  recommendedSeries?: AssetSeries | null;
+  benchmarkWindowSeries?: AssetSeries | null;
+  fofFee?: number;
+  maxNames?: number;
+  maxIlliquidWeight?: number;
 }
 
 export const fetchFundAssets = () =>
@@ -203,6 +239,10 @@ export interface RobustnessRequest {
   noSell: boolean;
   allocateNewCapitalOnly?: boolean;
   netOfFees?: boolean;
+  fofFee?: number;
+  maxNames?: number;
+  maxIlliquidWeight?: number;
+  allowCash?: boolean;
   overrides: AssumptionOverrideIn[];
   maxWeights: MaxWeightIn[];
   minInvestmentOverrides: MinInvestmentOverrideIn[];

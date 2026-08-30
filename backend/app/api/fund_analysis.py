@@ -26,7 +26,10 @@ from pydantic import Field
 
 from ..models.common import CamelModel
 from ..services.portfolio_math import (
+    CASH_ID,
     AssumptionOverride,
+    apply_fof_fee_monthly,
+    apply_mu_shrink,
     asset_information_ratio,
     compute_asset_stats,
     compute_frontier,
@@ -34,11 +37,15 @@ from ..services.portfolio_math import (
     cumulative_curve,
     drawdown_series,
     information_ratio_and_te,
+    inject_cash,
+    is_illiquid_lockup,
     max_drawdown_from_monthly,
     portfolio_monthly_series,
     portfolio_vol,
     series_from_asset_json,
     sortino_from_monthly,
+    score_window,
+    stress_results,
     _apply_overrides,
     parse_mgmt_fee_drag,
     portfolio_expected_return,
@@ -72,6 +79,7 @@ class AssetOut(CamelModel):
     source: str
     warning: str | None = None
     docs: list[FundDocOut] = Field(default_factory=list)
+    illiquid: bool = False
 
 
 class AssetsResponse(CamelModel):
@@ -117,7 +125,28 @@ class OptimizeRequest(CamelModel):
         description="If True (default), only NEW capital is optimized; current holdings stay put. "
         "If False, optimizer rebalances the full book (current+new).",
     )
-    net_of_fees: bool = Field(True, description="Haircut expected returns by parsed mgmt fee")
+    net_of_fees: bool = Field(
+        False,
+        description="If True, ALSO haircut already-net GP monthlies by parsed mgmt fee. "
+        "Default False — catalog returns are already net of GP fees.",
+    )
+    fof_fee: float = Field(
+        0.0, ge=0, le=0.1,
+        description="Annual fund-of-funds overlay fee on top of already-net manager returns.",
+    )
+    max_names: int = Field(8, ge=1, le=30, description="Max non-cash holdings in a book")
+    default_max_weight: float = Field(
+        0.25, ge=0.05, le=1.0,
+        description="Default per-hedge-fund cap when no explicit maxWeights row is sent.",
+    )
+    max_illiquid_weight: float = Field(
+        0.50, ge=0, le=1.0, description="Max weight in funds with ≥12mo lockup",
+    )
+    allow_cash: bool = Field(True, description="Permit leftover cash at the risk-free rate")
+    objective: str = Field(
+        "ir",
+        description="Recommended book: sharpe | sortino | ir | min_dd | min_var",
+    )
     history_window_start: str | None = Field(None, description="YYYY-MM inclusive; None = full history")
     benchmark_asset_id: str = Field("spy", description="Portfolio-level IR benchmark")
     per_asset_benchmarks: list[PerAssetBenchmarkIn] = Field(
@@ -132,6 +161,16 @@ class OptimizeRequest(CamelModel):
     samples: int = Field(30_000, ge=1_000, le=100_000)
 
 
+class StressRowOut(CamelModel):
+    label: str
+    start: str
+    end: str
+    n_months: int
+    period_return: float | None = None
+    max_drawdown: float | None = None
+    covered: bool = False
+
+
 class PortfolioOut(CamelModel):
     weights: dict[str, float]
     annualised_return: float
@@ -143,6 +182,13 @@ class PortfolioOut(CamelModel):
     tracking_error: float = 0.0
     max_drawdown: float = 0.0
     violates_min_investment: list[str] = Field(default_factory=list)
+    score_window_start: str | None = None
+    score_window_end: str | None = None
+    score_window_months: int = 0
+    n_names: int = 0
+    cash_weight: float = 0.0
+    illiquid_weight: float = 0.0
+    stress: list[StressRowOut] = Field(default_factory=list)
 
 
 class AssetStatOut(CamelModel):
@@ -152,7 +198,8 @@ class AssetStatOut(CamelModel):
     annualised_vol: float
     min_month: str
     max_month: str
-    empirical_return: float          # pre-override empirical
+    empirical_return: float          # pre-override empirical (arithmetic, no GP haircut)
+    shrunk_return: float = 0.0       # MVO μ after short-track shrink
     empirical_vol: float
     is_overridden: bool
     information_ratio: float = 0.0   # vs this asset's benchmark
@@ -192,6 +239,16 @@ class OptimizeResponse(CamelModel):
     asset_series: list[AssetSeriesOut]
     history_window_start: str | None
     effective_window_months: int
+    recommended: PortfolioOut | None = None
+    objective: str = "ir"
+    score_window_start: str | None = None
+    score_window_end: str | None = None
+    score_window_months: int = 0
+    recommended_series: AssetSeriesOut | None = None
+    benchmark_window_series: AssetSeriesOut | None = None
+    fof_fee: float = 0.0
+    max_names: int = 8
+    max_illiquid_weight: float = 0.5
 
 
 class PortfolioPoint_wire(CamelModel):
@@ -218,7 +275,8 @@ class CustomPortfolioRequest(CamelModel):
     benchmark_asset_id: str = "spy"
     overrides: list[AssumptionOverrideIn] = Field(default_factory=list)
     min_investment_overrides: list[MinInvestmentOverrideIn] = Field(default_factory=list)
-    net_of_fees: bool = True
+    net_of_fees: bool = False
+    fof_fee: float = 0.0
 
 
 class CustomPortfolioResponse(CamelModel):
@@ -284,6 +342,7 @@ def list_assets() -> AssetsResponse:
                 source=a["source"],
                 warning=a.get("warning"),
                 docs=a.get("docs") or [],
+                illiquid=is_illiquid_lockup(a.get("lockup")),
             )
         )
     return AssetsResponse(
@@ -317,16 +376,15 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     else:
         series_by_id = full_series
     def _fee(a: str) -> float:
-        if not getattr(req, "net_of_fees", True):
+        # Catalog monthlies are already net of GP fees. Only haircut if the
+        # user explicitly asks to re-apply mgmt drag (legacy / sensitivity).
+        if not getattr(req, "net_of_fees", False):
             return 0.0
         return parse_mgmt_fee_drag(idx[a].get("fees"))
 
     empirical = {
         a: compute_asset_stats(series_by_id[a], fee_drag=_fee(a)) for a in req.asset_ids
     }
-    effective_window_months = max(
-        (len(series_by_id[a].returns) for a in req.asset_ids), default=0
-    )
 
     # Portfolio-level benchmark (for the portfolio IR calc). Always
     # loaded even if not in the investable set.
@@ -367,7 +425,16 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         )
 
     stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
+    for a in req.asset_ids:
+        ov = ov_by_id.get(a)
+        if ov is None or ov.annualised_return is None:
+            stats[a] = apply_mu_shrink(stats[a])
     rho, nn = correlation_matrix(series_by_id, ov_by_id)
+
+    fof_fee = float(getattr(req, "fof_fee", 0.0) or 0.0)
+    allow_cash = bool(getattr(req, "allow_cash", True))
+    if allow_cash:
+        inject_cash(stats, rho, series_by_id, req.risk_free_rate)
 
     # Current holdings + total capital
     current_by_id: dict[str, float] = {c.asset_id: c.amount for c in req.current_investments if c.amount > 0}
@@ -416,8 +483,19 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     max_weights: dict[str, float] = {
         mw.asset_id: mw.max_weight for mw in req.max_weights if mw.asset_id in req.asset_ids
     }
+    default_cap = float(getattr(req, "default_max_weight", 0.25) or 0.25)
+    for a in req.asset_ids:
+        if a in max_weights:
+            continue
+        if idx[a].get("kind") == "hedge_fund":
+            max_weights[a] = default_cap
 
     min_inv_for_solver = effective_min_inv if req.respect_min_investment else {}
+    illiquid_ids = [
+        a for a in req.asset_ids if is_illiquid_lockup(idx[a].get("lockup"))
+    ]
+    max_names = int(getattr(req, "max_names", 8) or 8)
+    max_illiquid_weight = float(getattr(req, "max_illiquid_weight", 0.5) or 0.5)
 
     frontier, max_sharpe, min_var, max_sortino, min_dd, max_ir = compute_frontier(
         stats=stats,
@@ -433,17 +511,56 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         free_weight=free_weight,
         fixed_weights=fixed_weights if fixed_weights else None,
         samples=req.samples,
+        max_names=max_names,
+        illiquid_ids=illiquid_ids,
+        max_illiquid_weight=max_illiquid_weight,
+        fof_fee=fof_fee,
     )
 
     def _flag_violations(weights: dict[str, float]) -> list[str]:
         # After hard enforcement this should almost always be empty.
         out = []
         for a, w in weights.items():
+            if a == CASH_ID:
+                continue
             allocation = w * total_capital
-            mi = effective_min_inv.get(a, idx[a]["minInvestment"])
+            mi = effective_min_inv.get(a, idx.get(a, {}).get("minInvestment", 0))
             if w > 1e-6 and mi > 0 and allocation + 0.5 < mi:
                 out.append(a)
         return out
+
+    def _path_for(weights: dict[str, float]) -> list[tuple[str, float]]:
+        monthly = portfolio_monthly_series(weights, series_by_id)
+        rets = apply_fof_fee_monthly([r for _, r in monthly], fof_fee)
+        return [(m, rets[i]) for i, (m, _) in enumerate(monthly)]
+
+    def _enrich(p) -> dict:
+        path = _path_for(p.weights)
+        start, end, n = score_window(path)
+        names = [a for a, w in p.weights.items() if w > 1e-6 and a != CASH_ID]
+        stress = [
+            StressRowOut(
+                label=row["label"],
+                start=row["start"],
+                end=row["end"],
+                n_months=row["nMonths"],
+                period_return=row["periodReturn"],
+                max_drawdown=row["maxDrawdown"],
+                covered=row["covered"],
+            )
+            for row in stress_results(p.weights, series_by_id)
+        ]
+        return {
+            "score_window_start": start,
+            "score_window_end": end,
+            "score_window_months": n,
+            "n_names": len(names),
+            "cash_weight": round(p.weights.get(CASH_ID, 0.0), 6),
+            "illiquid_weight": round(
+                sum(p.weights.get(a, 0.0) for a in illiquid_ids), 6
+            ),
+            "stress": stress,
+        }
 
     def _to_wire(p) -> PortfolioPoint_wire:
         return PortfolioPoint_wire(
@@ -460,6 +577,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         )
 
     def _to_out(p) -> PortfolioOut:
+        extra = _enrich(p)
         return PortfolioOut(
             weights={k: round(v, 6) for k, v in p.weights.items()},
             annualised_return=round(p.annualised_return, 6),
@@ -471,6 +589,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             tracking_error=round(p.tracking_error, 6),
             max_drawdown=round(p.max_drawdown, 6),
             violates_min_investment=_flag_violations(p.weights),
+            **extra,
         )
 
     stats_out = []
@@ -494,6 +613,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
                 min_month=s.min_month,
                 max_month=s.max_month,
                 empirical_return=round(e.expected_return, 6),
+                shrunk_return=round(s.expected_return, 6),
                 empirical_vol=round(e.annualised_vol, 6),
                 is_overridden=a in ov_by_id
                 and (
@@ -533,6 +653,41 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             )
         )
 
+    objective = (getattr(req, "objective", "ir") or "ir").lower()
+    rec_src = {
+        "sharpe": max_sharpe,
+        "sortino": max_sortino if max_sortino is not None else max_sharpe,
+        "ir": max_ir if max_ir is not None else max_sharpe,
+        "min_dd": min_dd,
+        "min_var": min_var,
+    }.get(objective, max_ir if max_ir is not None else max_sharpe)
+    rec_out = _to_out(rec_src)
+
+    def _series_out(asset_id: str, months: list[str], rets: list[float]) -> AssetSeriesOut:
+        eq = cumulative_curve(rets) if rets else []
+        dd = drawdown_series(rets) if rets else []
+        return AssetSeriesOut(
+            asset_id=asset_id,
+            months=months,
+            returns=[round(r, 6) for r in rets],
+            equity=[round(v, 6) for v in eq],
+            drawdown=[round(v, 6) for v in dd],
+            max_drawdown=round(max_drawdown_from_monthly(rets), 6) if rets else 0.0,
+        )
+
+    rec_path = _path_for(rec_src.weights)
+    rec_months = [m for m, _ in rec_path]
+    rec_rets = [r for _, r in rec_path]
+    # Rebase to $1 at window start for overlay charts.
+    recommended_series = _series_out("recommended", rec_months, rec_rets)
+    bench_rets: list[float] = []
+    bench_months: list[str] = []
+    for m in rec_months:
+        if m in benchmark_series.returns:
+            bench_months.append(m)
+            bench_rets.append(benchmark_series.returns[m])
+    benchmark_window_series = _series_out(benchmark_id, bench_months, bench_rets)
+
     return OptimizeResponse(
         stats=stats_out,
         correlation={a: {b: round(rho[a][b], 4) for b in req.asset_ids} for a in req.asset_ids},
@@ -552,7 +707,17 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         benchmark_name=benchmark_name,
         asset_series=asset_series,
         history_window_start=req.history_window_start,
-        effective_window_months=effective_window_months,
+        effective_window_months=rec_out.score_window_months,
+        recommended=rec_out,
+        objective=objective,
+        score_window_start=rec_out.score_window_start,
+        score_window_end=rec_out.score_window_end,
+        score_window_months=rec_out.score_window_months,
+        recommended_series=recommended_series,
+        benchmark_window_series=benchmark_window_series,
+        fof_fee=fof_fee,
+        max_names=max_names,
+        max_illiquid_weight=max_illiquid_weight,
     )
 
 
@@ -565,7 +730,7 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
     idx = _asset_by_id(catalog)
 
     weights = {k: v for k, v in req.weights.items() if v > 0}
-    missing = [a for a in weights if a not in idx]
+    missing = [a for a in weights if a not in idx and a != CASH_ID]
     if missing:
         raise HTTPException(
             status_code=422,
@@ -579,14 +744,14 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
         )
     weights = {k: v / total for k, v in weights.items()}
 
-    asset_ids = list(weights)
+    asset_ids = [a for a in weights if a != CASH_ID]
     full_series = {a: series_from_asset_json(idx[a]) for a in asset_ids}
     if req.history_window_start:
         series_by_id = {a: full_series[a].since(req.history_window_start) for a in asset_ids}
     else:
-        series_by_id = full_series
+        series_by_id = dict(full_series)
     def _fee_c(a: str) -> float:
-        if not getattr(req, "net_of_fees", True):
+        if a == CASH_ID or not getattr(req, "net_of_fees", False):
             return 0.0
         return parse_mgmt_fee_drag(idx[a].get("fees"))
 
@@ -603,12 +768,20 @@ def custom_portfolio(req: CustomPortfolioRequest) -> CustomPortfolioResponse:
             correlation_cap=o.correlation_cap,
         )
     stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in asset_ids}
+    for a in asset_ids:
+        ov = ov_by_id.get(a)
+        if ov is None or ov.annualised_return is None:
+            stats[a] = apply_mu_shrink(stats[a])
     rho, _ = correlation_matrix(series_by_id, ov_by_id)
+    fof_fee_c = float(getattr(req, "fof_fee", 0.0) or 0.0)
+    if CASH_ID in weights:
+        inject_cash(stats, rho, series_by_id, req.risk_free_rate)
 
-    mu = portfolio_expected_return(weights, stats)
+    mu = portfolio_expected_return(weights, stats) - fof_fee_c
     vol = portfolio_vol(weights, stats, rho)
     monthly = portfolio_monthly_series(weights, series_by_id)
-    monthly_rets = [r for _, r in monthly]
+    monthly_rets = apply_fof_fee_monthly([r for _, r in monthly], fof_fee_c)
+    monthly = [(m, monthly_rets[i]) for i, (m, _) in enumerate(monthly)]
     sortino = sortino_from_monthly(monthly_rets, mar_annual=req.risk_free_rate) if monthly_rets else 0.0
     from ..services.portfolio_math import _cagr, realized_vol_from_monthly
 
@@ -1104,7 +1277,12 @@ class RobustnessRequest(CamelModel):
     # Deprecated alias — if clients still send totalCapital as "new" dollars
     total_capital: float | None = Field(None, description="Deprecated: use newCapital")
     allocate_new_capital_only: bool = True
-    net_of_fees: bool = True
+    net_of_fees: bool = False
+    fof_fee: float = 0.0
+    max_names: int = 8
+    max_illiquid_weight: float = 0.50
+    allow_cash: bool = True
+    default_max_weight: float = 0.25
     samples_per_scenario: int = Field(8_000, ge=1_000, le=30_000)
 
 
@@ -1219,7 +1397,7 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
                 full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
                 series_by_id = {a: (full_series[a].since(w_start) if w_start else full_series[a]) for a in req.asset_ids}
                 def _fee_r(a: str) -> float:
-                    if not getattr(req, "net_of_fees", True):
+                    if not getattr(req, "net_of_fees", False):
                         return 0.0
                     return parse_mgmt_fee_drag(idx[a].get("fees"))
 
@@ -1228,7 +1406,13 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
                     for a in req.asset_ids
                 }
                 stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
+                for a in req.asset_ids:
+                    ov = ov_by_id.get(a)
+                    if ov is None or ov.annualised_return is None:
+                        stats[a] = apply_mu_shrink(stats[a])
                 rho, _ = correlation_matrix(series_by_id, ov_by_id)
+                if getattr(req, "allow_cash", True):
+                    inject_cash(stats, rho, series_by_id, rf)
 
                 soft_min: dict[str, float] = {}
                 if req.respect_min_investment:
@@ -1237,6 +1421,10 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
                             soft_min[a] = min(1.0, effective_min_inv[a] / total_capital)
 
                 min_inv_solver = effective_min_inv if req.respect_min_investment else {}
+                illiq = [a for a in req.asset_ids if is_illiquid_lockup(idx[a].get("lockup"))]
+                for a in req.asset_ids:
+                    if a not in max_w_map and idx[a].get("kind") == "hedge_fund":
+                        max_w_map[a] = getattr(req, "default_max_weight", 0.25)
                 frontier, max_sharpe, min_var, max_sortino, min_dd, _max_ir = compute_frontier(
                     stats=stats,
                     rho=rho,
@@ -1250,6 +1438,10 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
                     free_weight=free_weight,
                     fixed_weights=fixed_weights if fixed_weights else None,
                     samples=req.samples_per_scenario,
+                    max_names=int(getattr(req, "max_names", 8) or 8),
+                    illiquid_ids=illiq,
+                    max_illiquid_weight=float(getattr(req, "max_illiquid_weight", 0.5) or 0.5),
+                    fof_fee=float(getattr(req, "fof_fee", 0.0) or 0.0),
                 )
                 picked = max_sharpe if obj == "sharpe" else (max_sortino if max_sortino is not None else max_sharpe)
                 scenario_labels.append(label)
