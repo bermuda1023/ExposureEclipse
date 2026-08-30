@@ -137,3 +137,28 @@ def test_max_names_caps_holdings() -> None:
     )
     held = [i for i, w in max_s.weights.items() if w > 1e-6]
     assert len(held) <= 2
+
+
+def test_optimize_history_window_changes_score_clock() -> None:
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    c = TestClient(app)
+    base = {
+        "assetIds": ["adar1", "spy", "gator"],
+        "newCapital": 4_000_000,
+        "samples": 2500,
+        "objective": "ir",
+        "netOfFees": False,
+        "allowCash": True,
+    }
+    all_hist = c.post("/api/fund-analysis/optimize", json=base).json()
+    clipped = c.post(
+        "/api/fund-analysis/optimize",
+        json={**base, "historyWindowStart": "2023-01"},
+    ).json()
+    assert all_hist["historyWindowStart"] is None
+    assert clipped["historyWindowStart"] == "2023-01"
+    assert clipped["scoreWindowStart"] == "2023-01"
+    assert clipped["scoreWindowStart"] != all_hist["scoreWindowStart"]
+    assert clipped["recommended"]["annualisedReturn"] != all_hist["recommended"]["annualisedReturn"]

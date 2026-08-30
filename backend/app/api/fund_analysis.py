@@ -249,6 +249,7 @@ class OptimizeResponse(CamelModel):
     fof_fee: float = 0.0
     max_names: int = 8
     max_illiquid_weight: float = 0.5
+    window_note: str | None = None
 
 
 class PortfolioPoint_wire(CamelModel):
@@ -688,6 +689,26 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             bench_rets.append(benchmark_series.returns[m])
     benchmark_window_series = _series_out(benchmark_id, bench_months, bench_rets)
 
+    _window_note = None
+    req_w = req.history_window_start
+    scored = rec_out.score_window_start
+    if req_w and scored:
+        if scored > req_w:
+            _window_note = (
+                f"Requested since {req_w}, but the recommended book has no overlap "
+                f"before {scored} ({rec_out.score_window_months} months scored)."
+            )
+        else:
+            _window_note = (
+                f"All series clipped to {req_w}. Recommended book scored "
+                f"{scored} → {rec_out.score_window_end} ({rec_out.score_window_months} mo)."
+            )
+    elif scored:
+        _window_note = (
+            f"Full history. Recommended book scored on held-name overlap "
+            f"{scored} → {rec_out.score_window_end} ({rec_out.score_window_months} mo)."
+        )
+
     return OptimizeResponse(
         stats=stats_out,
         correlation={a: {b: round(rho[a][b], 4) for b in req.asset_ids} for a in req.asset_ids},
@@ -718,6 +739,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         fof_fee=fof_fee,
         max_names=max_names,
         max_illiquid_weight=max_illiquid_weight,
+        window_note=_window_note,
     )
 
 

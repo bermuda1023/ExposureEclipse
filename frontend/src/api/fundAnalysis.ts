@@ -199,6 +199,7 @@ export interface OptimizeResponse {
   fofFee?: number;
   maxNames?: number;
   maxIlliquidWeight?: number;
+  windowNote?: string | null;
 }
 
 export const fetchFundAssets = () =>

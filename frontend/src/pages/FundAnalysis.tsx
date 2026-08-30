@@ -370,6 +370,9 @@ export function FundAnalysis() {
   }, [selected, newCapital, currentInvestments, objective, fofFee, maxNames, maxIlliquid, allowCash, historyWindow]);
 
   const result = optimizeMutation.data;
+  const resultStale = !!(
+    result && (result.historyWindowStart ?? null) !== (historyWindowStart ?? null)
+  );
 
   return (
     <div style={S.page}>
@@ -395,6 +398,10 @@ export function FundAnalysis() {
               {assets.map((a) => {
                 const eff = effectiveMinInv(a);
                 const overridden = minInvOverrides[a.id] !== undefined && minInvOverrides[a.id] !== a.minInvestment;
+                const win = !resultStale ? result?.stats.find((s) => s.assetId === a.id) : undefined;
+                const cagr = win?.annualisedReturn ?? a.annualisedReturn;
+                const vol = win?.annualisedVol ?? a.annualisedVol;
+                const nMo = win?.nMonths ?? a.nMonths;
                 return (
                   <tr key={a.id} style={selected.has(a.id) ? S.rowOn : S.rowOff}>
                     <td>
@@ -437,9 +444,9 @@ export function FundAnalysis() {
                         </div>
                       )}
                     </td>
-                    <td style={S.tdNum}>{PCT(a.annualisedReturn)}</td>
-                    <td style={S.tdNum}>{PCT(a.annualisedVol)}</td>
-                    <td style={S.tdNum}>{a.nMonths}</td>
+                    <td style={S.tdNum}>{PCT(cagr)}</td>
+                    <td style={S.tdNum}>{PCT(vol)}</td>
+                    <td style={S.tdNum}>{nMo}</td>
                     <td style={S.tdNum}>
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                         <DollarInput
@@ -610,12 +617,12 @@ export function FundAnalysis() {
               onChange={(e) => setHistoryWindow(e.target.value === "" ? null : e.target.value)}
               style={S.input}
             >
-              <option value="">All available history (μ uses each fund's full sample)</option>
-              <option value="common">Common start of selected hedge funds{commonStartOfSelected ? ` (${commonStartOfSelected})` : ""}</option>
+              <option value="">All available history</option>
+              <option value="common">Clip every fund to the newest selected inception{commonStartOfSelected ? ` (${commonStartOfSelected})` : ""}</option>
+              <option value="2025-01">Since Jan 2025 (tight / recent regime)</option>
               <option value="2023-01">Since Jan 2023 (Blue Outlier inception)</option>
-              <option value="2021-01">Since Jan 2021 (last ~5y)</option>
-              <option value="2019-03">Since Mar 2019 (ADAR1 inception)</option>
-              <option value="2016-01">Since Jan 2016 (last ~10y)</option>
+              <option value="2021-01">Since Jan 2021</option>
+              <option value="2019-03">Since Mar 2019 (ADAR1 inception — often a no-op vs All if ADAR1 is held)</option>
               <option value="custom">Custom start month…</option>
             </select>
             {historyWindow === "custom" && (
@@ -627,8 +634,10 @@ export function FundAnalysis() {
               />
             )}
             <span style={S.hint}>
-              Filters monthly returns to this window. Useful to see how a fund's stats look in the
-              current regime (e.g. Gator post-2020, when its Sharpe rose from 0.69 to 0.87).
+              Clips <b>every selected fund&apos;s μ/σ and the suggested-book CAGR/vol/IR/DD</b> to
+              this start month. &quot;All history&quot; still scores the recommended book on the
+              overlap of names that receive weight (often ADAR1&apos;s 2019 start) — pick 2023 or
+              2025 to force a shorter clock. Then click Run optimizer.
             </span>
           </label>
 
@@ -765,7 +774,15 @@ export function FundAnalysis() {
         </section>
       </div>
 
+      {resultStale && (
+        <div style={S.staleBanner}>
+          History window is now <b>{historyWindowStart ?? "All history"}</b>, but the numbers
+          below were computed for <b>{result?.historyWindowStart ?? "All history"}</b>. Click{" "}
+          <b>Run optimizer</b> to rescore the suggested books.
+        </div>
+      )}
       {result && (
+        <div style={resultStale || optimizeMutation.isPending ? { opacity: 0.55 } : undefined}>
         <ResultView
           result={result}
           assetById={assetById}
@@ -785,6 +802,7 @@ export function FundAnalysis() {
           onRunRobustness={runRobustness}
           isRobustnessRunning={robustnessMutation.isPending}
         />
+        </div>
       )}
       {optimizeMutation.isError && (
         <div style={S.err}>{(optimizeMutation.error as Error).message}</div>
@@ -995,10 +1013,12 @@ function ResultView({
           {hasCurrent && <> · <strong>Current:</strong> {CURRENCY(result.currentTotal)} · <strong>New capital:</strong> {CURRENCY(result.newCapital)}</>}
         </div>
         <div>
-          <strong>Score window (held names):</strong>{" "}
+          <strong>Requested filter:</strong> {result.historyWindowStart ?? "All history"}
+          {"  ·  "}
+          <strong>Scored:</strong>{" "}
           {result.scoreWindowStart && result.scoreWindowEnd
             ? `${result.scoreWindowStart} → ${result.scoreWindowEnd} (${result.scoreWindowMonths} mo)`
-            : `${historyWindowStart ?? "All"} · ${result.effectiveWindowMonths} months`}
+            : `${result.effectiveWindowMonths} months`}
           {result.recommended && (
             <>
               {" "}· {result.recommended.nNames} names
@@ -1007,6 +1027,7 @@ function ResultView({
             </>
           )}
         </div>
+        {result.windowNote && <p style={{ ...S.hint, margin: "8px 0 0" }}>{result.windowNote}</p>}
       </section>
 
       {result.recommended && (
@@ -1019,7 +1040,7 @@ function ResultView({
           </p>
           <PortfolioCard
             title="Recommended book"
-            subtitle={`${result.scoreWindowStart ?? "?"} → ${result.scoreWindowEnd ?? "?"} (${result.scoreWindowMonths} mo)`}
+            subtitle={`Filter ${result.historyWindowStart ?? "all"} · scored ${result.scoreWindowStart ?? "?"} → ${result.scoreWindowEnd ?? "?"} (${result.scoreWindowMonths} mo)`}
             portfolio={result.recommended}
             totalCapital={result.totalCapital}
             currentInv={result.currentInvestments}
@@ -1117,11 +1138,11 @@ function ResultView({
       </div>
 
       <div style={S.grid5}>
-        <PortfolioCard title="Max Sharpe" subtitle="Best risk-adjusted (vs. RF)" portfolio={result.maxSharpe} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#dc2626" />
-        <PortfolioCard title="Max Sortino" subtitle="Best downside-adjusted" portfolio={result.maxSortino} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#7c3aed" />
-        <PortfolioCard title="Max Info Ratio" subtitle={`Best active alpha vs ${result.benchmarkName.split(" ")[0]}`} portfolio={result.maxInformationRatio} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#ea580c" />
-        <PortfolioCard title="Min Variance" subtitle="Lowest vol" portfolio={result.minVariance} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#059669" />
-        <PortfolioCard title="Min Drawdown" subtitle="Smallest historical loss" portfolio={result.minDrawdown} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#0891b2" />
+        <PortfolioCard title="Max Sharpe" subtitle={`${result.maxSharpe.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.maxSharpe} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#dc2626" />
+        <PortfolioCard title="Max Sortino" subtitle={`${result.maxSortino.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.maxSortino} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#7c3aed" />
+        <PortfolioCard title="Max Info Ratio" subtitle={`${result.maxInformationRatio.scoreWindowMonths ?? "?"} mo vs ${result.benchmarkName.split(" ")[0]}`} portfolio={result.maxInformationRatio} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#ea580c" />
+        <PortfolioCard title="Min Variance" subtitle={`${result.minVariance.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.minVariance} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#059669" />
+        <PortfolioCard title="Min Drawdown" subtitle={`${result.minDrawdown.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.minDrawdown} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#0891b2" />
       </div>
 
       <section style={S.card}>
@@ -2804,6 +2825,15 @@ const S: Record<string, React.CSSProperties> = {
   },
   warn: { color: "#b45309", fontSize: "0.7rem", marginTop: 4 },
   err: { background: "#fee2e2", color: "#991b1b", padding: 12, borderRadius: 6, marginBottom: 16 },
+  staleBanner: {
+    background: "#fef3c7",
+    border: "1px solid #f59e0b",
+    color: "#92400e",
+    borderRadius: 8,
+    padding: "10px 14px",
+    marginBottom: 12,
+    fontSize: "0.85rem",
+  },
   statGrid: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, marginBottom: 8 },
   statGridSmall: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 3, marginBottom: 8 },
   statGridWide: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 6 },
