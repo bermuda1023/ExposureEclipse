@@ -13,6 +13,9 @@ Design rules (personal multi-fund use)
   name is excluded (not stub-sized). Existing holdings are grandfathered.
 * **New-cash mode**: existing holdings fixed; sample only free-weight on
   new capital (true “where does new money go?”).
+* **Cash**: residual only (unfilled tickets / caps). Not a Dirichlet sleeve —
+  max Sharpe is indifferent to mixing T-bills with the tangency book, so
+  sampling cash invented a ~10% cash line that did not improve Sharpe.
 """
 
 from __future__ import annotations
@@ -598,6 +601,69 @@ def _absorb_mass(weights: dict[str, float], mass: float) -> dict[str, float] | N
     return {a: v / s for a, v in w.items()}
 
 
+def _fund_cap_room(
+    weights: dict[str, float],
+    max_weights: dict[str, float],
+    *,
+    held_only: bool,
+) -> dict[str, float]:
+    room: dict[str, float] = {}
+    for a, wt in weights.items():
+        if a == CASH_ID:
+            continue
+        if held_only and wt <= 1e-9:
+            continue
+        cap = max_weights.get(a, 1.0)
+        r = cap - wt
+        if r > 1e-12:
+            room[a] = r
+    return room
+
+
+def _drain_cash_into_funds(
+    weights: dict[str, float],
+    max_weights: dict[str, float],
+    *,
+    max_names: int | None = None,
+    illiquid_set: set[str] | None = None,
+    max_illiquid_weight: float = 1.0,
+) -> dict[str, float]:
+    """Move residual cash into funds that still have cap room.
+
+    Only top up names already held (opening a zero-weight name recreates
+    sub-ticket stubs). Do not pour cash back into the illiquid sleeve past
+    its cap. Leftover cash stays only when nothing else can legally take it.
+    """
+    w = dict(weights)
+    cash = w.get(CASH_ID, 0.0)
+    if cash <= 1e-12:
+        return w
+    room = _fund_cap_room(w, max_weights, held_only=True)
+    illiquid_set = illiquid_set or set()
+    if illiquid_set and max_illiquid_weight < 1.0 - 1e-9:
+        illiq_now = sum(w.get(a, 0.0) for a in illiquid_set)
+        illiq_room = max(0.0, max_illiquid_weight - illiq_now)
+        if illiq_room <= 1e-12:
+            room = {a: r for a, r in room.items() if a not in illiquid_set}
+        else:
+            illiq_room_sum = sum(r for a, r in room.items() if a in illiquid_set)
+            if illiq_room_sum > illiq_room + 1e-12:
+                scale = illiq_room / illiq_room_sum
+                room = {
+                    a: (r * scale if a in illiquid_set else r) for a, r in room.items()
+                }
+    if not room:
+        return w
+    room_sum = sum(room.values())
+    if room_sum <= 1e-12:
+        return w
+    take = min(cash, room_sum)
+    for a, r in room.items():
+        w[a] = w.get(a, 0.0) + take * (r / room_sum)
+    w[CASH_ID] = cash - take
+    return w
+
+
 def enforce_min_investments(
     weights: dict[str, float],
     total_capital: float,
@@ -652,6 +718,9 @@ def project_max_weights(
         for a in over:
             w[a] = max_weights[a]
         free = [a for a in w if a not in over and w[a] < max_weights.get(a, 1.0) - 1e-12]
+        fund_free = [a for a in free if a != CASH_ID]
+        if fund_free:
+            free = fund_free
         if not free:
             return None
         room = {a: max_weights.get(a, 1.0) - w[a] for a in free}
@@ -777,6 +846,13 @@ def _finalize_feasible_weights(
         if projected is None:
             return None
         w = projected
+        w = _drain_cash_into_funds(
+            w,
+            max_weights,
+            max_names=max_names,
+            illiquid_set=illiquid_set,
+            max_illiquid_weight=max_illiquid_weight,
+        )
 
         if total_capital > 0 and min_investment_dollars:
             w, _dropped = enforce_min_investments(
@@ -813,6 +889,13 @@ def _finalize_feasible_weights(
         if capped is None:
             return None
         w = capped
+        w = _drain_cash_into_funds(
+            w,
+            max_weights,
+            max_names=max_names,
+            illiquid_set=illiquid_set,
+            max_illiquid_weight=max_illiquid_weight,
+        )
 
         key = tuple(sorted((a, round(wt, 8)) for a, wt in w.items() if wt > 1e-9))
         if key == prev:
@@ -953,8 +1036,10 @@ def compute_frontier(
                     rng.shuffle(picked)
                     picked = picked[:slots]
             chosen = must + picked
-            if CASH_ID in free_ids:
-                chosen = chosen + [CASH_ID]
+            # Cash is a residual sleeve (ticket/cap leftover), not a sampled
+            # asset. Mixing T-bills with the tangency book does not raise
+            # Sharpe, so putting cash in the Dirichlet draw just invented a
+            # 1/(n+1) cash line on max-Sharpe books.
             if min_investment_dollars and total_capital > 0:
                 chosen = [
                     a for a in chosen

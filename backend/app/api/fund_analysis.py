@@ -139,7 +139,8 @@ class OptimizeRequest(CamelModel):
         description="Default per-hedge-fund cap when no explicit maxWeights row is sent.",
     )
     max_illiquid_weight: float = Field(
-        0.50, ge=0, le=1.0, description="Max weight in funds with ≥12mo lockup",
+        1.0, ge=0, le=1.0,
+        description="Max weight in funds with ≥12mo lockup. Default 1.0 (no cap) for a hold-forever book.",
     )
     allow_cash: bool = Field(True, description="Permit leftover cash at the risk-free rate")
     objective: str = Field(
@@ -247,7 +248,7 @@ class OptimizeResponse(CamelModel):
     benchmark_window_series: AssetSeriesOut | None = None
     fof_fee: float = 0.0
     max_names: int = 8
-    max_illiquid_weight: float = 0.5
+    max_illiquid_weight: float = 1.0
     window_note: str | None = None
 
 
@@ -505,7 +506,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
         a for a in req.asset_ids if is_illiquid_lockup(idx[a].get("lockup"))
     ]
     max_names = int(getattr(req, "max_names", 8) or 8)
-    max_illiquid_weight = float(getattr(req, "max_illiquid_weight", 0.5) or 0.5)
+    max_illiquid_weight = float(getattr(req, "max_illiquid_weight", 1.0) or 1.0)
 
     frontier, max_sharpe, min_var, max_sortino, min_dd, max_ir = compute_frontier(
         stats=stats,
@@ -1313,7 +1314,7 @@ class RobustnessRequest(CamelModel):
     net_of_fees: bool = False
     fof_fee: float = 0.0
     max_names: int = 8
-    max_illiquid_weight: float = 0.50
+    max_illiquid_weight: float = 1.0
     allow_cash: bool = True
     default_max_weight: float = 0.25
     samples_per_scenario: int = Field(
@@ -1426,7 +1427,7 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
     allow_cash = bool(getattr(req, "allow_cash", True))
     fof_fee = float(getattr(req, "fof_fee", 0.0) or 0.0)
     max_names = int(getattr(req, "max_names", 8) or 8)
-    max_illiquid_weight = float(getattr(req, "max_illiquid_weight", 0.5) or 0.5)
+    max_illiquid_weight = float(getattr(req, "max_illiquid_weight", 1.0) or 1.0)
 
     def _fee_r(a: str) -> float:
         if not getattr(req, "net_of_fees", False):

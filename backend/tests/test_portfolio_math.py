@@ -240,6 +240,62 @@ def test_finalize_drops_subticket_after_illiquid_scale() -> None:
     ) == []
 
 
+def test_max_sharpe_does_not_hold_strategic_cash() -> None:
+    """Four names at a 25% cap can fill the book; cash must stay residual (~0)."""
+    months = _long_months()
+    ids = ["a", "b", "c", "d"]
+    series = {
+        i: _series(i, {m: r * (0.8 + 0.15 * n) for m, r in months.items()})
+        for n, i in enumerate(ids)
+    }
+    stats = {k: compute_asset_stats(v) for k, v in series.items()}
+    rho, _ = correlation_matrix(series)
+    inject_cash(stats, rho, series, 0.04)
+    _f, max_s, *_ = compute_frontier(
+        stats=stats,
+        rho=rho,
+        series_by_id=series,
+        risk_free_rate=0.04,
+        max_weights={i: 0.25 for i in ids},
+        min_investment_dollars={i: 0.0 for i in ids},
+        total_capital=1_000_000,
+        samples=2500,
+        seed=11,
+        max_names=8,
+        max_illiquid_weight=1.0,
+    )
+    assert max_s.weights.get(CASH_ID, 0.0) < 0.02, max_s.weights
+    invested = sum(max_s.weights.get(i, 0.0) for i in ids)
+    assert invested > 0.98
+
+
+def test_cash_leftover_when_caps_cannot_fill_book() -> None:
+    """Three names at 25% can only take 75% — residual cash is legitimate."""
+    months = _long_months()
+    ids = ["a", "b", "c"]
+    series = {
+        i: _series(i, {m: r * (0.9 + 0.1 * n) for m, r in months.items()})
+        for n, i in enumerate(ids)
+    }
+    stats = {k: compute_asset_stats(v) for k, v in series.items()}
+    rho, _ = correlation_matrix(series)
+    inject_cash(stats, rho, series, 0.04)
+    _f, max_s, *_ = compute_frontier(
+        stats=stats,
+        rho=rho,
+        series_by_id=series,
+        risk_free_rate=0.04,
+        max_weights={i: 0.25 for i in ids},
+        min_investment_dollars={i: 0.0 for i in ids},
+        total_capital=1_000_000,
+        samples=2000,
+        seed=11,
+        max_names=8,
+        max_illiquid_weight=1.0,
+    )
+    assert abs(max_s.weights.get(CASH_ID, 0.0) - 0.25) < 0.02, max_s.weights
+
+
 def test_frontier_excludes_name_when_cap_blocks_ticket() -> None:
     months = _long_months()
     series = {

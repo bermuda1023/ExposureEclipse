@@ -176,7 +176,7 @@ export function FundAnalysis() {
   const [netOfFees, setNetOfFees] = useState<boolean>(false);
   const [fofFee, setFofFee] = useState<number>(0);
   const [maxNames, setMaxNames] = useState<number>(8);
-  const [maxIlliquid, setMaxIlliquid] = useState<number>(0.5);
+  const [maxIlliquid, setMaxIlliquid] = useState<number>(1);
   const [allowCash, setAllowCash] = useState<boolean>(true);
   const [objective, setObjective] = useState<"sharpe" | "sortino" | "ir" | "min_dd" | "min_var">("ir");
   const [commonStartCharts, setCommonStartCharts] = useState<boolean>(true);
@@ -602,13 +602,21 @@ export function FundAnalysis() {
 
           <label style={S.label}>
             Max illiquid sleeve (12mo+ lockup)
-            <PercentInput value={maxIlliquid} placeholder="50%" onChange={(v) => setMaxIlliquid(v ?? 0.5)} max={1} />
+            <PercentInput value={maxIlliquid} placeholder="100%" onChange={(v) => setMaxIlliquid(v ?? 1)} max={1} />
+            <span style={S.hint}>
+              Default 100% — lockups are ignored (hold-forever book). Lower this only if you need
+              a redeemable sleeve inside a year.
+            </span>
           </label>
 
           <label style={S.labelRow}>
             <input type="checkbox" checked={allowCash} onChange={(e) => setAllowCash(e.target.checked)} />
-            Allow leftover cash (earns the risk-free rate when a ticket does not fill)
+            Allow leftover cash (only when a ticket or cap cannot be filled)
           </label>
+          <p style={S.hint}>
+            Not a target allocation. You will see cash only if remaining dollars cannot fill a
+            legal ticket under the concentration cap.
+          </p>
 
           <label style={S.label}>
             Your FoF overlay fee (annual)
