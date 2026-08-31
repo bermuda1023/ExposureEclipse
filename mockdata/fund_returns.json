@@ -6874,7 +6874,7 @@
       "kind": "hedge_fund",
       "strategy": "Global micro-cap value + special situations",
       "manager": "David Waters",
-      "minInvestment": 250000,
+      "minInvestment": 100000,
       "aumMillions": 118.7,
       "fees": "1.5% mgmt / 20% perf, 6% hurdle, HWM",
       "lockup": "1yr",

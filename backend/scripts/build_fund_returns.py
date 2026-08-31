@@ -710,7 +710,7 @@ def main() -> None:
                 "kind": "hedge_fund",
                 "strategy": "Global micro-cap value + special situations",
                 "manager": "David Waters",
-                "minInvestment": 250_000,
+                "minInvestment": 100_000,
                 "aumMillions": 118.7,
                 "fees": "1.5% mgmt / 20% perf, 6% hurdle, HWM",
                 "lockup": "1yr",
