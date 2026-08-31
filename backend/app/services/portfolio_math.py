@@ -431,6 +431,10 @@ def portfolio_monthly_series(
 
 
 MIN_MONTHS_FOR_TAIL_METRICS = 12
+# Path Sharpe / IR used for *ranking* only when the held-name overlap is
+# long enough. A 13-month book that includes Primary Commodity was winning
+# max-IR / max-Sharpe with IR≈4 — that's a lucky year, not a forever FoF.
+MIN_MONTHS_FOR_PATH_RANKING = 36
 SORTINO_MAX = 15.0
 IR_MAX = 15.0
 
@@ -1121,32 +1125,44 @@ def compute_frontier(
         te = 0.0
         realized_cagr = None
         realized_vol = None
-        # Prefer path-based Sharpe when we have enough common history —
-        # same universe as Sortino / DD / IR.
+        n_path = 0
+        # Path Sharpe / IR rank the book only when overlap is long enough.
+        # Sortino / DD still use 12+ months for display.
         if series_by_id is not None:
             monthly_series = portfolio_monthly_series(weights, series_by_id)
             monthly_rets = apply_fof_fee_monthly(
                 [r for _, r in monthly_series], fof_fee
             )
+            n_path = len(monthly_rets)
             monthly_series = [
                 (m, monthly_rets[i]) for i, (m, _) in enumerate(monthly_series)
             ]
-            if len(monthly_rets) >= MIN_MONTHS_FOR_TAIL_METRICS:
-                sortino = sortino_from_monthly(monthly_rets, mar_annual=risk_free_rate)
+            if n_path >= MIN_MONTHS_FOR_TAIL_METRICS:
                 mdd = max_drawdown_from_monthly(monthly_rets)
                 realized_cagr = _cagr(monthly_rets)
                 realized_vol = realized_vol_from_monthly(monthly_rets)
+            if n_path >= MIN_MONTHS_FOR_PATH_RANKING:
+                sortino = sortino_from_monthly(monthly_rets, mar_annual=risk_free_rate)
                 if benchmark_series is not None:
                     ir, te = information_ratio_and_te(monthly_series, benchmark_series)
 
-        if realized_vol is not None and realized_vol > 0 and realized_cagr is not None:
-            # Path Sharpe uses realized CAGR vs path vol (aligned universe).
-            sharpe = (realized_cagr - risk_free_rate) / realized_vol
+        path_ok = (
+            n_path >= MIN_MONTHS_FOR_PATH_RANKING
+            and realized_vol is not None
+            and realized_vol > 0
+            and realized_cagr is not None
+        )
+        if path_ok:
+            sharpe = (realized_cagr - risk_free_rate) / realized_vol  # type: ignore[operator]
             ann_ret_display = realized_cagr
             vol = realized_vol
         else:
             sharpe = (mu - risk_free_rate) / vol_analytical if vol_analytical > 0 else 0.0
-            ann_ret_display = portfolio_display_cagr_blend(weights, stats)
+            ann_ret_display = (
+                realized_cagr
+                if realized_cagr is not None
+                else portfolio_display_cagr_blend(weights, stats)
+            )
             vol = vol_analytical
 
         points.append(

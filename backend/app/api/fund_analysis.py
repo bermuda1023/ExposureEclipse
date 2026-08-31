@@ -718,6 +718,13 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             f"Full history. Recommended book scored on held-name overlap "
             f"{scored} → {rec_out.score_window_end} ({rec_out.score_window_months} mo)."
         )
+    if rec_out.score_window_months and rec_out.score_window_months < 36:
+        short = (
+            f" Only {rec_out.score_window_months} overlapping months — the shortest "
+            f"held name sets the clock. IR/Sharpe ranking ignores path metrics "
+            f"under 36 months so a lucky 13-month sleeve cannot dominate."
+        )
+        _window_note = (_window_note or "") + short
 
     return OptimizeResponse(
         stats=stats_out,
@@ -1324,6 +1331,10 @@ class RobustnessRequest(CamelModel):
         description="Dirichlet draws per (history window × RF). Capped so 12 "
         "frontiers finish under the serverless time budget.",
     )
+    benchmark_asset_id: str = Field(
+        "spy",
+        description="IR benchmark so robustness includes Max IR alongside Sharpe/Sortino.",
+    )
 
 
 class RobustnessRow(CamelModel):
@@ -1350,10 +1361,10 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
     Scenarios varied:
       - History window: full / since 2021 / since 2019 / since 2016
       - Risk-free rate: 2% / 4% / 6%
-      - Objective: Max Sharpe / Max Sortino
-      = 24 scenarios per fund.
+      - Objective: Max Sharpe / Max Sortino / Max IR
+      = 36 books from 12 frontiers.
 
-    A fund's selection_frequency = the fraction of the 24 scenarios
+    A fund's selection_frequency = the fraction of the 36 scenarios
     where the winning portfolio allocates it >5% weight. Classification:
       - core         >= 0.65   (in 2/3+ of scenarios — robust pick)
       - situational  0.25-0.65 (depends on regime)
@@ -1434,11 +1445,14 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
             return 0.0
         return parse_mgmt_fee_drag(idx[a].get("fees"))
 
-    # 12 frontiers (4 windows × 3 RF). Each frontier yields both Sharpe and
-    # Sortino so we still score 24 books. Cap samples — 24 × 6000 draws was
-    # ~33s locally and died on Vercel's 30s maxDuration with no UI error.
+    # 12 frontiers (4 windows × 3 RF). Each frontier yields Sharpe, Sortino,
+    # and IR so we score 36 books without extra sampling.
     samples = min(int(req.samples_per_scenario or 1500), 2500)
     full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
+    bench_id = getattr(req, "benchmark_asset_id", None) or "spy"
+    if bench_id not in idx:
+        bench_id = "spy" if "spy" in idx else next(iter(idx))
+    bench_full = series_from_asset_json(idx[bench_id])
 
     windows: list[tuple[str, str | None]] = [
         ("Full history", None),
@@ -1484,10 +1498,12 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
             series_by_id = dict(series_base)
             if allow_cash:
                 inject_cash(stats, rho, series_by_id, rf)
-            _frontier, max_sharpe, _min_var, max_sortino, _min_dd, _max_ir = compute_frontier(
+            bench = bench_full.since(w_start) if w_start else bench_full
+            _frontier, max_sharpe, _min_var, max_sortino, _min_dd, max_ir = compute_frontier(
                 stats=stats,
                 rho=rho,
                 series_by_id=series_by_id,
+                benchmark_series=bench,
                 risk_free_rate=rf,
                 min_weights=soft_min,
                 hard_min_weights=hard_min_weights,
@@ -1506,6 +1522,10 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
             _record(
                 f"{w_label} · {rf_label} · Max Sortino",
                 max_sortino if max_sortino is not None else max_sharpe,
+            )
+            _record(
+                f"{w_label} · {rf_label} · Max IR",
+                max_ir if max_ir is not None else max_sharpe,
             )
 
     def _median(xs: list[float]) -> float:

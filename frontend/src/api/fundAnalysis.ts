@@ -251,6 +251,7 @@ export interface RobustnessRequest {
   /** New dollars to deploy (added to current holdings). */
   newCapital: number;
   samplesPerScenario: number;
+  benchmarkAssetId?: string;
 }
 
 export interface RobustnessRow {

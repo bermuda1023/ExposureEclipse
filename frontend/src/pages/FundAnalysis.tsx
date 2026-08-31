@@ -230,6 +230,7 @@ export function FundAnalysis() {
       maxIlliquidWeight: maxIlliquid,
       allowCash,
       defaultMaxWeight: DEFAULT_HF_CAP,
+      benchmarkAssetId,
     });
   };
 
@@ -1075,9 +1076,12 @@ function ResultView({
         <section style={{ ...S.card, borderColor: "#1e40af", boxShadow: "0 0 0 1px #1e40af33" }}>
           <h2 style={S.h2}>Recommended FoF ({result.objective === "ir" ? "max IR vs benchmark" : result.objective})</h2>
           <p style={S.hint}>
-            Scored on the overlapping months of names that actually receive weight — not the longest
-            fund in the picker. Short-track μ is shrunk toward 8%; hedge funds are capped at 25% unless
-            you override; GP fees are not double-counted.
+            {result.objective === "ir"
+              ? "This is the same book as Max Info Ratio below — not Max Sharpe/Sortino. "
+              : "This is the winning book for the objective you selected. "}
+            Scored on the overlapping months of names that actually receive weight. Path IR/Sharpe
+            only rank books with ≥36 months of overlap, so a 13-month name cannot lottery-win the FoF.
+            Short-track μ is shrunk toward 8%; hedge funds are capped at 25% unless you override.
           </p>
           <PortfolioCard
             title="Recommended book"
@@ -1681,7 +1685,7 @@ function RobustnessCard({
         <div>
           <h2 style={S.h2}>Fund robustness scan</h2>
           <p style={S.hint}>
-            Runs the optimizer across <b>24 books</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino) and reports how often each fund appears in the winning portfolio. Uses <b>all your current settings</b> — overrides, min investments, concentration caps, current holdings, and no-sell if on. Typically a few seconds.
+            Runs the optimizer across <b>36 books</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino + Max IR). CORE means the fund is in the winning book in ≥2/3 of those runs — it is <b>not</b> the same thing as appearing in this page&apos;s Max Sharpe card (that card is one window and one RF). Uses your current caps, tickets, and holdings.
           </p>
         </div>
         <button
@@ -1744,7 +1748,7 @@ function RobustnessTable({
     peripheral: "PERIPHERAL",
   };
   const CLASS_HINT: Record<string, string> = {
-    core: "In ≥ 2/3 of scenarios — pick with confidence",
+    core: "In ≥ 2/3 of Sharpe/Sortino/IR × window × RF runs",
     situational: "Regime-dependent — only helps under specific assumptions",
     peripheral: "Rarely helps — dominated by other funds",
   };
@@ -1782,6 +1786,15 @@ function RobustnessTable({
               <td style={{ ...S.td, fontWeight: 600, color: ASSET_COLOR[r.assetId] }}>
                 {assetById[r.assetId]?.name ?? r.assetId}
                 {isHeld && <span style={{ ...S.forcedPill, marginLeft: 6 }} title="You currently hold this fund">🔒 held</span>}
+                {r.scenariosSelected?.length > 0 && (
+                  <div
+                    style={{ fontSize: "0.6rem", color: "#64748b", fontWeight: 400, marginTop: 2 }}
+                    title={r.scenariosSelected.join("\n")}
+                  >
+                    e.g. {r.scenariosSelected[0]}
+                    {r.scenariosSelected.length > 1 ? ` +${r.scenariosSelected.length - 1}` : ""}
+                  </div>
+                )}
               </td>
               <td style={S.td}>
                 <span style={{ ...S.chip, background: CLASS_TINT[r.classification], fontSize: "0.6rem" }}>

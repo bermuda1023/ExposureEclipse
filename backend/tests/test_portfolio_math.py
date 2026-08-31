@@ -446,13 +446,42 @@ def test_robustness_scan_returns_24_scenarios() -> None:
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["totalScenarios"] == 24
+    assert body["totalScenarios"] == 36
+    assert any("Max IR" in lab for lab in body.get("scenarioLabels", []))
     ids = {row["assetId"] for row in body["rows"]}
     assert ids == {"gator", "bireme", "spy"}
     bireme = next(row for row in body["rows"] if row["assetId"] == "bireme")
     # 25% of $1M is below the $500k ticket — never selected.
     assert bireme["maxWeight"] < 1e-6
     assert bireme["selectionFrequency"] == 0.0
+
+
+def test_path_ir_requires_36_months_of_overlap() -> None:
+    """A 13-month sleeve must not win max-IR with a lottery IR of 3+."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    c = TestClient(app)
+    r = c.post(
+        "/api/fund-analysis/optimize",
+        json={
+            "assetIds": ["primary_commodity", "orbis_equity", "spy", "agg"],
+            "newCapital": 1_000_000,
+            "samples": 2500,
+            "objective": "ir",
+            "netOfFees": False,
+            "allowCash": True,
+            "respectMinInvestment": True,
+            "defaultMaxWeight": 0.25,
+        },
+    )
+    assert r.status_code == 200, r.text
+    rec = r.json()["recommended"]
+    ir_card = r.json()["maxInformationRatio"]
+    assert rec["weights"].get("orbis_equity", 0) == ir_card["weights"].get("orbis_equity", 0)
+    # If the book includes Primary, overlap is ~13 months and path IR is not used.
+    if rec.get("scoreWindowMonths", 99) < 36:
+        assert rec["informationRatio"] == 0.0
 
 
 def test_custom_portfolio_cash_does_not_500_and_drops_stub() -> None:
