@@ -367,6 +367,38 @@ def test_optimize_api_never_stubs_bireme_or_adar1_on_1m_book() -> None:
         assert book["violatesMinInvestment"] == []
 
 
+def test_robustness_scan_returns_24_scenarios() -> None:
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    c = TestClient(app)
+    r = c.post(
+        "/api/fund-analysis/robustness",
+        json={
+            "assetIds": ["gator", "bireme", "spy"],
+            "newCapital": 1_000_000,
+            "samplesPerScenario": 500,
+            "respectMinInvestment": True,
+            "allowCash": True,
+            "defaultMaxWeight": 0.25,
+            "currentInvestments": [],
+            "overrides": [],
+            "maxWeights": [],
+            "minInvestmentOverrides": [],
+            "noSell": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["totalScenarios"] == 24
+    ids = {row["assetId"] for row in body["rows"]}
+    assert ids == {"gator", "bireme", "spy"}
+    bireme = next(row for row in body["rows"] if row["assetId"] == "bireme")
+    # 25% of $1M is below the $500k ticket — never selected.
+    assert bireme["maxWeight"] < 1e-6
+    assert bireme["selectionFrequency"] == 0.0
+
+
 def test_custom_portfolio_cash_does_not_500_and_drops_stub() -> None:
     from fastapi.testclient import TestClient
     from app.main import app

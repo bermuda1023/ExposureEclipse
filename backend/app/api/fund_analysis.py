@@ -1316,7 +1316,13 @@ class RobustnessRequest(CamelModel):
     max_illiquid_weight: float = 0.50
     allow_cash: bool = True
     default_max_weight: float = 0.25
-    samples_per_scenario: int = Field(8_000, ge=1_000, le=30_000)
+    samples_per_scenario: int = Field(
+        1_500,
+        ge=400,
+        le=8_000,
+        description="Dirichlet draws per (history window × RF). Capped so 12 "
+        "frontiers finish under the serverless time budget.",
+    )
 
 
 class RobustnessRow(CamelModel):
@@ -1405,84 +1411,101 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
             if current_by_id.get(a, 0) > 0:
                 hard_min_weights[a] = min(1.0, current_by_id[a] / total_capital)
 
+    default_cap = float(getattr(req, "default_max_weight", 0.25) or 0.25)
+    for a in req.asset_ids:
+        if a not in max_w_map and idx[a].get("kind") == "hedge_fund":
+            max_w_map[a] = default_cap
+
+    soft_min: dict[str, float] = {}
+    if req.respect_min_investment:
+        for a in req.asset_ids:
+            if effective_min_inv[a] > 0:
+                soft_min[a] = min(1.0, effective_min_inv[a] / total_capital)
+    min_inv_solver = effective_min_inv if req.respect_min_investment else {}
+    illiq = [a for a in req.asset_ids if is_illiquid_lockup(idx[a].get("lockup"))]
+    allow_cash = bool(getattr(req, "allow_cash", True))
+    fof_fee = float(getattr(req, "fof_fee", 0.0) or 0.0)
+    max_names = int(getattr(req, "max_names", 8) or 8)
+    max_illiquid_weight = float(getattr(req, "max_illiquid_weight", 0.5) or 0.5)
+
+    def _fee_r(a: str) -> float:
+        if not getattr(req, "net_of_fees", False):
+            return 0.0
+        return parse_mgmt_fee_drag(idx[a].get("fees"))
+
+    # 12 frontiers (4 windows × 3 RF). Each frontier yields both Sharpe and
+    # Sortino so we still score 24 books. Cap samples — 24 × 6000 draws was
+    # ~33s locally and died on Vercel's 30s maxDuration with no UI error.
+    samples = min(int(req.samples_per_scenario or 1500), 2500)
+    full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
+
     windows: list[tuple[str, str | None]] = [
         ("Full history", None),
         ("Since 2021", "2021-01"),
         ("Since 2019", "2019-01"),
         ("Since 2016", "2016-01"),
     ]
-    rf_rates = [(f"RF {int(rf*100)}%", rf) for rf in (0.02, 0.04, 0.06)]
-    objectives = [("Max Sharpe", "sharpe"), ("Max Sortino", "sortino")]
+    rf_rates = [(f"RF {int(rf * 100)}%", rf) for rf in (0.02, 0.04, 0.06)]
 
     scenario_labels: list[str] = []
-    # Track weights per scenario per fund
     weights_matrix: dict[str, list[float]] = {a: [] for a in req.asset_ids}
     selected_in: dict[str, list[str]] = {a: [] for a in req.asset_ids}
 
     THRESHOLD = 0.05
 
+    def _record(label: str, picked) -> None:
+        scenario_labels.append(label)
+        for a in req.asset_ids:
+            w = picked.weights.get(a, 0.0) if picked is not None else 0.0
+            weights_matrix[a].append(w)
+            if w > THRESHOLD:
+                selected_in[a].append(label)
+
     for w_label, w_start in windows:
+        series_base = {
+            a: (full_series[a].since(w_start) if w_start else full_series[a])
+            for a in req.asset_ids
+        }
+        empirical = {
+            a: compute_asset_stats(series_base[a], fee_drag=_fee_r(a))
+            for a in req.asset_ids
+        }
+        stats_base = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
+        for a in req.asset_ids:
+            ov = ov_by_id.get(a)
+            if ov is None or ov.annualised_return is None:
+                stats_base[a] = apply_mu_shrink(stats_base[a])
+        rho_base, _ = correlation_matrix(series_base, ov_by_id)
+
         for rf_label, rf in rf_rates:
-            for obj_label, obj in objectives:
-                label = f"{w_label} · {rf_label} · {obj_label}"
-
-                # Build series + stats for this window
-                full_series = {a: series_from_asset_json(idx[a]) for a in req.asset_ids}
-                series_by_id = {a: (full_series[a].since(w_start) if w_start else full_series[a]) for a in req.asset_ids}
-                def _fee_r(a: str) -> float:
-                    if not getattr(req, "net_of_fees", False):
-                        return 0.0
-                    return parse_mgmt_fee_drag(idx[a].get("fees"))
-
-                empirical = {
-                    a: compute_asset_stats(series_by_id[a], fee_drag=_fee_r(a))
-                    for a in req.asset_ids
-                }
-                stats = {a: _apply_overrides(empirical[a], ov_by_id.get(a)) for a in req.asset_ids}
-                for a in req.asset_ids:
-                    ov = ov_by_id.get(a)
-                    if ov is None or ov.annualised_return is None:
-                        stats[a] = apply_mu_shrink(stats[a])
-                rho, _ = correlation_matrix(series_by_id, ov_by_id)
-                if getattr(req, "allow_cash", True):
-                    inject_cash(stats, rho, series_by_id, rf)
-
-                soft_min: dict[str, float] = {}
-                if req.respect_min_investment:
-                    for a in req.asset_ids:
-                        if effective_min_inv[a] > 0:
-                            soft_min[a] = min(1.0, effective_min_inv[a] / total_capital)
-
-                min_inv_solver = effective_min_inv if req.respect_min_investment else {}
-                illiq = [a for a in req.asset_ids if is_illiquid_lockup(idx[a].get("lockup"))]
-                for a in req.asset_ids:
-                    if a not in max_w_map and idx[a].get("kind") == "hedge_fund":
-                        max_w_map[a] = getattr(req, "default_max_weight", 0.25)
-                frontier, max_sharpe, min_var, max_sortino, min_dd, _max_ir = compute_frontier(
-                    stats=stats,
-                    rho=rho,
-                    series_by_id=series_by_id,
-                    risk_free_rate=rf,
-                    min_weights=soft_min,
-                    hard_min_weights=hard_min_weights,
-                    max_weights=max_w_map,
-                    min_investment_dollars=min_inv_solver,
-                    total_capital=total_capital,
-                    free_weight=free_weight,
-                    fixed_weights=fixed_weights if fixed_weights else None,
-                    samples=req.samples_per_scenario,
-                    max_names=int(getattr(req, "max_names", 8) or 8),
-                    illiquid_ids=illiq,
-                    max_illiquid_weight=float(getattr(req, "max_illiquid_weight", 0.5) or 0.5),
-                    fof_fee=float(getattr(req, "fof_fee", 0.0) or 0.0),
-                )
-                picked = max_sharpe if obj == "sharpe" else (max_sortino if max_sortino is not None else max_sharpe)
-                scenario_labels.append(label)
-                for a in req.asset_ids:
-                    w = picked.weights.get(a, 0.0)
-                    weights_matrix[a].append(w)
-                    if w > THRESHOLD:
-                        selected_in[a].append(label)
+            stats = dict(stats_base)
+            rho = {i: dict(row) for i, row in rho_base.items()}
+            series_by_id = dict(series_base)
+            if allow_cash:
+                inject_cash(stats, rho, series_by_id, rf)
+            _frontier, max_sharpe, _min_var, max_sortino, _min_dd, _max_ir = compute_frontier(
+                stats=stats,
+                rho=rho,
+                series_by_id=series_by_id,
+                risk_free_rate=rf,
+                min_weights=soft_min,
+                hard_min_weights=hard_min_weights,
+                max_weights=max_w_map,
+                min_investment_dollars=min_inv_solver,
+                total_capital=total_capital,
+                free_weight=free_weight,
+                fixed_weights=fixed_weights if fixed_weights else None,
+                samples=samples,
+                max_names=max_names,
+                illiquid_ids=illiq,
+                max_illiquid_weight=max_illiquid_weight,
+                fof_fee=fof_fee,
+            )
+            _record(f"{w_label} · {rf_label} · Max Sharpe", max_sharpe)
+            _record(
+                f"{w_label} · {rf_label} · Max Sortino",
+                max_sortino if max_sortino is not None else max_sharpe,
+            )
 
     def _median(xs: list[float]) -> float:
         if not xs:

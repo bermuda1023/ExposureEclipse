@@ -224,7 +224,7 @@ export function FundAnalysis() {
         .filter(([id]) => selected.has(id))
         .map(([assetId, minInvestment]) => ({ assetId, minInvestment })),
       newCapital,
-      samplesPerScenario: 6000,
+      samplesPerScenario: 1500,
       fofFee,
       maxNames,
       maxIlliquidWeight: maxIlliquid,
@@ -234,6 +234,7 @@ export function FundAnalysis() {
   };
 
   const runOptimize = () => {
+    robustnessMutation.reset();
     optimizeMutation.mutate({
       assetIds: [...selected],
       newCapital,
@@ -826,6 +827,11 @@ export function FundAnalysis() {
           robustness={robustnessMutation.data}
           onRunRobustness={runRobustness}
           isRobustnessRunning={robustnessMutation.isPending}
+          robustnessError={
+            robustnessMutation.isError
+              ? (robustnessMutation.error as Error).message
+              : null
+          }
         />
         </div>
       )}
@@ -959,6 +965,7 @@ function ResultView({
   robustness,
   onRunRobustness,
   isRobustnessRunning,
+  robustnessError,
 }: {
   result: OptimizeResponse;
   assetById: Record<string, FundAsset>;
@@ -975,6 +982,7 @@ function ResultView({
   robustness: RobustnessResponse | undefined;
   onRunRobustness: () => void;
   isRobustnessRunning: boolean;
+  robustnessError: string | null;
 }) {
   const capital = result.totalCapital;
   const hasCurrent = result.currentTotal > 0;
@@ -1116,6 +1124,7 @@ function ResultView({
         assetById={assetById}
         onRun={onRunRobustness}
         isRunning={isRobustnessRunning}
+        error={robustnessError}
         heldAssetIds={new Set(
           Object.entries(result.currentInvestments)
             .filter(([, v]) => v > 0)
@@ -1648,12 +1657,14 @@ function RobustnessCard({
   assetById,
   onRun,
   isRunning,
+  error,
   heldAssetIds,
 }: {
   data: RobustnessResponse | undefined;
   assetById: Record<string, FundAsset>;
   onRun: () => void;
   isRunning: boolean;
+  error: string | null;
   heldAssetIds: Set<string>;
 }) {
   return (
@@ -1662,7 +1673,7 @@ function RobustnessCard({
         <div>
           <h2 style={S.h2}>Fund robustness scan</h2>
           <p style={S.hint}>
-            Runs the optimizer across <b>24 scenarios</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino) and reports how often each fund appears in the winning portfolio. Uses <b>all your current settings</b> — overrides, min investments, concentration caps, current holdings, and no-sell if on.
+            Runs the optimizer across <b>24 books</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino) and reports how often each fund appears in the winning portfolio. Uses <b>all your current settings</b> — overrides, min investments, concentration caps, current holdings, and no-sell if on. Typically a few seconds.
           </p>
         </div>
         <button
@@ -1670,9 +1681,10 @@ function RobustnessCard({
           disabled={isRunning}
           style={{ ...S.primaryBtn, width: "auto", padding: "8px 16px" }}
         >
-          {isRunning ? "Scanning… (~7s)" : data ? "Re-run scan" : "Run robustness scan"}
+          {isRunning ? "Scanning…" : data ? "Re-run scan" : "Run robustness scan"}
         </button>
       </div>
+      {error && <div style={{ ...S.err, marginTop: 8 }}>{error}</div>}
       {heldAssetIds.size > 0 && (
         <div style={S.calloutInfo}>
           ⚠ <b>Heads up:</b> you have {heldAssetIds.size} current position(s). If <b>no-sell</b> is on, held
