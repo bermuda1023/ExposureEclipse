@@ -6,7 +6,8 @@
  * HurricaneImpactPanel which lives bottom-left.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchEnsembleRisk,
@@ -48,6 +49,11 @@ import { useViewStore } from "../../state/view";
 export function LiveStormPanel() {
   const open = useLiveStormStore((s) => s.pickerOpen);
   const setPickerOpen = useLiveStormStore((s) => s.setPickerOpen);
+  const collapsed = useLiveStormStore((s) => s.collapsed);
+  const setCollapsed = useLiveStormStore((s) => s.setCollapsed);
+  const pushedToDetail = useLiveStormStore((s) => s.pushedToDetail);
+  const pushToDetail = useLiveStormStore((s) => s.pushToDetail);
+  const popFromDetail = useLiveStormStore((s) => s.popFromDetail);
   const list = useQuery({
     queryKey: ["live-storms-list"],
     queryFn: fetchLiveStormList,
@@ -61,6 +67,24 @@ export function LiveStormPanel() {
   const scope = useEffectiveScope();
   const perils = useViewStore((s) => s.perils);
   const filters = useFiltersStore();
+  const [detailSlot, setDetailSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!pushedToDetail) {
+      setDetailSlot(null);
+      return;
+    }
+    let n = 0;
+    const id = window.setInterval(() => {
+      const el = document.getElementById("live-storm-detail-slot");
+      if (el) {
+        setDetailSlot(el);
+        window.clearInterval(id);
+      } else if (++n > 40) {
+        window.clearInterval(id);
+      }
+    }, 40);
+    return () => window.clearInterval(id);
+  }, [pushedToDetail]);
 
   // Trigger the existing historical-impact flow on the live storm — same
   // engine (R64 asymmetric capture, per-programme TIV breakdown). Pushes
@@ -245,23 +269,94 @@ export function LiveStormPanel() {
     }
   };
 
-  if (!open) return null;
+  const inDetail = pushedToDetail && !!detailSlot;
+  if (pushedToDetail && !detailSlot) return null;
+  if (!inDetail && !open) return null;
 
-  return (
+  const stormLabel = store.data?.storm.name ?? (activeId ? activeId : "Live storm");
+
+  const headerBtn: CSSProperties = {
+    all: "unset",
+    cursor: "pointer",
+    padding: "2px 8px",
+    borderRadius: 4,
+    border: "1px solid var(--ink-300)",
+    fontSize: "0.68rem",
+    color: "var(--ink-700)",
+    fontWeight: 600,
+  };
+
+  if (!inDetail && collapsed) {
+    return (
+      <div
+        style={{
+          position: "absolute",
+          top: 14,
+          left: 14,
+          zIndex: 7,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 10px",
+          background: "rgba(255,255,255,0.96)",
+          border: "1px solid var(--ink-300)",
+          borderRadius: "var(--radius-sm)",
+          boxShadow: "var(--shadow-md)",
+          fontSize: "0.72rem",
+          fontWeight: 600,
+          color: "var(--ink-800)",
+        }}
+      >
+        <span style={{ color: "#0891b2" }}>●</span>
+        {stormLabel}
+        <button type="button" style={headerBtn} onClick={() => setCollapsed(false)} title="Expand panel">
+          Expand
+        </button>
+        <button
+          type="button"
+          style={headerBtn}
+          onClick={pushToDetail}
+          title="Move this panel to the Detail rail — map stays clear"
+        >
+          → detail
+        </button>
+        <button
+          type="button"
+          onClick={() => { fullyClearLiveStorm(); setPickerOpen(false); }}
+          style={{ ...headerBtn, border: "none" }}
+          title="Clear storm overlays"
+        >
+          ✕
+        </button>
+      </div>
+    );
+  }
+
+  const panel = (
     <div
-      style={{
-        position: "absolute",
-        top: 14,
-        left: 14,
-        width: 360,
-        zIndex: 7,
-        background: "rgba(255,255,255,0.97)",
-        border: "1px solid var(--ink-300)",
-        borderRadius: "var(--radius-md)",
-        boxShadow: "var(--shadow-lg)",
-        fontSize: "0.75rem",
-        overflow: "hidden",
-      }}
+      style={
+        inDetail
+          ? {
+              fontSize: "0.75rem",
+              background: "var(--ink-0)",
+              border: "1px solid var(--ink-200)",
+              borderRadius: "var(--radius-sm)",
+              overflow: "hidden",
+            }
+          : {
+              position: "absolute",
+              top: 14,
+              left: 14,
+              width: 360,
+              zIndex: 7,
+              background: "rgba(255,255,255,0.97)",
+              border: "1px solid var(--ink-300)",
+              borderRadius: "var(--radius-md)",
+              boxShadow: "var(--shadow-lg)",
+              fontSize: "0.75rem",
+              overflow: "hidden",
+            }
+      }
     >
       <div
         style={{
@@ -269,7 +364,7 @@ export function LiveStormPanel() {
           alignItems: "center",
           justifyContent: "space-between",
           gap: 6,
-          padding: "8px 12px",
+          padding: "8px 10px",
           background: "var(--ink-50)",
           borderBottom: "1px solid var(--ink-200)",
           fontWeight: 700,
@@ -279,25 +374,41 @@ export function LiveStormPanel() {
           letterSpacing: "0.05em",
         }}
       >
-        <span>● Live storm</span>
-        <button
-          onClick={() => {
-            // Full exit: clear both the live-storm slice AND the hurricane
-            // impact slice (populated by "Run county impact" and rendered
-            // by HurricaneLayer). Previously only the live-storm slice was
-            // cleared, so the impact cone / outer cone / footprint painted
-            // by HurricaneLayer stayed on the map.
-            fullyClearLiveStorm();
-            setPickerOpen(false);
-          }}
-          style={{ all: "unset", cursor: "pointer", color: "var(--ink-500)", fontWeight: 700 }}
-          title="Close and clear active storm"
-        >
-          ✕
-        </button>
+        <span>{inDetail ? "Live storm · detail" : "Live storm"}</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {inDetail ? (
+            <button type="button" style={headerBtn} onClick={popFromDetail} title="Put the panel back on the map">
+              ↩ map
+            </button>
+          ) : (
+            <>
+              <button type="button" style={headerBtn} onClick={() => setCollapsed(true)} title="Minimize — keep overlays on the map">
+                Collapse
+              </button>
+              <button
+                type="button"
+                style={headerBtn}
+                onClick={pushToDetail}
+                title="Move this panel to the Detail rail — map stays clear"
+              >
+                → detail
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => {
+              fullyClearLiveStorm();
+              setPickerOpen(false);
+            }}
+            style={{ all: "unset", cursor: "pointer", color: "var(--ink-500)", fontWeight: 700, padding: "0 4px" }}
+            title="Close and clear active storm"
+          >
+            ✕
+          </button>
+        </div>
       </div>
-      {open && (
-        <div style={{ padding: 10, display: "grid", gap: 10, maxHeight: "70vh", overflow: "auto" }}>
+      {(open || inDetail) && (
+        <div style={{ padding: 10, display: "grid", gap: 10, maxHeight: inDetail ? "none" : "70vh", overflow: "auto" }}>
           {list.isLoading && <div>Loading storms…</div>}
           {list.error && (
             <div style={{ color: "var(--error-700)" }}>
@@ -436,6 +547,9 @@ export function LiveStormPanel() {
       )}
     </div>
   );
+
+  if (inDetail && detailSlot) return createPortal(panel, detailSlot);
+  return panel;
 }
 
 /**

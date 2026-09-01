@@ -20,13 +20,19 @@ import { YoyStatus, AggregationLevel } from "../../types/contracts";
 import { CountyReferenceSection } from "./CountyReferenceSection";
 import { HurricaneImpactDetail } from "./HurricaneImpactDetail";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
+import { useLiveStormStore } from "../../state/liveStorm";
 
 export function DetailPanel() {
-  // When the user pushes a hurricane impact to the right rail, that view
-  // replaces the standard county detail entirely. Clearing the impact (✕) or
-  // "↩ float" restores the regular flow.
+  const stormPushed = useLiveStormStore((s) => s.pushedToDetail);
   const impactPushedToDetail = useHurricaneImpactStore((s) => s.pushedToDetail);
-  if (impactPushedToDetail) return <HurricaneImpactDetail />;
+  if (stormPushed || impactPushedToDetail) {
+    return (
+      <div style={{ display: "grid", gap: 12 }}>
+        {stormPushed && <div id="live-storm-detail-slot" />}
+        {impactPushedToDetail && <HurricaneImpactDetail />}
+      </div>
+    );
+  }
 
   return <CountyDetail />;
 }

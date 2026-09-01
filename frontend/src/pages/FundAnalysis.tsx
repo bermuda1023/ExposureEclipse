@@ -37,6 +37,7 @@ import {
 } from "../api/fundAnalysis";
 import { BRAND } from "../brand";
 import { BrandMark } from "../components/layout/BrandMark";
+import "./fund-analysis.css";
 
 // Sensible priors for short-history / illiquid assets.
 const DEFAULT_OVERRIDES: Record<string, AssumptionOverrideIn> = {
@@ -97,7 +98,7 @@ const CURRENCY = (v: number) =>
 
 const PCT = (v: number, digits = 1) => `${(v * 100).toFixed(digits)}%`;
 
-const KIND_TINT: Record<string, string> = { hedge_fund: "#3b82f6", reference: "#94a3b8" };
+const KIND_TINT: Record<string, string> = { hedge_fund: "var(--brand-700)", reference: "var(--ink-500)" };
 
 // Distinct colours for the multi-line growth-of-$1 + drawdown charts.
 const ASSET_COLOR: Record<string, string> = {
@@ -380,13 +381,22 @@ export function FundAnalysis() {
   );
 
   return (
-    <div style={S.page}>
-      <Header asOf={assetsQuery.data?.asOf} />
+    <div className="fof">
+      <Header
+        asOf={assetsQuery.data?.asOf}
+        onRun={runOptimize}
+        onScan={runRobustness}
+        canRun={selected.size >= 2}
+        running={optimizeMutation.isPending}
+        scanning={robustnessMutation.isPending}
+        nAssets={selected.size}
+      />
 
-      <div style={S.grid}>
-        <section style={S.card}>
-          <h2 style={S.h2}>Assets</h2>
-          <p style={S.hint}>{assetsQuery.data?.note}</p>
+      <div className="fof-body">
+      <div className="fof-workbench">
+        <section className="fof-panel">
+          <h2>Universe</h2>
+          <p className="note">{assetsQuery.data?.note}</p>
           <table style={S.table}>
             <thead>
               <tr>
@@ -517,8 +527,8 @@ export function FundAnalysis() {
           </table>
         </section>
 
-        <section style={S.cardTall}>
-          <h2 style={S.h2}>Portfolio inputs</h2>
+        <section className="fof-panel">
+          <h2>Book</h2>
 
           <div style={S.summaryBox}>
             <div style={S.summaryRow}>
@@ -706,31 +716,17 @@ export function FundAnalysis() {
             <input type="checkbox" checked={respectMin} onChange={(e) => setRespectMin(e.target.checked)} />
             Respect fund minimum investments
           </label>
-          <p style={S.hint}>
-            When on, a suggested book never holds a name between $0 and its minimum. If the
-            concentration cap is below the ticket (Bireme $500k vs 25% of a $1M book = $250k), that
-            name is excluded — raise capital or the cap to include it. Positions you already hold
-            are grandfathered.
+          <p className="note">
+            Sub-ticket names are dropped. Positions you already hold are grandfathered.
           </p>
-
-          <button
-            type="button"
-            onClick={runOptimize}
-            disabled={selected.size < 2 || optimizeMutation.isPending}
-            style={S.primaryBtn}
-          >
-            {optimizeMutation.isPending ? "Optimising…" : `Run optimizer (${selected.size} assets)`}
-          </button>
-          {selected.size < 2 && <p style={S.warn}>Pick at least 2 assets to run the optimizer.</p>}
+          {selected.size < 2 && <p style={S.warn}>Pick at least 2 names.</p>}
         </section>
+      </div>
 
-        <section style={S.card}>
-          <h2 style={S.h2}>Assumption overrides</h2>
-          <p style={S.hint}>
-            Set assumed values to override empirical estimates — critical for short track records
-            (Primary Commodity) or extreme-vol funds (CAS Sosin). Correlation cap limits |ρ| between
-            this asset and any other.
-          </p>
+      <div className="fof-two">
+        <section className="fof-panel">
+          <h2>μ / σ overrides</h2>
+          <p className="note">Blank = empirical. Use for short tracks (Primary) or extreme vol (CAS).</p>
           <table style={S.table}>
             <thead>
               <tr>
@@ -775,14 +771,9 @@ export function FundAnalysis() {
           </table>
         </section>
 
-        <section style={S.card}>
-          <h2 style={S.h2}>Concentration caps</h2>
-          <p style={S.hint}>
-            Hard ceiling per name. Hedge funds default to {PCT(DEFAULT_HF_CAP, 0)} even if this row
-            is blank, so a FoF cannot become a single-manager bet. Clear a row only after setting a
-            custom cap, or raise the cap if a ticket cannot fit (e.g. $500k min on a $1M book needs
-            at least 50%). Indexes are uncapped.
-          </p>
+        <section className="fof-panel">
+          <h2>Name caps</h2>
+          <p className="note">Hedge funds default {PCT(DEFAULT_HF_CAP, 0)}. Indexes uncapped.</p>
           <table style={S.table}>
             <thead>
               <tr>
@@ -810,10 +801,9 @@ export function FundAnalysis() {
       </div>
 
       {resultStale && (
-        <div style={S.staleBanner}>
-          History window is now <b>{historyWindowStart ?? "All history"}</b>, but the numbers
-          below were computed for <b>{result?.historyWindowStart ?? "All history"}</b>. Click{" "}
-          <b>Run optimizer</b> to rescore the suggested books.
+        <div className="fof-warn">
+          Window is now {historyWindowStart ?? "all history"}; results below are for{" "}
+          {result?.historyWindowStart ?? "all history"}. Run again.
         </div>
       )}
       {result && (
@@ -845,27 +835,50 @@ export function FundAnalysis() {
         </div>
       )}
       {optimizeMutation.isError && (
-        <div style={S.err}>{(optimizeMutation.error as Error).message}</div>
+        <div className="fof-err">{(optimizeMutation.error as Error).message}</div>
       )}
+      </div>
     </div>
   );
 }
 
-function Header({ asOf }: { asOf: string | undefined }) {
+function Header({
+  asOf,
+  onRun,
+  onScan,
+  canRun,
+  running,
+  scanning,
+  nAssets,
+}: {
+  asOf: string | undefined;
+  onRun: () => void;
+  onScan: () => void;
+  canRun: boolean;
+  running: boolean;
+  scanning: boolean;
+  nAssets: number;
+}) {
   return (
-    <header style={S.header}>
+    <header className="fof-top">
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-        <a href="/" aria-label={BRAND.name}><BrandMark size={32} /></a>
+        <a href="/" aria-label={BRAND.name}><BrandMark size={28} /></a>
         <div>
-        <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
-          <a href="/" style={{ color: "#1e40af", textDecoration: "none" }}>← Back to {BRAND.name}</a>
+          <a href="/">← {BRAND.name}</a>
+          <h1>FoF book</h1>
+          <div className="fof-meta">
+            Personal fund-of-funds workbench
+            {asOf ? ` · letters through ${asOf}` : ""}
+          </div>
         </div>
-        <h1 style={{ margin: 0, fontSize: "1.4rem" }}>Fund Portfolio Optimizer</h1>
-        <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.8rem" }}>
-          Markowitz efficient frontier + interactive builder across live hedge funds + S&P 500 + US Aggregate Bonds.
-          {asOf && <> · Data as of <b>{asOf}</b>.</>}
-        </p>
-        </div>
+      </div>
+      <div className="fof-top-actions">
+        <button type="button" className="fof-run" style={{ width: "auto", marginTop: 0 }} onClick={onRun} disabled={!canRun || running}>
+          {running ? "Running…" : `Run · ${nAssets} names`}
+        </button>
+        <button type="button" onClick={onScan} disabled={!canRun || scanning} style={{ background: "transparent", color: "#d5e4f5", borderColor: "#3d5a78" }}>
+          {scanning ? "Scanning…" : "Robustness"}
+        </button>
       </div>
     </header>
   );
@@ -1049,70 +1062,60 @@ function ResultView({
 
   return (
     <>
-      <section style={S.banner}>
-        <div>
-          <strong>Total portfolio:</strong> {CURRENCY(capital)}
-          {hasCurrent && <> · <strong>Current:</strong> {CURRENCY(result.currentTotal)} · <strong>New capital:</strong> {CURRENCY(result.newCapital)}</>}
-        </div>
-        <div>
-          <strong>Requested filter:</strong> {result.historyWindowStart ?? "All history"}
-          {"  ·  "}
-          <strong>Scored:</strong>{" "}
+      <div className="fof-strip">
+        <span>Book <b>{CURRENCY(capital)}</b></span>
+        {hasCurrent && (
+          <span className="fof-muted">held {CURRENCY(result.currentTotal)} · new {CURRENCY(result.newCapital)}</span>
+        )}
+        <span>
+          {result.historyWindowStart ?? "all history"}
           {result.scoreWindowStart && result.scoreWindowEnd
-            ? `${result.scoreWindowStart} → ${result.scoreWindowEnd} (${result.scoreWindowMonths} mo)`
-            : `${result.effectiveWindowMonths} months`}
-          {result.recommended && (
-            <>
-              {" "}· {result.recommended.nNames} names
-              {result.recommended.cashWeight ? ` · cash ${PCT(result.recommended.cashWeight, 1)}` : ""}
-              {result.recommended.illiquidWeight ? ` · illiquid ${PCT(result.recommended.illiquidWeight, 1)}` : ""}
-            </>
-          )}
-        </div>
-        {result.windowNote && <p style={{ ...S.hint, margin: "8px 0 0" }}>{result.windowNote}</p>}
-      </section>
+            ? ` · overlap ${result.scoreWindowStart}–${result.scoreWindowEnd} (${result.scoreWindowMonths} mo)`
+            : ` · ${result.effectiveWindowMonths} mo`}
+        </span>
+        {result.recommended && (
+          <span>
+            {result.recommended.nNames} names
+            {result.recommended.cashWeight ? ` · cash ${PCT(result.recommended.cashWeight, 1)}` : ""}
+          </span>
+        )}
+        <span className="fof-muted">objective {result.objective === "ir" ? "max IR" : result.objective}</span>
+      </div>
+      {result.windowNote && <p className="note" style={{ marginBottom: 12 }}>{result.windowNote}</p>}
 
       {result.recommended && (
-        <section style={{ ...S.card, borderColor: "#1e40af", boxShadow: "0 0 0 1px #1e40af33" }}>
-          <h2 style={S.h2}>Recommended FoF ({result.objective === "ir" ? "max IR vs benchmark" : result.objective})</h2>
-          <p style={S.hint}>
-            {result.objective === "ir"
-              ? "This is the same book as Max Info Ratio below — not Max Sharpe/Sortino. "
-              : "This is the winning book for the objective you selected. "}
-            Scored on the overlapping months of names that actually receive weight. Path IR/Sharpe
-            only rank books with ≥36 months of overlap, so a 13-month name cannot lottery-win the FoF.
-            Short-track μ is shrunk toward 8%; hedge funds are capped at 25% unless you override.
-          </p>
+        <section className="fof-panel" style={{ marginBottom: 14 }}>
+          <h2>Target book · {result.objective === "ir" ? "max IR vs " + result.benchmarkName.split(" ")[0] : result.objective}</h2>
           <PortfolioCard
-            title="Recommended book"
-            subtitle={`Filter ${result.historyWindowStart ?? "all"} · scored ${result.scoreWindowStart ?? "?"} → ${result.scoreWindowEnd ?? "?"} (${result.scoreWindowMonths} mo)`}
+            title=""
+            subtitle={`${result.scoreWindowStart ?? "?"} → ${result.scoreWindowEnd ?? "?"} (${result.scoreWindowMonths} mo)`}
             portfolio={result.recommended}
             totalCapital={result.totalCapital}
             currentInv={result.currentInvestments}
             assetById={assetById}
-            accent="#1e40af"
+            accent="var(--brand-800)"
           />
           {result.recommended.stress && result.recommended.stress.length > 0 && (
-            <table style={{ ...S.table, marginTop: 12 }}>
+            <table style={{ ...S.table, marginTop: 10 }}>
               <thead>
                 <tr>
                   <th style={S.th}>Stress</th>
-                  <th style={S.thNum}>Period return</th>
+                  <th style={S.thNum}>Period</th>
                   <th style={S.thNum}>Max DD</th>
-                  <th style={S.th}>Coverage</th>
+                  <th style={S.th}>n</th>
                 </tr>
               </thead>
               <tbody>
                 {result.recommended.stress.map((s) => (
                   <tr key={s.label}>
-                    <td style={S.td}>{s.label} ({s.start}–{s.end})</td>
-                    <td style={{ ...S.tdNum, color: (s.periodReturn ?? 0) < 0 ? "#dc2626" : "#059669" }}>
+                    <td style={S.td}>{s.label}</td>
+                    <td style={{ ...S.tdNum, color: (s.periodReturn ?? 0) < 0 ? "var(--error-700)" : "var(--ok-700)" }}>
                       {s.covered && s.periodReturn != null ? PCT(s.periodReturn) : "—"}
                     </td>
-                    <td style={{ ...S.tdNum, color: "#dc2626" }}>
+                    <td style={S.tdNum}>
                       {s.covered && s.maxDrawdown != null ? PCT(s.maxDrawdown) : "—"}
                     </td>
-                    <td style={S.td}>{s.covered ? `${s.nMonths} mo` : "held names missing this window"}</td>
+                    <td style={S.td}>{s.covered ? `${s.nMonths} mo` : "gap"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1121,13 +1124,13 @@ function ResultView({
         </section>
       )}
 
-      <section style={S.card}>
-        <h2 style={S.h2}>Efficient frontier</h2>
-        <p style={S.hint}>
-          Curve = best return per vol bin on the <b>same score window</b> as the recommended book.
-          Fund dots use each name&apos;s MVO μ (short-track shrunk) vs σ so they sit on the same
-          clock as the portfolios. Hover a point for weights.
-        </p>
+      <section className="fof-panel fof-books">
+        <h2>Same names, other objectives</h2>
+        <BookCompare result={result} assetById={assetById} />
+      </section>
+
+      <section className="fof-panel" style={{ marginBottom: 14 }}>
+        <h2>Frontier</h2>
         <FrontierChart result={result} assetById={assetById} />
       </section>
 
@@ -1150,16 +1153,13 @@ function ResultView({
         perAssetBenchmarks={perAssetBenchmarks}
       />
 
-      <div style={S.grid2}>
-        <section style={S.card}>
-          <h2 style={S.h2}>Growth of $1 (log scale)</h2>
-          <label style={{ ...S.labelRow, marginBottom: 8 }}>
+      <div className="fof-charts">
+        <section className="fof-panel">
+          <h2>Growth of $1</h2>
+          <label className="fof-check">
             <input type="checkbox" checked={commonStartCharts} onChange={(e) => setCommonStartCharts(e.target.checked)} />
-            Rebase to common start (recommended window / latest shared month)
+            Common start
           </label>
-          <p style={S.hint}>
-            FoF book and the IR benchmark overlay as thick lines. Individual funds are thinner.
-          </p>
           <GrowthChart
             series={result.assetSeries}
             assetById={assetById}
@@ -1169,9 +1169,8 @@ function ResultView({
             bench={result.benchmarkWindowSeries ?? null}
           />
         </section>
-        <section style={S.card}>
-          <h2 style={S.h2}>Drawdown</h2>
-          <p style={S.hint}>Peak-to-trough on the same window as the growth chart. FoF overlay in navy.</p>
+        <section className="fof-panel">
+          <h2>Drawdown</h2>
           <DrawdownChart
             series={result.assetSeries}
             assetById={assetById}
@@ -1183,20 +1182,10 @@ function ResultView({
         </section>
       </div>
 
-      <div style={S.grid5}>
-        <PortfolioCard title="Max Sharpe" subtitle={`${result.maxSharpe.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.maxSharpe} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#dc2626" />
-        <PortfolioCard title="Max Sortino" subtitle={`${result.maxSortino.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.maxSortino} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#7c3aed" />
-        <PortfolioCard title="Max Info Ratio" subtitle={`${result.maxInformationRatio.scoreWindowMonths ?? "?"} mo vs ${result.benchmarkName.split(" ")[0]}`} portfolio={result.maxInformationRatio} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#ea580c" />
-        <PortfolioCard title="Min Variance" subtitle={`${result.minVariance.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.minVariance} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#059669" />
-        <PortfolioCard title="Min Drawdown" subtitle={`${result.minDrawdown.scoreWindowMonths ?? "?"} mo overlap`} portfolio={result.minDrawdown} totalCapital={result.totalCapital} currentInv={result.currentInvestments} assetById={assetById} accent="#0891b2" />
-      </div>
 
-      <section style={S.card}>
-        <h2 style={S.h2}>Interactive portfolio builder</h2>
-        <p style={S.hint}>
-          Drag the sliders to build any portfolio. Weights auto-normalise. Live stats + equity curve
-          update in real time. Start from a preset to seed a portfolio.
-        </p>
+
+      <section className="fof-panel" style={{ marginBottom: 14 }}>
+        <h2>Scratch book</h2>
         <InteractiveBuilder
           result={result}
           assetById={assetById}
@@ -1209,32 +1198,17 @@ function ResultView({
         />
       </section>
 
-      <section style={S.card}>
-        <h2 style={S.h2}>Correlation matrix</h2>
-        <p style={S.hint}>
-          Pearson ρ over each pair&apos;s overlap (shrunk toward 0.55 when n is short). Cell shows ρ
-          and overlap months — treat n&lt;24 as low confidence.
-        </p>
+      <section className="fof-panel" style={{ marginBottom: 14 }}>
+        <h2>Correlation (overlap n in cell)</h2>
         <CorrelationMatrix result={result} assetById={assetById} />
       </section>
 
-      <section style={S.card}>
-        <h2 style={S.h2}>
-          Asset stats (post-override){" "}
-          {pendingIr && <span style={{ ...S.hint, fontSize: "0.7rem", color: "#3b82f6" }}>· recomputing IR…</span>}
+      <section className="fof-panel" style={{ marginBottom: 14 }}>
+        <h2>
+          Name stats {pendingIr ? "· IR…" : ""}
         </h2>
-        <p style={S.hint}>
-          <b>Portfolio-level</b> IR is measured vs <b>{result.benchmarkName}</b> (the top-level
-          benchmark). <b>Per-asset</b> IR uses each row's chosen benchmark below — defaulted
-          to the benchmark each fund's own factsheet uses (Upslope→HFRX EH, Alluvial→Russell
-          MicroCap, Cedar Creek→Russell 2000). Change the dropdown per row and the IR updates
-          live — no re-optimize required.<br />
-          Rule-of-thumb IR scale (Grinold &amp; Kahn):{" "}
-          <span style={{ ...S.chipMuted, color: "#059669", fontWeight: 600 }}>&gt; 0.75 very good</span>
-          {" · "}<span style={{ ...S.chipMuted, color: "#059669" }}>0.5–0.75 good</span>
-          {" · "}<span style={{ ...S.chipMuted, color: "#65a30d" }}>0.25–0.5 decent</span>
-          {" · "}<span style={{ ...S.chipMuted, color: "#94a3b8" }}>~0 no alpha</span>
-          {" · "}<span style={{ ...S.chipMuted, color: "#dc2626", fontWeight: 600 }}>&lt; 0 worse than benchmark</span>
+        <p className="note">
+          Book IR vs {result.benchmarkName}. Row IR vs the dropdown (factsheet default).
         </p>
         <table style={S.table}>
           <thead>
@@ -1343,11 +1317,10 @@ function ManagerDriftCard({
   });
 
   return (
-    <section style={S.card}>
-      <h2 style={S.h2}>Manager drift + data adequacy</h2>
-      <p style={S.hint}>
-        Answers <b>"Do I have enough data?"</b> and <b>"Has the manager's behaviour changed?"</b>
-        Splits the fund's history into first-half vs second-half, compares CAGR / vol / Sharpe,
+    <section className="fof-panel" style={{ marginBottom: 14 }}>
+      <h2>Manager drift</h2>
+      <p className="note">
+        First half vs second half of the track. Splits CAGR / vol / Sharpe,
         and flags meaningful shifts. Also shows rolling {windowMonths}-month statistics so you
         can spot trends visually. Data-adequacy classification tells you how much confidence to
         put in the numbers.
@@ -1680,10 +1653,10 @@ function RobustnessCard({
   heldAssetIds: Set<string>;
 }) {
   return (
-    <section style={S.card}>
+    <section className="fof-panel" style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <div>
-          <h2 style={S.h2}>Fund robustness scan</h2>
+          <h2>Robustness</h2>
           <p style={S.hint}>
             Runs the optimizer across <b>36 books</b> (4 history windows × 3 risk-free rates × Max Sharpe + Max Sortino + Max IR). CORE means the fund is in the winning book in ≥2/3 of those runs — it is <b>not</b> the same thing as appearing in this page&apos;s Max Sharpe card (that card is one window and one RF). Uses your current caps, tickets, and holdings.
           </p>
@@ -1848,6 +1821,108 @@ function RobustnessTable({
   );
 }
 
+function BookCompare({
+  result,
+  assetById,
+}: {
+  result: OptimizeResponse;
+  assetById: Record<string, FundAsset>;
+}) {
+  const books: { key: string; label: string; p: PortfolioPoint | undefined }[] = [
+    { key: "rec", label: "IR / rec", p: result.recommended ?? result.maxInformationRatio },
+    { key: "sharpe", label: "Sharpe", p: result.maxSharpe },
+    { key: "sortino", label: "Sortino", p: result.maxSortino },
+    { key: "ir", label: "IR", p: result.maxInformationRatio },
+    { key: "var", label: "Min var", p: result.minVariance },
+    { key: "dd", label: "Min DD", p: result.minDrawdown },
+  ];
+  const ids = Array.from(
+    new Set(
+      books.flatMap((b) =>
+        Object.entries(b.p?.weights ?? {})
+          .filter(([, w]) => w > 0.005)
+          .map(([id]) => id),
+      ),
+    ),
+  ).sort((a, b) => {
+    const wa = books[0]?.p?.weights[a] ?? 0;
+    const wb = books[0]?.p?.weights[b] ?? 0;
+    return wb - wa;
+  });
+  const metric = (p: PortfolioPoint | undefined, fn: (x: PortfolioPoint) => string) =>
+    p ? fn(p) : "—";
+  return (
+    <table style={S.table}>
+      <thead>
+        <tr>
+          <th style={S.th} />
+          {books.map((b) => (
+            <th key={b.key} className={b.key === "rec" ? "rec" : undefined} style={{ ...S.thNum, fontWeight: 650 }}>
+              {b.label}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {ids.map((id) => (
+          <tr key={id}>
+            <td style={{ ...S.td, fontWeight: 600 }}>{SHORT_NAME[id] ?? assetById[id]?.name.split(" ")[0] ?? id}</td>
+            {books.map((b) => {
+              const w = b.p?.weights[id] ?? 0;
+              return (
+                <td key={b.key} className={b.key === "rec" ? "rec" : undefined} style={S.tdNum}>
+                  {w > 0.005 ? PCT(w, 1) : "—"}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+        <tr>
+          <td style={S.td}>Return</td>
+          {books.map((b) => (
+            <td key={b.key} className={b.key === "rec" ? "rec" : undefined} style={S.tdNum}>
+              {metric(b.p, (p) => PCT(p.annualisedReturn))}
+            </td>
+          ))}
+        </tr>
+        <tr>
+          <td style={S.td}>Vol</td>
+          {books.map((b) => (
+            <td key={b.key} className={b.key === "rec" ? "rec" : undefined} style={S.tdNum}>
+              {metric(b.p, (p) => PCT(p.annualisedVol))}
+            </td>
+          ))}
+        </tr>
+        <tr>
+          <td style={S.td}>Sharpe</td>
+          {books.map((b) => (
+            <td key={b.key} className={b.key === "rec" ? "rec" : undefined} style={S.tdNum}>
+              {metric(b.p, (p) => p.sharpe.toFixed(2))}
+            </td>
+          ))}
+        </tr>
+        <tr>
+          <td style={S.td}>IR</td>
+          {books.map((b) => (
+            <td key={b.key} className={b.key === "rec" ? "rec" : undefined} style={S.tdNum}>
+              {metric(b.p, (p) => (p.informationRatio !== 0 ? p.informationRatio.toFixed(2) : "—"))}
+            </td>
+          ))}
+        </tr>
+        <tr>
+          <td style={S.td}>Max DD</td>
+          {books.map((b) => (
+            <td key={b.key} className={b.key === "rec" ? "rec" : undefined} style={S.tdNum}>
+              {metric(b.p, (p) => (p.maxDrawdown < -0.0001 ? PCT(p.maxDrawdown) : "0"))}
+            </td>
+          ))}
+        </tr>
+
+      </tbody>
+    </table>
+  );
+}
+
 function PortfolioCard({
   title,
   subtitle,
@@ -1883,9 +1958,9 @@ function PortfolioCard({
   const hasCurrent = Object.values(currentInv).some((v) => v > 0);
 
   return (
-    <section style={{ ...S.card, borderTop: `3px solid ${accent}`, marginBottom: 0 }}>
-      <h2 style={{ ...S.h2, color: accent }}>{title}</h2>
-      <p style={S.hint}>{subtitle}</p>
+    <section style={{ marginBottom: 0 }}>
+      {title ? <h2 style={{ ...S.h2, color: accent }}>{title}</h2> : null}
+      {subtitle ? <p className="note">{subtitle}</p> : null}
       <div style={S.statGridSmall}>
         <Stat label="Return" value={PCT(portfolio.annualisedReturn)} />
         <Stat label="Vol" value={PCT(portfolio.annualisedVol)} />
@@ -2848,12 +2923,10 @@ const S: Record<string, React.CSSProperties> = {
   grid4: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 },
   grid5: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 16 },
   card: {
-    background: "white",
-    border: "1px solid #e2e8f0",
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 16,
-    boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+    background: "var(--ink-0)",
+    border: "1px solid var(--ink-200)",
+    padding: 14,
+    marginBottom: 14,
   },
   cardTall: { background: "white", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, marginBottom: 16 },
   h2: { margin: "0 0 8px", fontSize: "1rem" },
@@ -2867,7 +2940,7 @@ const S: Record<string, React.CSSProperties> = {
   rowOn: { background: "white" },
   rowOff: { background: "#f8fafc", opacity: 0.7 },
   chipRow: { display: "flex", gap: 4, marginTop: 3, flexWrap: "wrap", alignItems: "center" },
-  chip: { display: "inline-block", padding: "1px 6px", borderRadius: 999, color: "white", fontSize: "0.62rem", fontWeight: 600 },
+  chip: { display: "inline-block", padding: "1px 5px", borderRadius: 2, color: "white", fontSize: "0.62rem", fontWeight: 600, letterSpacing: "0.02em" },
   chipMuted: { fontSize: "0.7rem", color: "#64748b" },
   label: { display: "flex", flexDirection: "column", gap: 3, marginBottom: 12, fontSize: "0.78rem", color: "#334155" },
   labelRow: { display: "flex", gap: 6, alignItems: "center", marginBottom: 6, fontSize: "0.8rem", color: "#334155" },
@@ -2885,11 +2958,11 @@ const S: Record<string, React.CSSProperties> = {
     width: "100%",
   },
   pillBtn: {
-    padding: "4px 10px",
-    background: "#e0e7ff",
-    color: "#1e40af",
-    border: "1px solid #c7d2fe",
-    borderRadius: 999,
+    padding: "3px 8px",
+    background: "var(--ink-0)",
+    color: "var(--ink-800)",
+    border: "1px solid var(--ink-300)",
+    borderRadius: 2,
     cursor: "pointer",
     fontSize: "0.7rem",
     fontWeight: 600,

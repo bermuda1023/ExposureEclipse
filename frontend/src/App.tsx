@@ -26,7 +26,7 @@ export default function App() {
       path.startsWith("/admin/programmes")
         ? "Programmes"
         : path.startsWith("/fund-analysis")
-          ? "Fund Portfolio Optimizer"
+          ? "FoF book"
           : path.startsWith("/methodology")
             ? "Methodology"
             : null;

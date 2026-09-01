@@ -14,7 +14,7 @@
  * chain's "Compare vs" dropdown. Peril multi-select up top filters everything.
  */
 
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useCedents, useMapData } from "../../api/hooks";
 import { useFiltersStore } from "../../state/filters";
@@ -22,6 +22,7 @@ import { useScopeFiltersStore } from "../../state/scopeFilters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
+import { useLiveStormStore } from "../../state/liveStorm";
 import { useEffectiveScope } from "../../state/useEffectiveScope";
 // Mapbox GL JS is ~1.8 MB minified — lazy-load so it stays off the critical path.
 const MapView = lazy(() =>
@@ -52,6 +53,7 @@ export function Shell() {
   const perils = useViewStore((s) => s.perils);
   const selectedGeographyId = useViewStore((s) => s.selectedGeographyId);
   const impactPushedToDetail = useHurricaneImpactStore((s) => s.pushedToDetail);
+  const stormPushedToDetail = useLiveStormStore((s) => s.pushedToDetail);
   const filters = useFiltersStore();
   const [pivotOpen, setPivotOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
@@ -114,7 +116,11 @@ export function Shell() {
   // at. Warnings are ambient and don't trigger the hint on their own —
   // otherwise the badge would be on nearly always.
   const hasDetailContent =
-    impactPushedToDetail || selectedGeographyId != null;
+    impactPushedToDetail || stormPushedToDetail || selectedGeographyId != null;
+
+  useEffect(() => {
+    if (stormPushedToDetail || impactPushedToDetail) setRightOpen(true);
+  }, [stormPushedToDetail, impactPushedToDetail]);
 
   const layoutKey = `ee-cols-${leftOpen ? "L" : "x"}-${rightOpen ? "R" : "x"}`;
 

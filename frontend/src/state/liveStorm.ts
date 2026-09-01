@@ -34,6 +34,10 @@ interface LiveStormState {
   error: string | null;
   // Picker panel open/closed — driven by the toolbar chip (LiveStormControls).
   pickerOpen: boolean;
+  // Overlay chrome minimized to a one-line bar (storm stays on the map).
+  collapsed: boolean;
+  // Overlay chrome moved to the right-rail Detail panel (map is clear).
+  pushedToDetail: boolean;
   // Layer toggles for the overlay — start with everything on except land
   // stations (NWS API is the slowest source).
   showForecastHistory: boolean;
@@ -95,6 +99,9 @@ interface LiveStormState {
   clear: () => void;
   setPickerOpen: (v: boolean) => void;
   togglePicker: () => void;
+  setCollapsed: (v: boolean) => void;
+  pushToDetail: () => void;
+  popFromDetail: () => void;
   setToggle: (key: ToggleKey, value: boolean) => void;
   setWindMapMode: (mode: WindMapMode) => void;
   setGfsGrid: (g: WindModelGrid | null) => void;
@@ -144,6 +151,8 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   isLoading: false,
   error: null,
   pickerOpen: false,
+  collapsed: false,
+  pushedToDetail: false,
   showForecastHistory: true,
   showAlerts: true,
   // NHC watches/warnings default ON — they are the primary operational signal
@@ -213,10 +222,14 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     }),
   setData: (data) => set({ data, isLoading: false, error: null }),
   setError: (msg) => set({ error: msg, isLoading: false }),
-  setPickerOpen: (v) => set({ pickerOpen: v }),
+  setPickerOpen: (v) => set({ pickerOpen: v, collapsed: v ? get().collapsed : false }),
   togglePicker: () => set({ pickerOpen: !get().pickerOpen }),
+  setCollapsed: (v) => set({ collapsed: v }),
+  pushToDetail: () => set({ pushedToDetail: true, pickerOpen: true, collapsed: false }),
+  popFromDetail: () => set({ pushedToDetail: false, pickerOpen: true, collapsed: false }),
   clear: () => set({
     activeStormId: null, data: null, isLoading: false, error: null,
+    pickerOpen: false, collapsed: false, pushedToDetail: false,
     gfsGrid: null, ecmwfGrid: null,
     gfsGridStatus: "idle", ecmwfGridStatus: "idle",
     windMapFrameIndex: 0,
