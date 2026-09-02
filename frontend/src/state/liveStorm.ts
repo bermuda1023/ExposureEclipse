@@ -45,6 +45,7 @@ interface LiveStormState {
   showWatchesWarnings: boolean;  // NHC coastal TC watches/warnings — split out
                                  // of generic alerts, NHC operational palette
   showBuoys: boolean;
+  showRecon: boolean;         // hurricane hunter HDOB + vortex fix
   showLand: boolean;
   showSst: boolean;
   showWindField: boolean;     // Rmax + R64 cones on observed + forecast tracks
@@ -132,6 +133,7 @@ export type ToggleKey =
   | "showAlerts"
   | "showWatchesWarnings"
   | "showBuoys"
+  | "showRecon"
   | "showLand"
   | "showSst"
   | "showWindField"
@@ -161,6 +163,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   // NDBC buoys, wind-field cone, and NHC peak-surge polygons all default
   // OFF now — they get busy fast and users mostly want them on-demand.
   showBuoys: false,
+  showRecon: true,
   showLand: false,
   showSst: false,
   showWindField: false,

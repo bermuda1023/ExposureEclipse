@@ -46,6 +46,9 @@ Domain terms an engineer must understand to build this correctly.
 | **Rmax / R64** | Radius of maximum winds / radius of 64-kt winds. Rmax defines the eyewall; R64 (per quadrant) defines the asymmetric hurricane-force wind envelope. |
 | **NHC CurrentStorms** | National Hurricane Center's `CurrentStorms.json` feed — active-storm summaries (used by `/api/live/storms`). |
 | **NDBC** | National Data Buoy Center — `latest_obs.txt` feed for ocean buoy observations. |
+| **HDOB** | High-Density Observations from USAF / NOAA hurricane hunter aircraft (WMO URNT15). 30-s flight-track obs with SFMR surface wind + flight-level wind. |
+| **SFMR** | Stepped Frequency Microwave Radiometer — aircraft estimate of *surface* wind along the flight track. Preferred recon surface wind; 0.8× flight-level is the fallback when SFMR is missing or QC-flagged. |
+| **VDM** | Vortex Data Message (WMO URNT12) — recon center fix with min pressure and max flight-level wind. |
 | **NWS api.weather.gov** | National Weather Service public API for active alerts + land-station observations. |
 | **JPL MUR SST** | Multi-scale Ultra-high Resolution Sea Surface Temperature, served via NOAA ERDDAP CSV. Sub-25 °C is unfavourable for hurricane intensification; the live storm panel shades cells accordingly. |
 | **SPC SVRGIS** | NOAA Storm Prediction Center's GIS dataset of tornado / hail / wind events 1950-present. Source for the hazard-overlay grids. |

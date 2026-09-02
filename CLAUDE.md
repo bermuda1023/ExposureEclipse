@@ -181,7 +181,8 @@ Excel.
   Single parse populates storm tracks (3-hour interpolated USA fixes),
   recon Rmax, per-quadrant R64 indexes.
 - **Live storms:** NHC `CurrentStorms.json` + NWS `api.weather.gov` alerts
-  + NDBC `latest_obs.txt` buoys + JPL MUR SST via ERDDAP CSV.
+  + NDBC `latest_obs.txt` buoys + NHC recon HDOB/VDM (when a hunter is
+  flying) + JPL MUR SST via ERDDAP CSV.
 - **County reference:** us-atlas TopoJSON for centroids (lru_cached);
   ~35 curated census-style counties + deterministic synthesis for the rest.
 - **Hazard grids:** built offline by `backend/scripts/build_{tornado,hail,

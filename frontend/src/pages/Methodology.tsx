@@ -338,6 +338,25 @@ export function Methodology() {
             small.
           </li>
         </ul>
+        <SubHead>Hurricane hunters (when a plane is in the storm)</SubHead>
+        <ul>
+          <li>
+            NHC HDOB (URNT15) every ~30 s along the flight track. Surface
+            wind is SFMR when the QC flag says the radiometer is good;
+            otherwise 0.80 × flight-level wind (typical 700 mb reduction).
+            Points with a bad lat/lon flag are dropped. SFMR in rain
+            ≥ 20 mm/h is discarded.
+          </li>
+          <li>
+            Vortex Data Message (URNT12) — latest center fix, min pressure,
+            max flight-level wind — plotted as a VDM marker.
+          </li>
+          <li>
+            Live NHC text pages only hold the current bulletin, so we also
+            pull the last 8 hours from the recon archive. Empty when no
+            mission is flying (the layer chip greys out).
+          </li>
+        </ul>
         <SubHead>Sea-surface temperature backdrop</SubHead>
         <ul>
           <li>
@@ -362,6 +381,11 @@ export function Methodology() {
             NDBC <code>latest_obs.txt</code> (Public Domain).
           </li>
           <li>
+            NHC aircraft recon: live URNT15 HDOB + URNT12 vortex messages,
+            plus the last 8 hours of the{" "}
+            <code>/archive/recon/</code> AHONT1 / REPNT2 files (Public Domain).
+          </li>
+          <li>
             <a
               href="https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1"
               target="_blank"
@@ -377,13 +401,16 @@ export function Methodology() {
       <Section id="wind-heatmap" title="Interpolated surface-wind heatmap">
         <p>
           The wind speed map ("windy.com-style") is our own IDW blend of NDBC
-          buoy + NWS land-station observations, cleaned and interpolated to
-          a uniform grid.
+          buoy + NWS land-station observations, plus hurricane-hunter HDOB
+          when a USAF WC-130 or NOAA P-3 / G-IV is in the storm, cleaned and
+          interpolated to a uniform grid.
         </p>
         <SubHead>Cleaning pipeline</SubHead>
         <ol>
           <li>
-            <b>Age</b>: drop observations older than 4 hours.
+            <b>Age</b>: drop buoy/land observations older than 4 hours.
+            Recon HDOB is kept for 8 hours (a typical mission is longer than
+            the buoy window).
           </li>
           <li>
             <b>Absurdity</b>: drop wind_kt above 200 kt (world-record
@@ -411,9 +438,11 @@ export function Methodology() {
           <li>
             <b>Method</b>: inverse-distance weighted (power = 2),
             longitude-scaled by cos(lat) for correct geographic distance.
-            Influence radius = 3° (~330 km). Cells with zero obs in radius
-            are omitted — the renderer paints "no data" as a gap rather
-            than extrapolating nonsense.
+            Influence radius = 3° (~330 km) for buoys and land stations;
+            0.8° (~90 km) for recon so an eyewall transect does not smear
+            across the basin. Cells with zero obs in radius are omitted —
+            the renderer paints "no data" as a gap rather than
+            extrapolating nonsense.
           </li>
           <li>
             <b>Direction</b>: interpolated using a parallel IDW on the u/v
@@ -478,6 +507,12 @@ export function Methodology() {
               NOAA NDBC
             </a>{" "}
             <code>latest_obs.txt</code> — buoy observations (Public Domain).
+          </li>
+          <li>
+            <a href="https://www.nhc.noaa.gov/recon.php" target="_blank" rel="noreferrer">
+              NHC aircraft reconnaissance
+            </a>{" "}
+            — HDOB (SFMR + flight-level) and vortex data messages (Public Domain).
           </li>
           <li>
             <a

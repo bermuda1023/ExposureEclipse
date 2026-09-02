@@ -481,6 +481,7 @@ export function LiveStormPanel() {
               <SmartChip store={store} status={chipStatus.showWindMap} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
               <SmartChip store={store} status={chipStatus.showWindParticles} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
               <SmartChip store={store} status={chipStatus.showBuoys} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
+              <SmartChip store={store} status={chipStatus.showRecon} k="showRecon" label="Hurricane hunters" hint="HDOB SFMR + vortex fix when a plane is in the storm" color="#c026d3" />
               <SmartChip store={store} status={chipStatus.showLand} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
               <SmartChip store={store} status={chipStatus.showSst} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
               <WindMapModeSelector store={store} />
@@ -694,7 +695,7 @@ function useChipAvailability(
       ? { available: true }
       : {
           available: false,
-          reason: "No surface obs in this bbox — likely an open-ocean storm out of NDBC + land-station range.",
+          reason: "No surface obs in this bbox — no NDBC buoys, land stations, or hurricane-hunter HDOB.",
         };
     out.showWindParticles = data!.windMap.length > 0
       ? { available: true }
@@ -707,6 +708,12 @@ function useChipAvailability(
       : {
           available: false,
           reason: "No NDBC buoys in this storm's bbox.",
+        };
+    out.showRecon = ((data!.recon?.length ?? 0) > 0 || data!.vortex != null)
+      ? { available: true }
+      : {
+          available: false,
+          reason: "No hurricane hunter HDOB or vortex message in the last 8 hours for this storm.",
         };
     out.showLand = data!.landStations.length > 0
       ? { available: true }
@@ -1930,7 +1937,17 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
           )}
         </div>
       )}
-      <div>{data.alerts.length} other alerts · {data.buoys.length} buoys</div>
+      <div>
+        {data.alerts.length} other alerts · {data.buoys.length} buoys
+        {(data.recon?.length ?? 0) > 0 ? ` · ${data.recon.length} hunter pts` : ""}
+      </div>
+      {data.vortex && (
+        <div>
+          Vortex fix {data.vortex.aircraft}
+          {data.vortex.pressureMb != null ? ` · ${data.vortex.pressureMb} mb` : ""}
+          {data.vortex.maxFlWindKt != null ? ` · max FL ${data.vortex.maxFlWindKt} kt` : ""}
+        </div>
+      )}
       {data.landStations.length > 0 && <div>{data.landStations.length} land stations</div>}
       {data.forecastCone && (
         <div>NHC cone: {data.forecastCone.ring.length} pts</div>

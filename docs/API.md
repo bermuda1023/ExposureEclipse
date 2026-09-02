@@ -326,6 +326,8 @@ Michael 2018, Ian 2022) for demo when nothing is active.
   "alerts": [ /* WeatherAlertOut from NWS api.weather.gov */ ],
   "buoys": [ /* BuoyOut from NDBC latest_obs.txt */ ],
   "landStations": [ /* LandObsOut from NWS observations */ ],
+  "recon": [ /* ReconObsOut from NHC HDOB — empty when no hunter is flying */ ],
+  "vortex": { /* VortexFixOut from latest URNT12, or null */ },
   "sst": [ /* SSTOut from JPL MUR via ERDDAP CSV */ ],
   "sstMinC": 24.1, "sstMaxC": 30.7,
   "sstMeta": { "source": "mur", "stepDeg": 0.25 },

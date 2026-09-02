@@ -190,9 +190,36 @@ export interface WindObs {
   lon: number;
   windKt: number;
   windDirDeg: number | null;
-  source: "buoy" | "land" | "unknown";
+  source: "buoy" | "land" | "recon" | "unknown";
   stationId: string;
   observedAt: string;
+}
+
+export interface ReconObs {
+  lat: number;
+  lon: number;
+  observedAt: string;
+  surfaceKt: number;
+  surfaceSource: "sfmr" | "fl80" | string;
+  flWindKt: number | null;
+  flDirDeg: number | null;
+  sfmrKt: number | null;
+  rainMmHr: number | null;
+  aircraft: string;
+  stormName: string;
+  missionId: string;
+}
+
+export interface VortexFix {
+  lat: number;
+  lon: number;
+  observedAt: string;
+  pressureMb: number | null;
+  maxFlWindKt: number | null;
+  aircraft: string;
+  stormId: string;
+  stormName: string;
+  missionId: string;
 }
 
 export interface WindGridCoord {
@@ -239,6 +266,8 @@ export interface LiveStormBundle {
   watchesWarningsZoneOnly: number;
   buoys: BuoyObs[];
   landStations: LandObs[];
+  recon: ReconObs[];
+  vortex: VortexFix | null;
   sst: SSTPoint[];
   sstMinC: number | null;
   sstMaxC: number | null;

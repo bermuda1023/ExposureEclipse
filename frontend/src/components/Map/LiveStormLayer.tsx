@@ -8,6 +8,7 @@
  *   4. NDBC buoys (markers with wind-barb glyph via emoji fallback)
  *   5. NWS land stations (markers, distinct from buoys)
  *   6. SST grid (translucent fill cells)
+ *   7. Hurricane hunter HDOB (flight track + SFMR/FL surface wind) + VDM fix
  *
  * Everything fades out when the panel toggle is off; no state cleanup
  * needed beyond removing the layer's data.
@@ -36,6 +37,9 @@ const SRC_FORECAST_HISTORY = "live-forecast-history";
 const SRC_ALERTS = "live-alerts";
 const SRC_WW = "live-watches-warnings";
 const SRC_BUOYS = "live-buoys";
+const SRC_RECON = "live-recon";
+const SRC_RECON_TRACK = "live-recon-track";
+const SRC_VORTEX = "live-vortex";
 const SRC_LAND = "live-land";
 const SRC_SST = "live-sst";
 const SRC_OBS_INNER = "live-obs-inner-cone";
@@ -56,6 +60,11 @@ const LAYER_ALERTS_LINE = "live-alerts-line";
 const LAYER_WW_FILL = "live-watches-warnings-fill";
 const LAYER_WW_LINE = "live-watches-warnings-line";
 const LAYER_BUOYS = "live-buoys-circle";
+const LAYER_RECON = "live-recon-circle";
+const LAYER_RECON_TRACK = "live-recon-track";
+const LAYER_RECON_TEXT = "live-recon-text";
+const LAYER_VORTEX = "live-vortex-circle";
+const LAYER_VORTEX_TEXT = "live-vortex-text";
 const LAYER_LAND = "live-land-circle";
 const LAYER_SST = "live-sst-fill";
 const LAYER_OBS_INNER = "live-obs-inner-fill";
@@ -244,6 +253,66 @@ function buildBuoyFC(buoys: import("../../api/live").BuoyObs[]) {
         pressureMb: b.pressureMb,
       },
     })),
+  };
+}
+
+function buildReconFC(points: import("../../api/live").ReconObs[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: points.map((p) => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [p.lon, p.lat] },
+      properties: {
+        surfaceKt: p.surfaceKt,
+        surfaceSource: p.surfaceSource,
+        flWindKt: p.flWindKt,
+        sfmrKt: p.sfmrKt,
+        aircraft: p.aircraft,
+        missionId: p.missionId,
+        observedAt: p.observedAt,
+      },
+    })),
+  };
+}
+
+function buildReconTrackFC(points: import("../../api/live").ReconObs[]) {
+  const byAc = new Map<string, import("../../api/live").ReconObs[]>();
+  for (const p of points) {
+    const k = p.aircraft || "recon";
+    const arr = byAc.get(k) ?? [];
+    arr.push(p);
+    byAc.set(k, arr);
+  }
+  const features = [...byAc.values()].flatMap((arr) => {
+    const sorted = [...arr].sort((a, b) => a.observedAt.localeCompare(b.observedAt));
+    if (sorted.length < 2) return [];
+    return [{
+      type: "Feature" as const,
+      geometry: {
+        type: "LineString" as const,
+        coordinates: sorted.map((p) => [p.lon, p.lat]),
+      },
+      properties: { aircraft: sorted[0]!.aircraft },
+    }];
+  });
+  return { type: "FeatureCollection" as const, features };
+}
+
+function buildVortexFC(v: import("../../api/live").VortexFix | null) {
+  if (!v) return { type: "FeatureCollection" as const, features: [] };
+  return {
+    type: "FeatureCollection" as const,
+    features: [{
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [v.lon, v.lat] },
+      properties: {
+        aircraft: v.aircraft,
+        pressureMb: v.pressureMb,
+        maxFlWindKt: v.maxFlWindKt,
+        observedAt: v.observedAt,
+        missionId: v.missionId,
+      },
+    }],
   };
 }
 
@@ -499,6 +568,7 @@ export function LiveStormLayer({ map }: Props) {
   const showAlerts = useLiveStormStore((s) => s.showAlerts);
   const showWatchesWarnings = useLiveStormStore((s) => s.showWatchesWarnings);
   const showBuoys = useLiveStormStore((s) => s.showBuoys);
+  const showRecon = useLiveStormStore((s) => s.showRecon);
   const showLand = useLiveStormStore((s) => s.showLand);
   const showSst = useLiveStormStore((s) => s.showSst);
   const showWindField = useLiveStormStore((s) => s.showWindField);
@@ -536,6 +606,9 @@ export function LiveStormLayer({ map }: Props) {
       }));
       setSource(map, SRC_OBSERVED, buildLineFC(observed));
       setSource(map, SRC_BUOYS, buildBuoyFC(data?.buoys ?? []));
+      setSource(map, SRC_RECON, buildReconFC(data?.recon ?? []));
+      setSource(map, SRC_RECON_TRACK, buildReconTrackFC(data?.recon ?? []));
+      setSource(map, SRC_VORTEX, buildVortexFC(data?.vortex ?? null));
       setSource(map, SRC_LAND, buildLandFC(data?.landStations ?? []));
       setSource(map, SRC_OBS_OUTER, buildConeQuadFC(data?.observedWindField.outerCone));
       setSource(map, SRC_OBS_RINGS, buildRingFC(data?.observedWindField.outerRings));
@@ -751,6 +824,7 @@ export function LiveStormLayer({ map }: Props) {
             "match", ["get", "source"],
             "buoy", "#0891b2",
             "land", "#10b981",
+            "recon", "#c026d3",
             "#94a3b8",
           ] as unknown as never,
           "circle-stroke-color": "#0f172a",
@@ -875,6 +949,72 @@ export function LiveStormLayer({ map }: Props) {
         },
       });
 
+      ensureLayer(map, LAYER_RECON_TRACK, {
+        id: LAYER_RECON_TRACK, type: "line", source: SRC_RECON_TRACK,
+        paint: {
+          "line-color": "#a21caf",
+          "line-width": 1.6,
+          "line-opacity": 0.75,
+          "line-dasharray": [2, 1] as unknown as never,
+        },
+        layout: { "line-cap": "round", "line-join": "round" },
+      });
+      ensureLayer(map, LAYER_RECON, {
+        id: LAYER_RECON, type: "circle", source: SRC_RECON,
+        paint: {
+          "circle-radius": 4,
+          "circle-color": ["step", ["get", "surfaceKt"], ...SSHWS_STEP_COLOR] as unknown as never,
+          "circle-stroke-color": "#86198f",
+          "circle-stroke-width": 1.2,
+          "circle-opacity": 0.95,
+        },
+      });
+      ensureLayer(map, LAYER_RECON_TEXT, {
+        id: LAYER_RECON_TEXT, type: "symbol", source: SRC_RECON,
+        minzoom: OBS_LABEL_MIN_ZOOM,
+        layout: {
+          "text-field": [
+            "concat",
+            ["to-string", ["round", ["get", "surfaceKt"]]],
+            " kt",
+          ] as unknown as never,
+          "text-size": 10,
+          "text-offset": [0, -1.05] as unknown as never,
+          "text-anchor": "bottom",
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color": "#86198f",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.4,
+        },
+      });
+      ensureLayer(map, LAYER_VORTEX, {
+        id: LAYER_VORTEX, type: "circle", source: SRC_VORTEX,
+        paint: {
+          "circle-radius": 8,
+          "circle-color": "#f5d0fe",
+          "circle-stroke-color": "#a21caf",
+          "circle-stroke-width": 2.2,
+          "circle-opacity": 0.95,
+        },
+      });
+      ensureLayer(map, LAYER_VORTEX_TEXT, {
+        id: LAYER_VORTEX_TEXT, type: "symbol", source: SRC_VORTEX,
+        layout: {
+          "text-field": "VDM",
+          "text-size": 9,
+          "text-offset": [0, 1.3] as unknown as never,
+          "text-anchor": "top",
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#86198f",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.4,
+        },
+      });
+
       ensureLayer(map, LAYER_LAND, {
         id: LAYER_LAND, type: "circle", source: SRC_LAND,
         paint: {
@@ -956,6 +1096,11 @@ export function LiveStormLayer({ map }: Props) {
       moveToTop(map, LAYER_FORECAST_HISTORY);
       moveToTop(map, LAYER_FORECAST_LATEST);
       moveToTop(map, LAYER_OBSERVED);
+      moveToTop(map, LAYER_RECON_TRACK);
+      moveToTop(map, LAYER_RECON);
+      moveToTop(map, LAYER_RECON_TEXT);
+      moveToTop(map, LAYER_VORTEX);
+      moveToTop(map, LAYER_VORTEX_TEXT);
 
       // ── Visibility — driven purely by the panel toggles. ──
       setVis(map, LAYER_SST, showSst);
@@ -969,6 +1114,11 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_OBSERVED, true);
       setVis(map, LAYER_BUOYS, showBuoys);
       setVis(map, LAYER_BUOYS_TEXT, showBuoys);
+      setVis(map, LAYER_RECON, showRecon);
+      setVis(map, LAYER_RECON_TRACK, showRecon);
+      setVis(map, LAYER_RECON_TEXT, showRecon);
+      setVis(map, LAYER_VORTEX, showRecon);
+      setVis(map, LAYER_VORTEX_TEXT, showRecon);
       setVis(map, LAYER_LAND, showLand);
       setVis(map, LAYER_LAND_TEXT, showLand);
       setVis(map, LAYER_OBS_OUTER, showWindField);
@@ -990,7 +1140,7 @@ export function LiveStormLayer({ map }: Props) {
   }, [
     map, data,
     showForecastHistory, showAlerts, showWatchesWarnings,
-    showBuoys, showLand, showSst,
+    showBuoys, showRecon, showLand, showSst,
     showWindField, showForecastCone, showSurge, showWindMap,
     windMapMode, gfsGrid, ecmwfGrid, highlightObs, frameIndex,
   ]);
@@ -1020,6 +1170,63 @@ export function LiveStormLayer({ map }: Props) {
             <div><strong>${p.stationId}</strong> · NDBC buoy</div>
             <div>Wind ${fmt(p.windKt, " kt")} · Gust ${fmt(p.gustKt, " kt")}</div>
             <div>Pressure ${fmt(p.pressureMb, " mb")}</div>
+          </div>`,
+        )
+        .addTo(map);
+      map.getCanvas().style.cursor = "pointer";
+    };
+
+    const onEnterRecon = async (e: mapboxgl.MapMouseEvent) => {
+      const f = (e as any).features?.[0];
+      if (!f) return;
+      const p = f.properties as {
+        aircraft: string;
+        missionId: string;
+        surfaceKt: number;
+        surfaceSource: string;
+        flWindKt: number | null;
+        sfmrKt: number | null;
+        observedAt: string;
+      };
+      const mb = await import("mapbox-gl");
+      popup?.remove();
+      const src = p.surfaceSource === "sfmr" ? "SFMR surface" : "0.8 × flight-level";
+      const when = p.observedAt ? p.observedAt.replace("T", " ").replace("Z", " UTC") : "";
+      popup = new mb.default.Popup({ closeButton: false, closeOnClick: false })
+        .setLngLat(e.lngLat)
+        .setHTML(
+          `<div style="font-size:11px;line-height:1.4">
+            <div><strong>${p.aircraft || "Hunter"}</strong> · ${p.missionId || "recon"}</div>
+            <div>Surface ${fmt(p.surfaceKt, " kt")} · ${src}</div>
+            <div>SFMR ${fmt(p.sfmrKt, " kt")} · FL ${fmt(p.flWindKt, " kt")}</div>
+            <div style="color:#64748b">${when}</div>
+          </div>`,
+        )
+        .addTo(map);
+      map.getCanvas().style.cursor = "pointer";
+    };
+
+    const onEnterVortex = async (e: mapboxgl.MapMouseEvent) => {
+      const f = (e as any).features?.[0];
+      if (!f) return;
+      const p = f.properties as {
+        aircraft: string;
+        pressureMb: number | null;
+        maxFlWindKt: number | null;
+        observedAt: string;
+        missionId: string;
+      };
+      const mb = await import("mapbox-gl");
+      popup?.remove();
+      const when = p.observedAt ? p.observedAt.replace("T", " ").replace("Z", " UTC") : "";
+      popup = new mb.default.Popup({ closeButton: false, closeOnClick: false })
+        .setLngLat(e.lngLat)
+        .setHTML(
+          `<div style="font-size:11px;line-height:1.4">
+            <div><strong>Vortex fix</strong> · ${p.aircraft || "recon"}</div>
+            <div>Min pressure ${fmt(p.pressureMb, " mb")}</div>
+            <div>Max FL wind ${fmt(p.maxFlWindKt, " kt")}</div>
+            <div style="color:#64748b">${when}</div>
           </div>`,
         )
         .addTo(map);
@@ -1098,6 +1305,14 @@ export function LiveStormLayer({ map }: Props) {
         map.on("mouseenter", LAYER_BUOYS, onEnterBuoy as never);
         map.on("mouseleave", LAYER_BUOYS, onLeave);
       }
+      if (map.getLayer(LAYER_RECON)) {
+        map.on("mouseenter", LAYER_RECON, onEnterRecon as never);
+        map.on("mouseleave", LAYER_RECON, onLeave);
+      }
+      if (map.getLayer(LAYER_VORTEX)) {
+        map.on("mouseenter", LAYER_VORTEX, onEnterVortex as never);
+        map.on("mouseleave", LAYER_VORTEX, onLeave);
+      }
       if (map.getLayer(LAYER_LAND)) {
         map.on("mouseenter", LAYER_LAND, onEnterLand as never);
         map.on("mouseleave", LAYER_LAND, onLeave);
@@ -1113,6 +1328,10 @@ export function LiveStormLayer({ map }: Props) {
       try {
         map.off("mouseenter", LAYER_BUOYS, onEnterBuoy as never);
         map.off("mouseleave", LAYER_BUOYS, onLeave);
+        map.off("mouseenter", LAYER_RECON, onEnterRecon as never);
+        map.off("mouseleave", LAYER_RECON, onLeave);
+        map.off("mouseenter", LAYER_VORTEX, onEnterVortex as never);
+        map.off("mouseleave", LAYER_VORTEX, onLeave);
         map.off("mouseenter", LAYER_LAND, onEnterLand as never);
         map.off("mouseleave", LAYER_LAND, onLeave);
         map.off("mouseenter", LAYER_WW_FILL, onEnterWW as never);

@@ -67,7 +67,7 @@ class WindObs:
     lon: float
     wind_kt: float
     wind_dir_deg: float | None
-    source: str          # "buoy" | "land"
+    source: str          # "buoy" | "land" | "recon"
     station_id: str
     observed_at: str     # ISO
 
@@ -83,6 +83,10 @@ LAND_STATION_CAP = 800
 LAND_STATION_WORKERS = 48
 IDW_POWER = 2.0
 IDW_RADIUS_DEG = 3.0             # ~330 km at mid-latitudes
+# Recon SFMR is a dense transect through the core. A 3° radius would smear
+# eyewall winds across the whole basin; keep influence tight so hunters
+# fill the hole buoys leave without painting a 300 km ribbon.
+IDW_RADIUS_RECON_DEG = 0.8       # ~90 km
 NEIGHBOR_RADIUS_DEG = 1.5        # for the dead-sensor check
 OUTLIER_MAX_DEV_KT = 25.0        # |obs - local_median| above this ⇒ drop
 ABS_MAX_WIND_KT = 200.0          # world-record verifiable sustained ~= 220 kt
@@ -210,40 +214,43 @@ def _fetch_land_obs_with_meta(
 
 
 def _clean_obs(
-    obs: list[tuple[float, float, float, float | None, str]],
+    obs: list[tuple[float, float, float, float | None, str, str]],
     now: datetime,
-) -> list[tuple[float, float, float, float | None]]:
-    """Multi-stage cleaning pipeline for the raw NDBC + NWS obs pool.
+) -> list[tuple[float, float, float, float | None, str]]:
+    """Multi-stage cleaning pipeline for the raw NDBC + NWS + recon obs pool.
 
-    1. Age: drop obs whose ``observed_at`` is older than ``MAX_AGE_HOURS``.
+    1. Age: drop obs whose ``observed_at`` is older than ``MAX_AGE_HOURS``
+       (recon is pre-filtered to 8 h by the recon fetcher; we still apply
+       the 4 h cap to buoy/land).
     2. Absurdity: drop obs with wind_kt above ``ABS_MAX_WIND_KT`` (world
        -record sustained wind ≈ 220 kt — anything higher is anemometer
        error or corrupt data).
     3. Dead-sensor zero: 0 kt reading whose local (1.5°) neighborhood
        median is above ``LOCAL_KILL_MEDIAN_KT`` is dropped as a stuck-at
        -zero sensor rather than pulling the IDW mean toward zero.
+       **Skipped for recon** — a calm eye is a real 0.
     4. Outlier: obs whose wind_kt deviates from the local median by more
        than ``OUTLIER_MAX_DEV_KT`` are dropped. Catches lightning-strike
        anemometer spikes and single-station spurious readings without
        needing per-station quality flags.
+       **Skipped for recon** — eyewall SFMR is supposed to be tens of kt
+       above the surrounding buoy field.
     """
-    fresh: list[tuple[float, float, float, float | None]] = []
-    for lat, lon, kt, dir_deg, iso in obs:
-        # Stage 1: age
+    fresh: list[tuple[float, float, float, float | None, str]] = []
+    for lat, lon, kt, dir_deg, iso, source in obs:
         dt = _parse_iso(iso)
         if dt is not None:
             age_h = (now - dt).total_seconds() / 3600.0
-            if age_h > MAX_AGE_HOURS:
+            cap = 8.0 if source == "recon" else MAX_AGE_HOURS
+            if age_h > cap:
                 continue
-        # Stage 2: absurdity
         if kt > ABS_MAX_WIND_KT:
             continue
-        fresh.append((lat, lon, kt, dir_deg))
+        fresh.append((lat, lon, kt, dir_deg, source))
 
-    # Precompute local median for each fresh obs (used by stages 3 and 4).
     def _local_median(lat: float, lon: float, exclude_self_kt: float) -> float | None:
         vals = [
-            k for (la, lo, k, _d) in fresh
+            k for (la, lo, k, _d, _s) in fresh
             if abs(la - lat) < NEIGHBOR_RADIUS_DEG
             and abs(lo - lon) < NEIGHBOR_RADIUS_DEG
             and (la, lo, k) != (lat, lon, exclude_self_kt)
@@ -253,22 +260,17 @@ def _clean_obs(
         vals.sort()
         return vals[len(vals) // 2]
 
-    cleaned: list[tuple[float, float, float, float | None]] = []
-    for lat, lon, kt, dir_deg in fresh:
+    cleaned: list[tuple[float, float, float, float | None, str]] = []
+    for lat, lon, kt, dir_deg, source in fresh:
+        if source == "recon":
+            cleaned.append((lat, lon, kt, dir_deg, source))
+            continue
         local_med = _local_median(lat, lon, kt)
-
-        # Stage 3: dead-sensor zero
         if kt == 0 and local_med is not None and local_med > LOCAL_KILL_MEDIAN_KT:
             continue
-
-        # Stage 4: outlier vs neighborhood
-        if (
-            local_med is not None
-            and abs(kt - local_med) > OUTLIER_MAX_DEV_KT
-        ):
+        if local_med is not None and abs(kt - local_med) > OUTLIER_MAX_DEV_KT:
             continue
-
-        cleaned.append((lat, lon, kt, dir_deg))
+        cleaned.append((lat, lon, kt, dir_deg, source))
     return cleaned
 
 
@@ -395,6 +397,7 @@ def _cell_confidence(
 def wind_field_grid(
     west: float, south: float, east: float, north: float,
     *, now: datetime | None = None,
+    extra_obs: list[WindObs] | None = None,
 ) -> tuple[list[WindGridCell], float, list[WindObs]]:
     """Return (grid_cells, cell_step_deg, cleaned_obs_pool). Cells with no
     obs in range are omitted — the renderer paints those as gaps rather
@@ -427,8 +430,17 @@ def wind_field_grid(
             west, south, east, north,
         )
     )
+    if extra_obs:
+        for o in extra_obs:
+            obs_with_meta.append((
+                o.lat, o.lon, float(o.wind_kt), o.wind_dir_deg,
+                o.observed_at, o.source, o.station_id,
+            ))
 
-    obs = [(la, lo, kt, d, iso) for (la, lo, kt, d, iso, _s, _sid) in obs_with_meta]
+    obs = [
+        (la, lo, kt, d, iso, src)
+        for (la, lo, kt, d, iso, src, _sid) in obs_with_meta
+    ]
     step = FIXED_STEP_DEG
     cleaned = _clean_obs(obs, now)
     if not cleaned:
@@ -441,34 +453,35 @@ def wind_field_grid(
     for lat, lon, kt, _d, iso, source, sid in obs_with_meta:
         meta_by_key[(lat, lon, kt)] = (source, sid, iso)
     obs_pool: list[WindObs] = []
-    for lat, lon, kt, d in cleaned:
+    for lat, lon, kt, d, source in cleaned:
         meta = meta_by_key.get((lat, lon, kt))
-        source, sid, iso = meta if meta else ("unknown", "", "")
+        src, sid, iso = meta if meta else (source, "", "")
         obs_pool.append(
             WindObs(
                 lat=round(lat, 4),
                 lon=round(lon, 4),
                 wind_kt=round(kt, 1),
                 wind_dir_deg=d,
-                source=source,
+                source=src,
                 station_id=sid,
                 observed_at=iso,
             )
         )
 
     # Pre-compute vector components once — u = -kt·sin(dir), v = -kt·cos(dir)
-    # in meteorological "wind from" convention.
-    precomputed: list[tuple[float, float, float, float | None, float | None]] = []
-    for lat, lon, kt, dir_deg in cleaned:
+    # in meteorological "wind from" convention. Per-obs IDW radius so recon
+    # only fills the core instead of smearing along a 3° corridor.
+    precomputed: list[tuple[float, float, float, float | None, float | None, float]] = []
+    for lat, lon, kt, dir_deg, source in cleaned:
         u: float | None = None
         v: float | None = None
         if dir_deg is not None and kt > 0:
             r = math.radians(dir_deg)
             u = -kt * math.sin(r)
             v = -kt * math.cos(r)
-        precomputed.append((lat, lon, kt, u, v))
+        radius = IDW_RADIUS_RECON_DEG if source == "recon" else IDW_RADIUS_DEG
+        precomputed.append((lat, lon, kt, u, v, radius * radius))
 
-    r_sq = IDW_RADIUS_DEG ** 2
     cells: list[WindGridCell] = []
     lat = south
     while lat <= north + 1e-9:
@@ -483,11 +496,11 @@ def wind_field_grid(
             count = 0
             nearest_d2: float | None = None
             contributor_speeds: list[float] = []
-            for (la, lo, kt, u, v) in precomputed:
+            for (la, lo, kt, u, v, obs_r_sq) in precomputed:
                 dlat = la - lat
                 dlon = (lo - lon) * cos_lat
                 d2 = dlat * dlat + dlon * dlon
-                if d2 > r_sq:
+                if d2 > obs_r_sq:
                     continue
                 # +ε keeps the on-station weight finite.
                 w = 1.0 / ((d2 + 0.01) ** (IDW_POWER / 2))

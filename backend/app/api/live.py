@@ -45,7 +45,8 @@ from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.nhc_watch_warn import split_watches_warnings
 from ..services.sea_surface_temp import sst_field
 from ..services.weather_alerts import AlertFeedUnavailable, fetch_active_alerts
-from ..services.wind_field_map import wind_field_grid
+from ..services.wind_field_map import WindObs, wind_field_grid
+from ..services.recon_obs import fetch_recon_bundle, recon_for_idw
 from ..services.wind_forecast import fetch_model_wind_grid, point_forecast
 from ..services import wildfire_exposure
 from .geometry_input import ExposureRequest, PolygonExposureOut, exposure_out
@@ -243,6 +244,37 @@ class WindGridMeta(CamelModel):
     idw_radius_km: float
 
 
+class ReconObsOut(CamelModel):
+    """One hurricane-hunter HDOB point (SFMR surface wind, or 0.8×FL fallback)."""
+
+    lat: float
+    lon: float
+    observed_at: str
+    surface_kt: float
+    surface_source: str          # "sfmr" | "fl80"
+    fl_wind_kt: float | None
+    fl_dir_deg: float | None
+    sfmr_kt: float | None
+    rain_mm_hr: float | None
+    aircraft: str
+    storm_name: str
+    mission_id: str
+
+
+class VortexFixOut(CamelModel):
+    """Latest vortex data message center fix, when a mission is in the storm."""
+
+    lat: float
+    lon: float
+    observed_at: str
+    pressure_mb: float | None
+    max_fl_wind_kt: float | None
+    aircraft: str
+    storm_id: str
+    storm_name: str
+    mission_id: str
+
+
 class WindObsOut(CamelModel):
     """One cleaned surface observation used to build the wind heatmap.
     Shipped in the bundle so the frontend can drill down from a cell click
@@ -252,7 +284,7 @@ class WindObsOut(CamelModel):
     lon: float
     wind_kt: float
     wind_dir_deg: float | None
-    source: str          # "buoy" | "land"
+    source: str          # "buoy" | "land" | "recon"
     station_id: str
     observed_at: str
 
@@ -320,6 +352,11 @@ class LiveStormBundle(CamelModel):
     watches_warnings_zone_only: int        # count of zone-coded (no polygon) WWs
     buoys: list[BuoyOut]
     land_stations: list[LandObsOut]
+    # Hurricane hunter HDOB (SFMR / flight-level) + latest vortex fix.
+    # Empty when no aircraft is in the storm (typical for replay / open-ocean
+    # gaps between missions).
+    recon: list[ReconObsOut]
+    vortex: VortexFixOut | None
     sst: list[SSTOut]
     sst_min_c: float | None
     sst_max_c: float | None
@@ -729,14 +766,60 @@ def live_storm_bundle(
                     )
                 )
 
+    # Hurricane hunters — live missions only. Replay storms have no
+    # current HDOB; pulling today's archive would mix in the wrong system.
+    recon_out: list[ReconObsOut] = []
+    vortex_out: VortexFixOut | None = None
+    recon_idw: list[WindObs] = []
+    if is_live:
+        try:
+            recon_bundle = fetch_recon_bundle(
+                bbox,
+                atcf_id=atcf_id,
+                storm_name=observed_storm.name,
+            )
+        except Exception:  # noqa: BLE001
+            recon_bundle = None
+        if recon_bundle is not None:
+            for fx in recon_bundle.fixes:
+                recon_out.append(
+                    ReconObsOut(
+                        lat=fx.lat, lon=fx.lon, observed_at=fx.observed_at,
+                        surface_kt=fx.surface_kt, surface_source=fx.surface_source,
+                        fl_wind_kt=fx.fl_wind_kt, fl_dir_deg=fx.fl_dir_deg,
+                        sfmr_kt=fx.sfmr_kt, rain_mm_hr=fx.rain_mm_hr,
+                        aircraft=fx.aircraft, storm_name=fx.storm_name,
+                        mission_id=fx.mission_id,
+                    )
+                )
+            if recon_bundle.vortex is not None:
+                v = recon_bundle.vortex
+                vortex_out = VortexFixOut(
+                    lat=v.lat, lon=v.lon, observed_at=v.observed_at,
+                    pressure_mb=v.pressure_mb, max_fl_wind_kt=v.max_fl_wind_kt,
+                    aircraft=v.aircraft, storm_id=v.storm_id,
+                    storm_name=v.storm_name, mission_id=v.mission_id,
+                )
+            for fx in recon_for_idw(recon_bundle.fixes):
+                recon_idw.append(
+                    WindObs(
+                        lat=fx.lat, lon=fx.lon, wind_kt=fx.surface_kt,
+                        wind_dir_deg=fx.fl_dir_deg, source="recon",
+                        station_id=f"{fx.aircraft}-{fx.observed_at[11:16]}",
+                        observed_at=fx.observed_at,
+                    )
+                )
+
     # Interpolated wind heatmap. Runs for any storm (live or replay) since it
     # is purely observation-driven; caller can turn it off if the extra land
-    # -station fetch is too slow.
+    # -station fetch is too slow. Live recon SFMR is mixed in when present.
     wind_map_out: list[WindGridPointOut] = []
     wind_obs_out: list[WindObsOut] = []
     wind_step = 0.5
     if include_wind_map:
-        cells, wind_step, obs_pool = wind_field_grid(*bbox)
+        cells, wind_step, obs_pool = wind_field_grid(
+            *bbox, extra_obs=recon_idw or None,
+        )
         wind_map_out = [
             WindGridPointOut(
                 lat=c.lat,
@@ -773,6 +856,8 @@ def live_storm_bundle(
         watches_warnings_zone_only=zone_only_ww_count,
         buoys=buoys_out,
         land_stations=land_out,
+        recon=recon_out,
+        vortex=vortex_out,
         sst=sst_out,
         sst_min_c=sst_min,
         sst_max_c=sst_max,

@@ -53,6 +53,9 @@ def test_replay_bundle_returns_observed_and_forecasts() -> None:
     assert advs[0]["advisoryNumber"] == max(a["advisoryNumber"] for a in b["forecasts"])
     assert b["bbox"][0] < b["bbox"][2]  # west < east
     assert b["bbox"][1] < b["bbox"][3]  # south < north
+    # Replay storms have no live hunter mission.
+    assert b["recon"] == []
+    assert b["vortex"] is None
 
 
 def test_replay_bundle_unknown_storm_404() -> None:
