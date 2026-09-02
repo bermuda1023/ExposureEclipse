@@ -52,7 +52,7 @@ const DEFAULT_OVERRIDES: Record<string, AssumptionOverrideIn> = {
 // No default concentration caps — user can set them per-asset in the
 // Concentration Caps card if they want to limit exposure to high-vol
 // funds like CAS Sosin.
-const DEFAULT_HF_CAP = 0.25;
+const DEFAULT_HF_CAP = 1;
 
 const DEFAULT_MAX_WEIGHTS: MaxWeightIn[] = [];
 
@@ -342,21 +342,6 @@ export function FundAnalysis() {
         : historyWindow;
 
   useEffect(() => {
-    if (!assets.length) return;
-    setMaxWeights((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const a of assets) {
-        if (a.kind === "hedge_fund" && next[a.id] === undefined) {
-          next[a.id] = 0.25;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [assets]);
-
-  useEffect(() => {
     const payload = {
       selected: [...selected],
       newCapital,
@@ -403,10 +388,14 @@ export function FundAnalysis() {
                 <th />
                 <th style={S.th}>Fund</th>
                 <th style={S.thNum}>CAGR</th>
-                <th style={S.thNum}>σ (ann)</th>
-                <th style={S.thNum}>Months</th>
-                <th style={S.thNum}>Currently held ($)</th>
-                <th style={S.thNum}>Min Investment (editable)</th>
+                <th style={S.thNum}>σ</th>
+                <th style={S.thNum}>mo</th>
+                <th style={S.thNum}>Held $</th>
+                <th style={S.thNum}>Min $</th>
+                <th style={S.thNum} title="Blank = no cap">Cap</th>
+                <th style={S.thNum} title="Blank = empirical">μ ass.</th>
+                <th style={S.thNum} title="Blank = empirical">σ ass.</th>
+                <th style={S.thNum}>ρ cap</th>
               </tr>
             </thead>
             <tbody>
@@ -417,7 +406,8 @@ export function FundAnalysis() {
                 const cagr = win?.annualisedReturn ?? a.annualisedReturn;
                 const vol = win?.annualisedVol ?? a.annualisedVol;
                 const nMo = win?.nMonths ?? a.nMonths;
-                const cap = maxWeights[a.id] ?? (a.kind === "hedge_fund" ? DEFAULT_HF_CAP : 1);
+                const cap = maxWeights[a.id] ?? 1;
+                const o = overrides[a.id];
                 const capDollars = cap * totalCapital;
                 const ticketBlocked = !!(
                   respectMin &&
@@ -519,6 +509,36 @@ export function FundAnalysis() {
                           </span>
                         ) : null}
                       </div>
+                    </td>
+                    <td style={S.tdNum}>
+                      <PercentInput
+                        value={maxWeights[a.id] ?? null}
+                        placeholder="—"
+                        onChange={(v) => setMaxWeight(a.id, v)}
+                        max={1}
+                      />
+                    </td>
+                    <td style={S.tdNum}>
+                      <PercentInput
+                        value={o?.annualisedReturn ?? null}
+                        placeholder={PCT(a.annualisedReturn)}
+                        onChange={(v) => setOverride(a.id, { annualisedReturn: v })}
+                      />
+                    </td>
+                    <td style={S.tdNum}>
+                      <PercentInput
+                        value={o?.annualisedVol ?? null}
+                        placeholder={PCT(a.annualisedVol)}
+                        onChange={(v) => setOverride(a.id, { annualisedVol: v })}
+                      />
+                    </td>
+                    <td style={S.tdNum}>
+                      <PercentInput
+                        value={o?.correlationCap ?? null}
+                        placeholder="—"
+                        onChange={(v) => setOverride(a.id, { correlationCap: v })}
+                        max={1}
+                      />
                     </td>
                   </tr>
                 );
@@ -720,83 +740,6 @@ export function FundAnalysis() {
             Sub-ticket names are dropped. Positions you already hold are grandfathered.
           </p>
           {selected.size < 2 && <p style={S.warn}>Pick at least 2 names.</p>}
-        </section>
-      </div>
-
-      <div className="fof-two">
-        <section className="fof-panel">
-          <h2>μ / σ overrides</h2>
-          <p className="note">Blank = empirical. Use for short tracks (Primary) or extreme vol (CAS).</p>
-          <table style={S.table}>
-            <thead>
-              <tr>
-                <th style={S.th}>Asset</th>
-                <th style={S.thNum}>Assumed μ (ann)</th>
-                <th style={S.thNum}>Assumed σ (ann)</th>
-                <th style={S.thNum}>ρ cap</th>
-              </tr>
-            </thead>
-            <tbody>
-              {assets.filter((a) => selected.has(a.id)).map((a) => {
-                const o = overrides[a.id];
-                return (
-                  <tr key={a.id}>
-                    <td style={S.td}>{a.name}</td>
-                    <td style={S.tdNum}>
-                      <PercentInput
-                        value={o?.annualisedReturn ?? null}
-                        placeholder={PCT(a.annualisedReturn)}
-                        onChange={(v) => setOverride(a.id, { annualisedReturn: v })}
-                      />
-                    </td>
-                    <td style={S.tdNum}>
-                      <PercentInput
-                        value={o?.annualisedVol ?? null}
-                        placeholder={PCT(a.annualisedVol)}
-                        onChange={(v) => setOverride(a.id, { annualisedVol: v })}
-                      />
-                    </td>
-                    <td style={S.tdNum}>
-                      <PercentInput
-                        value={o?.correlationCap ?? null}
-                        placeholder="—"
-                        onChange={(v) => setOverride(a.id, { correlationCap: v })}
-                        max={1}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </section>
-
-        <section className="fof-panel">
-          <h2>Name caps</h2>
-          <p className="note">Hedge funds default {PCT(DEFAULT_HF_CAP, 0)}. Indexes uncapped.</p>
-          <table style={S.table}>
-            <thead>
-              <tr>
-                <th style={S.th}>Asset</th>
-                <th style={S.thNum}>Max weight</th>
-              </tr>
-            </thead>
-            <tbody>
-              {assets.filter((a) => selected.has(a.id)).map((a) => (
-                <tr key={a.id}>
-                  <td style={S.td}>{a.name}</td>
-                  <td style={S.tdNum}>
-                    <PercentInput
-                      value={maxWeights[a.id] ?? null}
-                      placeholder={a.kind === "hedge_fund" ? PCT(DEFAULT_HF_CAP, 0) : "none"}
-                      onChange={(v) => setMaxWeight(a.id, v)}
-                      max={1}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </section>
       </div>
 

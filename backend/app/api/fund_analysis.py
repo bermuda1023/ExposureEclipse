@@ -135,8 +135,8 @@ class OptimizeRequest(CamelModel):
     )
     max_names: int = Field(8, ge=1, le=30, description="Max non-cash holdings in a book")
     default_max_weight: float = Field(
-        0.25, ge=0.05, le=1.0,
-        description="Default per-hedge-fund cap when no explicit maxWeights row is sent.",
+        1.0, ge=0.05, le=1.0,
+        description="Default per-hedge-fund cap when no explicit maxWeights row is sent. 1.0 = uncapped.",
     )
     max_illiquid_weight: float = Field(
         1.0, ge=0, le=1.0,
@@ -494,7 +494,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     max_weights: dict[str, float] = {
         mw.asset_id: mw.max_weight for mw in req.max_weights if mw.asset_id in req.asset_ids
     }
-    default_cap = float(getattr(req, "default_max_weight", 0.25) or 0.25)
+    default_cap = float(getattr(req, "default_max_weight", 1.0) or 1.0)
     for a in req.asset_ids:
         if a in max_weights:
             continue
@@ -1323,7 +1323,7 @@ class RobustnessRequest(CamelModel):
     max_names: int = 8
     max_illiquid_weight: float = 1.0
     allow_cash: bool = True
-    default_max_weight: float = 0.25
+    default_max_weight: float = 1.0
     samples_per_scenario: int = Field(
         1_500,
         ge=400,
@@ -1423,7 +1423,7 @@ def robustness_scan(req: RobustnessRequest) -> RobustnessResponse:
             if current_by_id.get(a, 0) > 0:
                 hard_min_weights[a] = min(1.0, current_by_id[a] / total_capital)
 
-    default_cap = float(getattr(req, "default_max_weight", 0.25) or 0.25)
+    default_cap = float(getattr(req, "default_max_weight", 1.0) or 1.0)
     for a in req.asset_ids:
         if a not in max_w_map and idx[a].get("kind") == "hedge_fund":
             max_w_map[a] = default_cap
