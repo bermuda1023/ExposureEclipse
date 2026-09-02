@@ -336,21 +336,24 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SourceTag({ source }: { source: "ibtracs" | "willoughby" }) {
+function SourceTag({ source }: { source: "ibtracs" | "willoughby" | "nhc" }) {
   const isIbt = source === "ibtracs";
+  const isNhc = source === "nhc";
   return (
     <span
       title={
-        isIbt
-          ? "IBTrACS: NOAA recon-measured radius of maximum winds at this fix"
-          : "Willoughby (2006) parametric estimate — IBTrACS had no recon measurement for this fix"
+        isNhc
+          ? "NHC official a-deck: operational Rmax / wind radii (same field Tropical Tidbits plots)"
+          : isIbt
+            ? "IBTrACS: NOAA recon-measured radius of maximum winds at this fix"
+            : "Willoughby (2006) parametric estimate — no operational or recon Rmax for this fix"
       }
       style={{
         fontWeight: 700,
-        color: isIbt ? "#066c2f" : "#7d5400",
+        color: isNhc ? "#1e3a8a" : isIbt ? "#066c2f" : "#7d5400",
       }}
     >
-      {isIbt ? "IBTrACS" : "Willoughby est."}
+      {isNhc ? "NHC advisory" : isIbt ? "IBTrACS" : "Willoughby est."}
     </span>
   );
 }
@@ -371,7 +374,7 @@ function RmaxSourceLine({
         textAlign: "center",
         padding: "4px 0 0",
       }}
-      title="Recon-measured Rmax (IBTrACS) takes priority; Willoughby (2006) parametric estimate fills the gaps."
+      title="Live storms use NHC official a-deck Rmax/R64. Historical storms use IBTrACS recon, then Willoughby."
     >
       Rmax source: <strong style={{ color: "#066c2f" }}>{ibt}</strong> /{" "}
       {total} ({pct}%) recon-measured

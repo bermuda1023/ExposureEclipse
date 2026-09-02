@@ -299,16 +299,23 @@ function FragmentRow({
             eye {c.closestDistanceNm.toFixed(1)} nm · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm{" "}
             <span
               title={
-                c.rmaxSource === "ibtracs"
-                  ? "IBTrACS recon-measured Rmax at closest approach"
-                  : "Willoughby (2006) parametric estimate"
+                c.rmaxSource === "nhc"
+                  ? "NHC official a-deck Rmax (operational advisory)"
+                  : c.rmaxSource === "ibtracs"
+                    ? "IBTrACS recon-measured Rmax at closest approach"
+                    : "Willoughby (2006) parametric estimate"
               }
               style={{
                 fontWeight: 700,
-                color: c.rmaxSource === "ibtracs" ? "#066c2f" : "#7d5400",
+                color:
+                  c.rmaxSource === "nhc"
+                    ? "#1e3a8a"
+                    : c.rmaxSource === "ibtracs"
+                      ? "#066c2f"
+                      : "#7d5400",
               }}
             >
-              ({c.rmaxSource === "ibtracs" ? "IBTrACS" : "Willoughby est."})
+              ({c.rmaxSource === "nhc" ? "NHC advisory" : c.rmaxSource === "ibtracs" ? "IBTrACS" : "Willoughby est."})
             </span>
           </div>
           {/* Exposed-fraction override — stops event bubbling so editing

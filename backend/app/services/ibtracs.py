@@ -53,6 +53,11 @@ class TrackPoint:
     lon: float
     wind_kt: int            # USA_WIND; 0 if missing
     pressure_mb: int | None
+    # Optional operational wind field (live NHC a-deck). When set, impact
+    # uses these instead of IBTrACS / Willoughby.
+    rmax_nm: float | None = None
+    r64_quads_nm: tuple[float, float, float, float] | None = None
+    radii_source: str | None = None  # "nhc" | None
 
 
 @dataclass(slots=True)

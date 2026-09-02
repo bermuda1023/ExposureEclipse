@@ -165,25 +165,36 @@ def _compute_impact_payload(
     )
 
     _require_exactly_one_target(payload)
-    try:
-        storms = fetch_storms()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "code": "INTERNAL_ERROR",
-                "message": "Failed to fetch IBTrACS data from NOAA.",
-                "details": {"error": str(exc)},
-            },
-        ) from exc
+    from ..services.live_hurricane import storm_for_impact
 
-    storm = next((s for s in storms if s.storm_id == storm_id), None)
+    storm = None
+    track_source = "ibtracs"
+    live = storm_for_impact(storm_id)
+    if live is not None and live.track:
+        storm = live
+        track_source = "live"
+    else:
+        try:
+            storms = fetch_storms()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "Failed to fetch IBTrACS data from NOAA.",
+                    "details": {"error": str(exc)},
+                },
+            ) from exc
+        storm = next((s for s in storms if s.storm_id.upper() == storm_id.upper()), None)
     if storm is None:
         raise HTTPException(
             status_code=404,
             detail={
                 "code": "DATASET_NOT_FOUND",
-                "message": f"Storm '{storm_id}' not found in HURDAT2 set.",
+                "message": (
+                    f"Storm '{storm_id}' is not in the live NHC feed or the "
+                    "historical IBTrACS/HURDAT set."
+                ),
                 "details": {"stormId": storm_id},
             },
         )
@@ -216,6 +227,7 @@ def _compute_impact_payload(
         "stormId": storm.storm_id,
         "stormName": storm.name,
         "year": storm.year,
+        "trackSource": track_source,
         "currency": resolved.currency,
         "multiplier": multiplier,
         "bbox": bbox,  # [west, south, east, north] or null when no impact

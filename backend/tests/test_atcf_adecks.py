@@ -224,3 +224,41 @@ def test_model_tracks_endpoint_handles_bad_atcf_id() -> None:
     assert body["tracks"] == []
     assert body["ensembleEnvelope"] is None
     assert body["notes"]  # explanation surfaced
+
+
+def test_parser_reads_wind_radii_and_rmw() -> None:
+    from app.services.atcf_adecks import _parse_lines
+
+    line = (
+        "AL, 09, 2024092612, 03, OFCL,  12, 245N,  830W,  90,  960, HU, "
+        "64, NEQ,  40,  30,  25,  35, 1012, 180,  15,  110,\n"
+    )
+    rows = list(_parse_lines(line.encode("ascii")))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["rad"] == 64
+    assert r["quads"] == (40, 30, 25, 35)
+    assert r["rmw_nm"] == 15
+    assert r["ty"] == "HU"
+
+
+def test_fetch_official_fixes_merges_rad_bands(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.atcf_adecks import fetch_official_fixes
+
+    payload = (
+        "AL, 09, 2024092612, 03, OFCL,   0, 245N,  830W, 100,  950, HU, "
+        "34, NEQ, 120, 100,  80, 110, 1012, 200,  18,  120,\n"
+        "AL, 09, 2024092612, 03, OFCL,   0, 245N,  830W, 100,  950, HU, "
+        "64, NEQ,  45,  35,  30,  40, 1012, 200,  18,  120,\n"
+        "AL, 09, 2024092612, 03, OFCL,  24, 255N,  820W,  85,  965, HU, "
+        "64, NEQ,  50,  40,  20,  35, 1012, 180,  20,  100,\n"
+    ).encode("ascii")
+    monkeypatch.setattr(atcf_adecks, "_download_adeck", lambda basin, cy, year: payload)
+    fixes = fetch_official_fixes("AL092024")
+    by_tau = {f.hours_out: f for f in fixes}
+    assert 0 in by_tau and 24 in by_tau
+    now = by_tau[0]
+    assert now.rmw_nm == 18
+    assert now.r34_quads == (120, 100, 80, 110)
+    assert now.r64_quads == (45, 35, 30, 40)
+    assert now.wind_kt == 100

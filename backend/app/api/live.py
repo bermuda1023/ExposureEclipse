@@ -31,6 +31,7 @@ from ..services.atcf_adecks import (
     MODEL_LABEL,
     ModelTrack,
     fetch_model_tracks,
+    fetch_official_fixes,
     list_available_cycles,
 )
 from ..services.ensemble_envelope import build_envelope
@@ -661,11 +662,16 @@ def live_storm_bundle(
     # never contain the current year, and even the failing lookup would
     # trigger a 70 MB CSV fetch that blew Vercel's cold-start budget.
     cone_storm_id = "" if is_live else observed_storm.storm_id
+    official_radii = {f.hours_out: f for f in fetch_official_fixes(atcf_id)} if is_live else {}
     observed_fixes_for_cone = [
         (p.lat, p.lon, p.wind_kt, p.datetime_utc) for p in observed_storm.track
     ]
+    obs_taus = [0] * len(observed_fixes_for_cone)
     obs_fp, obs_inner, obs_outer, obs_rings = build_wind_cones(
-        cone_storm_id, observed_fixes_for_cone
+        cone_storm_id,
+        observed_fixes_for_cone,
+        radii_by_tau=official_radii or None,
+        taus=obs_taus if official_radii else None,
     )
 
     if forecasts:
@@ -673,8 +679,12 @@ def live_storm_bundle(
         forecast_fixes_for_cone = [
             (fp.lat, fp.lon, fp.wind_kt, fp.valid_time) for fp in latest.points
         ]
+        fcst_taus = [fp.hours_out for fp in latest.points]
         _fp_fcst, fcst_inner, fcst_outer, fcst_rings = build_wind_cones(
-            cone_storm_id, forecast_fixes_for_cone
+            cone_storm_id,
+            forecast_fixes_for_cone,
+            radii_by_tau=official_radii or None,
+            taus=fcst_taus if official_radii else None,
         )
     else:
         fcst_inner, fcst_outer, fcst_rings = [], [], []

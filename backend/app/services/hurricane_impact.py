@@ -539,27 +539,45 @@ def compute_impact(
         # from 15 nm during landfall to 120 nm a few days later as the
         # wind field reorganises. Without the status filter we'd render an
         # absurdly large post-tropical cone.
-        if pt.wind_kt < MIN_FOOTPRINT_WIND_KT or pt.status != "HU":
+        live_radii = pt.radii_source == "nhc"
+        if pt.wind_kt < MIN_FOOTPRINT_WIND_KT:
             continue
-        rmax, rmax_src = rmax_nm(
-            pt.wind_kt,
-            pt.lat,
-            storm_id=storm.storm_id,
-            datetime_utc=pt.datetime_utc,
-        )
-        radius = rmax * multiplier
-        # R64 — radius of 64-kt winds, per quadrant (NE, SE, SW, NW). When
-        # IBTrACS has the measurement (post-2004 storms mostly) we use the
-        # quadrants to do asymmetric county capture; otherwise fall back to
-        # the symmetric 2.5×Rmax heuristic.
-        measured_r64 = lookup_r64_nm(storm.storm_id, pt.datetime_utc)
-        measured_quads = lookup_r64_quads_nm(storm.storm_id, pt.datetime_utc)
-        if measured_r64 and measured_r64 > 0:
-            r64 = measured_r64
-            r64_src = "ibtracs"
+        # IBTrACS post-tropical (EX) Rmax inflates wildly; skip those.
+        # Live NHC official points carry their own radii and are not EX.
+        if not live_radii and pt.status != "HU":
+            continue
+        if live_radii and pt.rmax_nm and pt.rmax_nm > 0:
+            rmax, rmax_src = max(8.0, pt.rmax_nm), "nhc"
         else:
-            r64 = radius  # 2.5×Rmax fallback
+            rmax, rmax_src = rmax_nm(
+                pt.wind_kt,
+                pt.lat,
+                storm_id=None if live_radii else storm.storm_id,
+                datetime_utc=None if live_radii else pt.datetime_utc,
+            )
+        radius = rmax * multiplier
+        # R64 — live NHC quadrants first, then IBTrACS, then 2.5×Rmax.
+        # Never call IBTrACS for a live NHC storm (current year is not in
+        # the archive and the lookup would pull the 70 MB CSV).
+        if live_radii and pt.r64_quads_nm and any(v > 0 for v in pt.r64_quads_nm):
+            measured_quads = pt.r64_quads_nm
+            nonzero = [v for v in measured_quads if v > 0]
+            r64 = sum(nonzero) / len(nonzero)
+            r64_src = "nhc"
+        elif live_radii:
+            measured_quads = None
+            r64 = radius
             r64_src = "fallback"
+        else:
+            measured_r64 = lookup_r64_nm(storm.storm_id, pt.datetime_utc)
+            measured_quads = lookup_r64_quads_nm(storm.storm_id, pt.datetime_utc)
+            if measured_r64 and measured_r64 > 0:
+                r64 = measured_r64
+                r64_src = "ibtracs"
+            else:
+                r64 = radius
+                r64_src = "fallback"
+                measured_quads = None
         footprint.append(
             FootprintPoint(
                 lat=pt.lat,

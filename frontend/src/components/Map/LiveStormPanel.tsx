@@ -537,7 +537,7 @@ export function LiveStormPanel() {
                   textTransform: "uppercase",
                   letterSpacing: "0.04em",
                 }}
-                title="Run the county-impact + per-programme TIV breakdown for this storm's track"
+                title="County TIV under the live NHC official track + current/forecast wind radii (not HURDAT)"
               >
                 Run county impact
               </button>

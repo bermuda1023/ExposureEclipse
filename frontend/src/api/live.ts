@@ -147,7 +147,7 @@ export interface OuterRing {
   corners: [number, number][];
   windKt: number;
   r64Nm: number;
-  r64Source: "ibtracs" | "fallback";
+  r64Source: "ibtracs" | "fallback" | "nhc";
 }
 
 export interface WindField {

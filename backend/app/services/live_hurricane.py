@@ -37,6 +37,7 @@ from .hurricane_impact import (
     _quads_symmetric,
     rmax_nm,
 )
+from .atcf_adecks import OfficialFix, fetch_official_fixes
 from .ibtracs import Storm, TrackPoint, fetch_storms, lookup_r64_quads_nm
 from .invests import fetch_active_invests, is_invest_id
 from .nhc_gis import (
@@ -62,38 +63,55 @@ REPLAY_CANDIDATES: tuple[tuple[str, str, int], ...] = (
 DAMAGING_WIND_MULTIPLIER = 2.5  # mirrors hurricane_impact for the synthetic fallback
 
 
+def _apply_official_radii(
+    wind: int,
+    lat: float,
+    dt: str,
+    storm_id: str,
+    ofcl: OfficialFix | None,
+) -> tuple[float, str, float, str, tuple[float, float, float, float] | None]:
+    """Return (rmax, rmax_src, r64_mean, r64_src, r64_quads)."""
+    if ofcl and ofcl.rmw_nm and ofcl.rmw_nm > 0:
+        rmax, rmax_src = max(8.0, float(ofcl.rmw_nm)), "nhc"
+    else:
+        rmax, rmax_src = rmax_nm(wind, lat, storm_id=storm_id, datetime_utc=dt)
+    if ofcl and ofcl.r64_quads and any(v > 0 for v in ofcl.r64_quads):
+        quads = tuple(float(v) for v in ofcl.r64_quads)
+        nonzero = [v for v in quads if v > 0]
+        return rmax, rmax_src, sum(nonzero) / len(nonzero), "nhc", quads  # type: ignore[return-value]
+    if storm_id:
+        measured_quads = lookup_r64_quads_nm(storm_id, dt)
+        if measured_quads:
+            nonzero = [v for v in measured_quads if v > 0]
+            mean = sum(nonzero) / len(nonzero) if nonzero else rmax * DAMAGING_WIND_MULTIPLIER
+            return rmax, rmax_src, mean, "ibtracs", measured_quads
+    return rmax, rmax_src, rmax * DAMAGING_WIND_MULTIPLIER, "fallback", None
+
+
 def _fixes_to_footprint(
     storm_id: str,
     fixes: list[tuple[float, float, int, str]],
     *,
     min_wind_kt: int = 25,
+    radii_by_tau: dict[int, OfficialFix] | None = None,
+    taus: list[int] | None = None,
 ) -> list[FootprintPoint]:
     """Convert (lat, lon, wind_kt, datetime_iso) tuples → FootprintPoints.
 
-    Rmax: IBTrACS measured if present, else Willoughby fallback.
-    R64 quadrants: IBTrACS measured if present, else None (symmetric fallback).
-    ``min_wind_kt`` defaults to 25 (upper-TD threshold) so the cone follows
-    the storm through weakening — cutting at 34 kt was making the forecast
-    cone abruptly disappear once NHC projected the storm below TS strength,
-    even though the track (and the impact radius) continues.
+    Prefer NHC official a-deck RMW / R64 quadrants when ``radii_by_tau`` is
+    provided (live storms). Else IBTrACS, else Willoughby / 2.5×Rmax.
     """
     out: list[FootprintPoint] = []
-    for lat, lon, wind, dt in fixes:
+    for i, (lat, lon, wind, dt) in enumerate(fixes):
         if wind < min_wind_kt:
             continue
-        rmax, rmax_src = rmax_nm(
-            wind, lat, storm_id=storm_id, datetime_utc=dt,
+        tau = taus[i] if taus is not None and i < len(taus) else None
+        ofcl = radii_by_tau.get(tau) if radii_by_tau is not None and tau is not None else None
+        rmax, rmax_src, r64_mean, r64_src, measured_quads = _apply_official_radii(
+            wind, lat, dt, storm_id, ofcl,
         )
         if rmax <= 0:
             continue
-        measured_quads = lookup_r64_quads_nm(storm_id, dt)
-        if measured_quads:
-            nonzero = [v for v in measured_quads if v > 0]
-            r64_mean = sum(nonzero) / len(nonzero) if nonzero else rmax * DAMAGING_WIND_MULTIPLIER
-            r64_src = "ibtracs"
-        else:
-            r64_mean = rmax * DAMAGING_WIND_MULTIPLIER
-            r64_src = "fallback"
         out.append(
             FootprintPoint(
                 lat=lat,
@@ -113,12 +131,17 @@ def _fixes_to_footprint(
 def build_wind_cones(
     storm_id: str,
     fixes: list[tuple[float, float, int, str]],
+    *,
+    radii_by_tau: dict[int, OfficialFix] | None = None,
+    taus: list[int] | None = None,
 ) -> tuple[list[FootprintPoint], list[ConeQuad], list[ConeQuad], list[dict]]:
     """Build inner (Rmax) + outer (asymmetric R64) cones + asymmetric outer
     cap rings for the given track of fixes. Returns
     ``(footprint, inner_cone, outer_cone, outer_rings)``.
     """
-    fp = _fixes_to_footprint(storm_id, fixes)
+    fp = _fixes_to_footprint(
+        storm_id, fixes, radii_by_tau=radii_by_tau, taus=taus,
+    )
     inner = _quads_symmetric(fp, lambda p: p.rmax_nm)
     outer = _quads_asymmetric_r64(fp)
     outer_rings: list[dict] = []
@@ -580,6 +603,110 @@ def _invest_storm_from_summary(
         )
         return storm, [], True   # is_live=True — invests are live-basin data
     return None
+
+
+def _init_plus_hours(yyyymmddhh: str, hours: int) -> str:
+    try:
+        dt = datetime.strptime(yyyymmddhh, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return ""
+    return (dt + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _status_from_wind(wind_kt: int, ty: str = "") -> str:
+    t = (ty or "").upper()
+    if t in ("EX", "ET", "LO"):
+        return t
+    if wind_kt >= 64:
+        return "HU"
+    if wind_kt >= 34:
+        return "TS"
+    return "TD"
+
+
+def storm_for_impact(atcf_id: str) -> Storm | None:
+    """Build a Storm for county impact from the LIVE NHC official forecast.
+
+    Track = OFCL/CARQ a-deck (tau 0…120) with operational RMW + R64
+    quadrants. Positions prefer the NHC forecast-track KMZ when present.
+    Returns None if this is not a live/invest storm (caller should fall
+    back to IBTrACS / HURDAT).
+    """
+    atcf_id = atcf_id.upper()
+    live_entry = _get_live_entry(atcf_id)
+    is_live = live_entry is not None or is_invest_id(atcf_id)
+    if not is_live:
+        return None
+    official = fetch_official_fixes(atcf_id)
+    kmz_by_hour: dict[int, tuple[float, float, int]] = {}
+    name = atcf_id
+    year = _year_from_atcf(atcf_id)
+    if live_entry is not None:
+        name = live_entry.get("name") or name
+        forecast_kmz = (live_entry.get("forecastTrack") or {}).get("kmzFile")
+        if forecast_kmz:
+            for fix in fetch_forecast_track(forecast_kmz):
+                kmz_by_hour[fix.hours_out] = (fix.lat, fix.lon, fix.wind_kt)
+    if not official and not kmz_by_hour:
+        assembled = storm_and_forecasts(atcf_id)
+        if assembled is None:
+            return None
+        observed, forecasts, _live = assembled
+        track = list(observed.track)
+        if forecasts:
+            latest = max(forecasts, key=lambda f: f.advisory_number)
+            for fp in latest.points:
+                if fp.hours_out <= 0:
+                    continue
+                track.append(
+                    TrackPoint(
+                        datetime_utc=fp.valid_time,
+                        record_id="",
+                        status=_status_from_wind(fp.wind_kt),
+                        lat=fp.lat,
+                        lon=fp.lon,
+                        wind_kt=fp.wind_kt,
+                        pressure_mb=None,
+                    )
+                )
+        return Storm(storm_id=atcf_id, name=observed.name, year=observed.year, track=track)
+
+    by_tau: dict[int, OfficialFix] = {f.hours_out: f for f in official}
+    hours = sorted(set(by_tau) | set(kmz_by_hour) or {0})
+    if not hours:
+        hours = [0]
+    init = official[0].init_cycle if official else ""
+    track: list[TrackPoint] = []
+    for tau in hours:
+        ofcl = by_tau.get(tau)
+        kmz = kmz_by_hour.get(tau)
+        if kmz:
+            lat, lon, kmz_wind = kmz
+        elif ofcl:
+            lat, lon, kmz_wind = ofcl.lat, ofcl.lon, ofcl.wind_kt
+        else:
+            continue
+        wind = ofcl.wind_kt if ofcl and ofcl.wind_kt else kmz_wind
+        r64 = None
+        if ofcl and ofcl.r64_quads:
+            r64 = tuple(float(v) for v in ofcl.r64_quads)
+        track.append(
+            TrackPoint(
+                datetime_utc=_init_plus_hours(init, tau) if init else "",
+                record_id="",
+                status=_status_from_wind(wind, ofcl.ty if ofcl else ""),
+                lat=lat,
+                lon=lon,
+                wind_kt=wind,
+                pressure_mb=ofcl.pressure_mb if ofcl else None,
+                rmax_nm=ofcl.rmw_nm if ofcl else None,
+                r64_quads_nm=r64,
+                radii_source="nhc",
+            )
+        )
+    if not track:
+        return None
+    return Storm(storm_id=atcf_id, name=name, year=year, track=track)
 
 
 def storm_and_forecasts(

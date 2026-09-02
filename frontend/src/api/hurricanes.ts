@@ -79,7 +79,7 @@ export interface ImpactedCounty {
   rmaxAtClosestNm: number;
   /** Provenance of the Rmax used at closest approach: IBTrACS recon
    * measurement or the Willoughby parametric fallback. */
-  rmaxSource: "ibtracs" | "willoughby";
+  rmaxSource: "ibtracs" | "willoughby" | "nhc";
   tiv: number;
   locationCount: number;
   hasData: boolean;
@@ -92,11 +92,11 @@ export interface FootprintPoint {
   windKt: number;
   rmaxNm: number;
   radiusNm: number;       // 2.5×Rmax legacy "damaging-winds" radius
-  rmaxSource: "ibtracs" | "willoughby";
+  rmaxSource: "ibtracs" | "willoughby" | "nhc";
   /** Mean radius of 64-kt winds across the four IBTrACS quadrants, or
    * 2.5×Rmax fallback for pre-2004 storms with no R64 measurement. */
   r64Nm: number;
-  r64Source: "ibtracs" | "fallback";
+  r64Source: "ibtracs" | "fallback" | "nhc";
   /** Per-quadrant R64 in nautical miles (NE, SE, SW, NW). null when no
    * IBTrACS measurement — caller falls back to symmetric r64Nm. */
   r64QuadsNm: [number, number, number, number] | null;
@@ -110,7 +110,7 @@ export interface OuterFootprintRing {
   corners: [number, number][];
   windKt: number;
   r64Nm: number;
-  r64Source: "ibtracs" | "fallback";
+  r64Source: "ibtracs" | "fallback" | "nhc";
 }
 
 /** One tapered-quad cone segment between two adjacent footprint points.

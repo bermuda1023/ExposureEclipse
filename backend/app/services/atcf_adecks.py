@@ -171,6 +171,28 @@ class ModelFix:
     pressure_mb: int | None
 
 
+@dataclass(slots=True, frozen=True)
+class OfficialFix:
+    """NHC official (OFCL) / analysis (CARQ) fix with operational wind radii.
+
+    Quadrants are NHC convention (NE, SE, SW, NW) in nautical miles — the
+    same 34/50/64-kt wind field Tropical Tidbits draws. ``rmw_nm`` is the
+    radius of maximum winds when the a-deck reports it.
+    """
+
+    hours_out: int
+    lat: float
+    lon: float
+    wind_kt: int
+    pressure_mb: int | None
+    ty: str
+    rmw_nm: float | None
+    r34_quads: tuple[int, int, int, int] | None
+    r50_quads: tuple[int, int, int, int] | None
+    r64_quads: tuple[int, int, int, int] | None
+    init_cycle: str
+
+
 @dataclass(slots=True)
 class ModelTrack:
     """One model's projected track for a single init cycle.
@@ -250,10 +272,9 @@ def _parse_int(raw: str) -> int | None:
         return None
 
 
-# NCEP a-deck lines are comma-separated fixed-column-ish; the first ~11 columns
-# are the ones we need (basin, cy, init, technum, tech, tau, lat, lon, wind,
-# pressure, ty). Fields beyond that (wind-radii quadrants, roci, ...) vary by
-# aid and we ignore them for spaghetti plotting.
+# NCEP a-deck lines are comma-separated. First ~11 columns are position /
+# intensity. Columns 12+ are the operational wind field (RAD 34/50/64
+# quadrants, ROCI, RMW) — the same radii Tropical Tidbits plots.
 _MIN_COLS = 11
 
 
@@ -284,6 +305,17 @@ def _parse_lines(payload: bytes) -> Iterable[dict]:
         # as an unknown intensity but keep the fix (position is the primary
         # signal for spaghetti plots).
         pres = _parse_int(parts[9])
+        ty = parts[10].strip().upper() if len(parts) > 10 else ""
+        rad = _parse_int(parts[11]) if len(parts) > 11 else None
+        quads: tuple[int, int, int, int] | None = None
+        if rad in (34, 50, 64) and len(parts) > 16:
+            quads = (
+                max(0, _parse_int(parts[13]) or 0),
+                max(0, _parse_int(parts[14]) or 0),
+                max(0, _parse_int(parts[15]) or 0),
+                max(0, _parse_int(parts[16]) or 0),
+            )
+        rmw = _parse_int(parts[19]) if len(parts) > 19 else None
         yield {
             "init": init_cycle,
             "tech": tech,
@@ -292,6 +324,10 @@ def _parse_lines(payload: bytes) -> Iterable[dict]:
             "lon": lon,
             "wind_kt": wind or 0,
             "pressure_mb": pres,
+            "ty": ty,
+            "rad": rad,
+            "quads": quads,
+            "rmw_nm": rmw if rmw and rmw > 0 else None,
         }
 
 
@@ -427,6 +463,63 @@ def list_available_cycles(atcf_id: str, *, limit: int = 8) -> list[str]:
     return [_format_init_iso(c) for c in ordered[:limit]]
 
 
+_OFFICIAL_TECH_RANK = {"OFCL": 0, "OFCI": 1, "CARQ": 2}
+
+
+def fetch_official_fixes(atcf_id: str) -> list[OfficialFix]:
+    """Latest-cycle NHC official forecast + analysis, with wind radii.
+
+    One row per lead time (0, 12, 24, …). Radii from OFCL/OFCI/CARQ lines
+    at that tau are merged (a-deck repeats the lat/lon once per RAD band).
+    Empty list on download/parse failure.
+    """
+    parts = _split_atcf(atcf_id)
+    if parts is None:
+        return []
+    basin, cy, year = parts
+    payload = _download_adeck(basin, cy, year)
+    if payload is None:
+        return []
+    rows = [
+        r for r in _parse_lines(payload)
+        if r["tech"] in _OFFICIAL_TECH_RANK
+    ]
+    if not rows:
+        return []
+    latest = max(r["init"] for r in rows)
+    rows = [r for r in rows if r["init"] == latest]
+    by_tau: dict[int, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_tau[r["tau"]].append(r)
+    out: list[OfficialFix] = []
+    for tau in sorted(by_tau):
+        group = sorted(by_tau[tau], key=lambda r: _OFFICIAL_TECH_RANK.get(r["tech"], 9))
+        pos = group[0]
+        rmw = next((r["rmw_nm"] for r in group if r.get("rmw_nm")), None)
+        bands: dict[int, tuple[int, int, int, int]] = {}
+        for r in group:
+            rad = r.get("rad")
+            quads = r.get("quads")
+            if rad in (34, 50, 64) and quads and any(q > 0 for q in quads):
+                bands[rad] = quads
+        out.append(
+            OfficialFix(
+                hours_out=tau,
+                lat=pos["lat"],
+                lon=pos["lon"],
+                wind_kt=pos["wind_kt"],
+                pressure_mb=pos["pressure_mb"],
+                ty=pos.get("ty") or "",
+                rmw_nm=float(rmw) if rmw else None,
+                r34_quads=bands.get(34),
+                r50_quads=bands.get(50),
+                r64_quads=bands.get(64),
+                init_cycle=latest,
+            )
+        )
+    return out
+
+
 __all__ = [
     "MODEL_FAMILY",
     "MODEL_LABEL",
@@ -434,6 +527,8 @@ __all__ = [
     "ENSEMBLE_FAMILIES",
     "ModelFix",
     "ModelTrack",
+    "OfficialFix",
     "fetch_model_tracks",
+    "fetch_official_fixes",
     "list_available_cycles",
 ]
