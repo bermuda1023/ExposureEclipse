@@ -55,7 +55,7 @@
 
 .fof-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 14px;
   margin-bottom: 16px;
 }
@@ -187,6 +187,116 @@
 }
 
 .fof-check input { width: auto; }
+
+.fof-universe-scroll { overflow-x: auto; }
+
+.fof-universe {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.fof-universe th,
+.fof-universe td {
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--ink-100);
+  vertical-align: top;
+}
+
+.fof-universe th {
+  font-size: 0.68rem;
+  font-weight: 650;
+  color: var(--ink-500);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.fof-universe th.num,
+.fof-universe td.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.fof-universe th.chk,
+.fof-universe td.chk {
+  width: 28px;
+  padding-right: 2px;
+}
+
+.fof-universe input[type="checkbox"] { width: auto; }
+
+.fof-universe .fund-name {
+  font-weight: 650;
+  font-size: 0.84rem;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+.fof-universe .fund-meta {
+  font-size: 0.68rem;
+  color: var(--ink-500);
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.fof-universe .fund-meta a {
+  margin-left: 6px;
+  color: var(--brand-600);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.fof-universe .fund-warn {
+  font-size: 0.68rem;
+  color: var(--warn-700);
+  margin-top: 2px;
+}
+
+.fof-universe .hint-mini {
+  display: block;
+  font-size: 0.6rem;
+  color: #7c3aed;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.fof-universe .hint-block {
+  color: var(--warn-700);
+}
+
+.fof-summary {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 12px;
+  font-size: 0.75rem;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ink-100);
+}
+
+.fof-summary > div {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink-700);
+}
+
+.fof-summary b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: var(--ink-900);
+}
+
+.fof-summary .total {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--ink-200);
+}
+
+.fof-book-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10px;
+}
 
 .fof-charts {
   display: grid;

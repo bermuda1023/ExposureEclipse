@@ -98,8 +98,6 @@ const CURRENCY = (v: number) =>
 
 const PCT = (v: number, digits = 1) => `${(v * 100).toFixed(digits)}%`;
 
-const KIND_TINT: Record<string, string> = { hedge_fund: "var(--brand-700)", reference: "var(--ink-500)" };
-
 // Distinct colours for the multi-line growth-of-$1 + drawdown charts.
 const ASSET_COLOR: Record<string, string> = {
   gator: "#059669",
@@ -381,21 +379,19 @@ export function FundAnalysis() {
       <div className="fof-workbench">
         <section className="fof-panel">
           <h2>Universe</h2>
-          <p className="note">{assetsQuery.data?.note}</p>
-          <table style={S.table}>
+          {assetsQuery.data?.note && <p className="note">{assetsQuery.data.note}</p>}
+          <div className="fof-universe-scroll">
+          <table className="fof-universe">
             <thead>
               <tr>
-                <th />
-                <th style={S.th}>Fund</th>
-                <th style={S.thNum}>CAGR</th>
-                <th style={S.thNum}>σ</th>
-                <th style={S.thNum}>mo</th>
-                <th style={S.thNum}>Held $</th>
-                <th style={S.thNum}>Min $</th>
-                <th style={S.thNum} title="Blank = no cap">Cap</th>
-                <th style={S.thNum} title="Blank = empirical">μ ass.</th>
-                <th style={S.thNum} title="Blank = empirical">σ ass.</th>
-                <th style={S.thNum}>ρ cap</th>
+                <th className="chk" />
+                <th>Fund</th>
+                <th className="num" title="Empirical CAGR. Edit to override the optimizer assumption.">Return</th>
+                <th className="num" title="Empirical vol. Edit to override.">Vol</th>
+                <th className="num">Held</th>
+                <th className="num">Min</th>
+                <th className="num" title="Blank = uncapped">Cap</th>
+                <th className="num" title="Blank = no correlation cap">ρ</th>
               </tr>
             </thead>
             <tbody>
@@ -417,74 +413,81 @@ export function FundAnalysis() {
                   capDollars + 0.5 < eff &&
                   (currentInvestments[a.id] ?? 0) <= 0
                 );
+                const retOverridden = o?.annualisedReturn != null;
+                const volOverridden = o?.annualisedVol != null;
                 return (
                   <tr key={a.id} style={selected.has(a.id) ? S.rowOn : S.rowOff}>
-                    <td>
+                    <td className="chk">
                       <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggle(a.id)} />
                     </td>
-                    <td style={S.td}>
-                      <div style={{ fontWeight: 600, fontSize: "0.85rem", color: ASSET_COLOR[a.id] }}>
-                        {a.name}
+                    <td>
+                      <div className="fund-name" style={{ color: ASSET_COLOR[a.id] }} title={a.name}>
+                        {SHORT_NAME[a.id] ?? a.name}
                       </div>
-                      <div style={S.chipRow}>
-                        <span style={{ ...S.chip, background: KIND_TINT[a.kind] }}>
-                          {a.kind === "hedge_fund" ? "Hedge Fund" : "Reference"}
-                        </span>
-                        <span style={S.chipMuted}>{a.strategy}</span>
-                        {a.illiquid && (
-                          <span style={{ ...S.chip, background: "#b45309" }} title={a.lockup}>
-                            Lockup
-                          </span>
-                        )}
+                      <div className="fund-meta">
+                        {a.strategy}
+                        {nMo ? ` · ${nMo} mo` : ""}
+                        {a.kind === "reference" ? " · index" : ""}
+                        {a.illiquid ? " · lockup" : ""}
+                        {a.docs?.map((d) => (
+                          <a key={d.url} href={d.url} target="_blank" rel="noopener noreferrer">
+                            {d.label}
+                          </a>
+                        ))}
                       </div>
-                      {a.warning && <div style={S.warn}>{a.warning}</div>}
-                      {a.docs && a.docs.length > 0 && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-                          {a.docs.map((d) => (
-                            <a
-                              key={d.url}
-                              href={d.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{
-                                fontSize: "0.72rem",
-                                fontWeight: 600,
-                                color: "var(--brand-700)",
-                                textDecoration: "none",
-                              }}
-                            >
-                              {d.label} ↗
-                            </a>
-                          ))}
-                        </div>
-                      )}
+                      {a.warning && <div className="fund-warn">{a.warning}</div>}
                     </td>
-                    <td style={S.tdNum}>{PCT(cagr)}</td>
-                    <td style={S.tdNum}>{PCT(vol)}</td>
-                    <td style={S.tdNum}>{nMo}</td>
-                    <td style={S.tdNum}>
+                    <td className="num">
+                      <PercentInput
+                        value={o?.annualisedReturn ?? cagr}
+                        placeholder={(cagr * 100).toFixed(1)}
+                        highlight={retOverridden ? "#fef3c7" : undefined}
+                        title={retOverridden ? `Override · empirical ${(cagr * 100).toFixed(1)}%` : "Empirical return. Edit to override."}
+                        onChange={(v) => {
+                          const next =
+                            v == null || Math.abs(v - cagr) < 0.0005 ? null : v;
+                          setOverride(a.id, { annualisedReturn: next });
+                        }}
+                      />
+                    </td>
+                    <td className="num">
+                      <PercentInput
+                        value={o?.annualisedVol ?? vol}
+                        placeholder={(vol * 100).toFixed(1)}
+                        highlight={volOverridden ? "#fef3c7" : undefined}
+                        title={volOverridden ? `Override · empirical ${(vol * 100).toFixed(1)}%` : "Empirical vol. Edit to override."}
+                        onChange={(v) => {
+                          const next =
+                            v == null || Math.abs(v - vol) < 0.0005 ? null : v;
+                          setOverride(a.id, { annualisedVol: next });
+                        }}
+                      />
+                    </td>
+                    <td className="num">
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                         <DollarInput
                           value={currentInvestments[a.id] ?? 0}
                           onChange={(v) => setCurrentInv(a.id, v)}
+                          width={104}
                           highlight={(currentInvestments[a.id] ?? 0) > 0 ? "#dbeafe" : undefined}
                           title={(currentInvestments[a.id] ?? 0) > 0
                             ? `Currently invested — will be a floor if "no-sell" is on`
                             : "Enter your current position, if any"}
                         />
                         {(currentInvestments[a.id] ?? 0) > 0 && noSell && totalCapital > 0 && (
-                          <span style={S.floorHint}>
-                            → hard floor {PCT((currentInvestments[a.id]!) / totalCapital, 2)}
+                          <span className="hint-mini">
+                            floor {PCT((currentInvestments[a.id]!) / totalCapital, 2)}
                           </span>
                         )}
                       </div>
                     </td>
-                    <td style={S.tdNum}>
+                    <td className="num">
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
                           <DollarInput
                             value={eff}
                             onChange={(v) => setMinInv(a.id, v)}
+                            width={104}
                             highlight={overridden ? "#fef3c7" : undefined}
                             title={overridden ? `Overridden from PDF default ${CURRENCY(a.minInvestment)}` : "PDF default"}
                           />
@@ -500,44 +503,32 @@ export function FundAnalysis() {
                           )}
                         </div>
                         {ticketBlocked ? (
-                          <span style={S.ticketBlocked} title="Concentration cap is below this fund's minimum — the optimizer will exclude it rather than size a stub.">
-                            excluded: {PCT(cap, 0)} cap = {CURRENCY(capDollars)} vs min {CURRENCY(eff)}
+                          <span className="hint-mini hint-block" title="Cap is below this fund's minimum — excluded rather than a stub ticket.">
+                            excluded {CURRENCY(capDollars)} &lt; min
                           </span>
                         ) : respectMin && eff > 0 && totalCapital > 0 ? (
-                          <span style={S.floorHint}>
-                            → ticket floor {PCT(eff / totalCapital, 2)} ({CURRENCY(eff)})
+                          <span className="hint-mini">
+                            ticket {PCT(eff / totalCapital, 2)}
                           </span>
                         ) : null}
                       </div>
                     </td>
-                    <td style={S.tdNum}>
+                    <td className="num">
                       <PercentInput
                         value={maxWeights[a.id] ?? null}
                         placeholder="—"
                         onChange={(v) => setMaxWeight(a.id, v)}
                         max={1}
+                        title="Blank = uncapped"
                       />
                     </td>
-                    <td style={S.tdNum}>
-                      <PercentInput
-                        value={o?.annualisedReturn ?? null}
-                        placeholder={PCT(a.annualisedReturn)}
-                        onChange={(v) => setOverride(a.id, { annualisedReturn: v })}
-                      />
-                    </td>
-                    <td style={S.tdNum}>
-                      <PercentInput
-                        value={o?.annualisedVol ?? null}
-                        placeholder={PCT(a.annualisedVol)}
-                        onChange={(v) => setOverride(a.id, { annualisedVol: v })}
-                      />
-                    </td>
-                    <td style={S.tdNum}>
+                    <td className="num">
                       <PercentInput
                         value={o?.correlationCap ?? null}
                         placeholder="—"
                         onChange={(v) => setOverride(a.id, { correlationCap: v })}
                         max={1}
+                        title="Blank = no correlation cap"
                       />
                     </td>
                   </tr>
@@ -545,201 +536,135 @@ export function FundAnalysis() {
               })}
             </tbody>
           </table>
+          </div>
         </section>
 
         <section className="fof-panel">
           <h2>Book</h2>
 
-          <div style={S.summaryBox}>
-            <div style={S.summaryRow}>
-              <span>Currently invested</span>
-              <span style={S.summaryVal}>{CURRENCY(currentTotal)}</span>
-            </div>
-            <div style={S.summaryRow}>
-              <span>New capital to deploy</span>
-              <span style={S.summaryVal}>{CURRENCY(newCapital)}</span>
-            </div>
-            <div style={{ ...S.summaryRow, borderTop: "1px solid #cbd5e1", paddingTop: 4, marginTop: 4, fontWeight: 600 }}>
-              <span>Total portfolio</span>
-              <span style={S.summaryVal}>{CURRENCY(totalCapital)}</span>
-            </div>
+          <div className="fof-summary">
+            <div><span>Held</span><b>{CURRENCY(currentTotal)}</b></div>
+            <div><span>New</span><b>{CURRENCY(newCapital)}</b></div>
+            <div className="total"><span>Total</span><b>{CURRENCY(totalCapital)}</b></div>
           </div>
 
-          <label style={S.label}>
-            New capital to deploy ($)
-            <DollarInput
-              value={newCapital}
-              onChange={(v) => setNewCapital(v)}
-              width={220}
-            />
-            <span style={S.hint}>Set per-fund current holdings in the Assets table above.</span>
+          <label className="fof-field">
+            New capital ($)
+            <DollarInput value={newCapital} onChange={setNewCapital} width={240} />
           </label>
 
-          <label style={S.labelRow}>
+          <label className="fof-check" title="Optimizer only deploys new dollars; existing balances stay put.">
             <input
               type="checkbox"
               checked={allocateNewOnly}
               onChange={(e) => setAllocateNewOnly(e.target.checked)}
             />
-            Allocate new capital only (keep current holdings fixed)
+            Allocate new capital only
           </label>
-          <p style={S.hint}>
-            Default on for personal use: optimizer only deploys <em>new</em> dollars; existing
-            balances stay put. Turn off to rebalance the full book (current + new).
-          </p>
-
-          <label style={S.labelRow}>
+          <label className="fof-check" title={allocateNewOnly ? "Implied when new-capital-only is on." : "Current holdings are floors — add but not sell."}>
             <input
               type="checkbox"
               checked={noSell}
               onChange={(e) => setNoSell(e.target.checked)}
               disabled={allocateNewOnly}
             />
-            Don't reduce existing positions (add-only floors)
+            Don&apos;t reduce existing positions
           </label>
-          <p style={S.hint}>
-            {allocateNewOnly
-              ? "Implied when “new capital only” is on."
-              : "If on, current holdings are floors — can add but not sell."}
-          </p>
+          <label className="fof-check" title="Sub-ticket names are dropped. Positions you already hold are grandfathered.">
+            <input type="checkbox" checked={respectMin} onChange={(e) => setRespectMin(e.target.checked)} />
+            Respect fund minimums
+          </label>
+          <label className="fof-check" title="Cash only if leftover dollars cannot fill a legal ticket.">
+            <input type="checkbox" checked={allowCash} onChange={(e) => setAllowCash(e.target.checked)} />
+            Allow leftover cash
+          </label>
+          <label className="fof-check" title="Letters are already net. Leave off unless you want a GP-fee sensitivity.">
+            <input type="checkbox" checked={netOfFees} onChange={(e) => setNetOfFees(e.target.checked)} />
+            Re-apply GP management fees
+          </label>
 
-          <label style={S.label}>
-            FoF objective (recommended book)
+          <label className="fof-field">
+            Objective
             <select
               value={objective}
               onChange={(e) => setObjective(e.target.value as typeof objective)}
-              style={S.input}
             >
-              <option value="ir">Max information ratio vs benchmark (default)</option>
+              <option value="ir">Max IR vs benchmark</option>
               <option value="sharpe">Max Sharpe</option>
               <option value="sortino">Max Sortino</option>
-              <option value="min_dd">Min historical drawdown</option>
+              <option value="min_dd">Min drawdown</option>
               <option value="min_var">Min variance</option>
             </select>
           </label>
 
-          <label style={S.label}>
-            Max names in the book
-            <input
-              type="number"
-              min={2}
-              max={20}
-              value={maxNames}
-              onChange={(e) => setMaxNames(Math.max(2, Number(e.target.value) || 8))}
-              style={S.input}
-            />
-            <span style={S.hint}>Hard cardinality cap (cash does not count). Default 8.</span>
-          </label>
+          <div className="fof-book-grid">
+            <label className="fof-field">
+              Max names
+              <input
+                type="number"
+                min={2}
+                max={20}
+                value={maxNames}
+                onChange={(e) => setMaxNames(Math.max(2, Number(e.target.value) || 8))}
+              />
+            </label>
+            <label className="fof-field" title="Default 100% — lockups ignored for a hold-forever book.">
+              Max illiquid
+              <PercentInput value={maxIlliquid} placeholder="100" onChange={(v) => setMaxIlliquid(v ?? 1)} max={1} />
+            </label>
+            <label className="fof-field" title="Your FoF overlay only. Manager letters are already net of GP fees.">
+              FoF fee
+              <PercentInput value={fofFee || null} placeholder="0" onChange={(v) => setFofFee(v ?? 0)} max={0.1} />
+            </label>
+            <label className="fof-field">
+              Risk-free
+              <PercentInput
+                value={riskFreeRate}
+                placeholder="4.0"
+                onChange={(v) => setRiskFreeRate(Math.max(0, v ?? 0))}
+                max={0.15}
+              />
+            </label>
+          </div>
 
-          <label style={S.label}>
-            Max illiquid sleeve (12mo+ lockup)
-            <PercentInput value={maxIlliquid} placeholder="100%" onChange={(v) => setMaxIlliquid(v ?? 1)} max={1} />
-            <span style={S.hint}>
-              Default 100% — lockups are ignored (hold-forever book). Lower this only if you need
-              a redeemable sleeve inside a year.
-            </span>
-          </label>
-
-          <label style={S.labelRow}>
-            <input type="checkbox" checked={allowCash} onChange={(e) => setAllowCash(e.target.checked)} />
-            Allow leftover cash (only when a ticket or cap cannot be filled)
-          </label>
-          <p style={S.hint}>
-            Not a target allocation. You will see cash only if remaining dollars cannot fill a
-            legal ticket under the concentration cap.
-          </p>
-
-          <label style={S.label}>
-            Your FoF overlay fee (annual)
-            <PercentInput value={fofFee || null} placeholder="0%" onChange={(v) => setFofFee(v ?? 0)} max={0.1} />
-            <span style={S.hint}>
-              Manager monthlies are already net of GP fees. Use this only for <em>your</em> FoF layer
-              (e.g. 1%). Default 0.
-            </span>
-          </label>
-
-          <label style={S.labelRow}>
-            <input type="checkbox" checked={netOfFees} onChange={(e) => setNetOfFees(e.target.checked)} />
-            Re-apply GP management fees (usually off)
-          </label>
-          <p style={S.hint}>
-            Letters are already net. Leave off unless you want a sensitivity that double-counts GP
-            mgmt fees. Performance fees are never modeled on top.
-          </p>
-
-          <label style={S.label}>
+          <label className="fof-field">
             History window
             <select
               value={historyWindow ?? ""}
               onChange={(e) => setHistoryWindow(e.target.value === "" ? null : e.target.value)}
-              style={S.input}
             >
-              <option value="">All available history</option>
-              <option value="common">Clip every fund to the newest selected inception{commonStartOfSelected ? ` (${commonStartOfSelected})` : ""}</option>
-              <option value="2025-01">Since Jan 2025 (tight / recent regime)</option>
-              <option value="2023-01">Since Jan 2023 (Blue Outlier inception)</option>
+              <option value="">All history</option>
+              <option value="common">Common inception{commonStartOfSelected ? ` (${commonStartOfSelected})` : ""}</option>
+              <option value="2025-01">Since Jan 2025</option>
+              <option value="2023-01">Since Jan 2023</option>
               <option value="2021-01">Since Jan 2021</option>
-              <option value="2019-03">Since Mar 2019 (ADAR1 inception — often a no-op vs All if ADAR1 is held)</option>
-              <option value="custom">Custom start month…</option>
+              <option value="2019-03">Since Mar 2019</option>
+              <option value="custom">Custom…</option>
             </select>
             {historyWindow === "custom" && (
               <input
                 type="month"
                 value={customWindowMonth}
                 onChange={(e) => setCustomWindowMonth(e.target.value)}
-                style={{ ...S.input, marginTop: 4 }}
               />
             )}
-            <span style={S.hint}>
-              Clips <b>every selected fund&apos;s μ/σ and the suggested-book CAGR/vol/IR/DD</b> to
-              this start month. &quot;All history&quot; still scores the recommended book on the
-              overlap of names that receive weight (often ADAR1&apos;s 2019 start) — pick 2023 or
-              2025 to force a shorter clock. Then click Run optimizer.
-            </span>
           </label>
 
-          <label style={S.label}>
+          <label className="fof-field">
             IR benchmark
             <select
               value={benchmarkAssetId}
               onChange={(e) => setBenchmarkAssetId(e.target.value)}
-              style={S.input}
             >
               {assets.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.name}
+                  {SHORT_NAME[a.id] ?? a.name}
                 </option>
               ))}
             </select>
-            <span style={S.hint}>
-              What the Information Ratio measures active return against. Default S&amp;P 500 for
-              "am I beating the market" — switch to AGG for "am I beating bonds," or to any
-              individual fund for pair-wise comparison (e.g. Upslope's IR vs. Cedar Creek).
-            </span>
           </label>
 
-          <label style={S.label}>
-            Risk-free rate (annual)
-            <input
-              type="number"
-              value={(riskFreeRate * 100).toFixed(1)}
-              step={0.25}
-              min={0}
-              max={15}
-              onChange={(e) => setRiskFreeRate(Math.max(0, Number(e.target.value) || 0) / 100)}
-              style={S.input}
-            />
-            <span style={S.hint}>{PCT(riskFreeRate)} — used for Sharpe / Sortino</span>
-          </label>
-
-          <label style={S.labelRow}>
-            <input type="checkbox" checked={respectMin} onChange={(e) => setRespectMin(e.target.checked)} />
-            Respect fund minimum investments
-          </label>
-          <p className="note">
-            Sub-ticket names are dropped. Positions you already hold are grandfathered.
-          </p>
-          {selected.size < 2 && <p style={S.warn}>Pick at least 2 names.</p>}
+          {selected.size < 2 && <p className="note">Pick at least 2 names.</p>}
         </section>
       </div>
 
@@ -832,30 +757,45 @@ function PercentInput({
   placeholder,
   onChange,
   max,
+  width = 68,
+  highlight,
+  title,
 }: {
   value: number | null;
   placeholder: string;
   onChange: (v: number | null) => void;
   max?: number;
+  width?: number;
+  highlight?: string;
+  title?: string;
 }) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState("");
   const shown = value == null ? "" : (value * 100).toFixed(1);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
       <input
         type="number"
-        value={shown}
+        value={focused ? draft : shown}
         placeholder={placeholder}
         step={0.5}
         min={-100}
         max={max ? max * 100 : 500}
+        onFocus={() => {
+          setDraft(shown);
+          setFocused(true);
+        }}
         onChange={(e) => {
           const raw = e.target.value;
+          setDraft(raw);
           if (raw === "") onChange(null);
           else onChange(Number(raw) / 100);
         }}
-        style={{ ...S.input, width: 75, textAlign: "right" }}
+        onBlur={() => setFocused(false)}
+        style={{ ...S.input, width, textAlign: "right", background: highlight }}
+        title={title}
       />
-      <span style={{ fontSize: "0.7rem", color: "#64748b" }}>%</span>
+      <span style={{ fontSize: "0.68rem", color: "#64748b", flexShrink: 0 }}>%</span>
     </div>
   );
 }
