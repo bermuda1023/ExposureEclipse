@@ -1,6 +1,5 @@
 /**
- * Live / replay hurricane endpoints — current Atlantic storms from NHC plus
- * the curated replay set (notable retired storms with full IBTrACS coverage).
+ * Live hurricane endpoints — current Atlantic storms from NHC plus invests.
  *
  * The bundle endpoint returns everything the live overlay needs in one shot:
  * observed track + forecast advisories (latest + history) + active NWS

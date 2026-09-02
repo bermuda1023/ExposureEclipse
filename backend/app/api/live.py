@@ -23,7 +23,6 @@ from ..services.live_hurricane import (
     fetch_active_summaries,
     fetch_live_forecast_cone,
     fetch_live_peak_surge,
-    replay_summaries,
     storm_and_forecasts,
 )
 from ..services.atcf_adecks import (
@@ -437,23 +436,15 @@ def _states_in_bbox(bbox: tuple[float, float, float, float]) -> list[str]:
 
 @router.get("/storms", response_model=LiveStormListResponse)
 def list_live_storms() -> LiveStormListResponse:
-    """Active NHC storms + curated replay candidates + active invests.
-
-    Invests (pre-advisory systems with ATCF a-deck coverage) probe every
-    (basin × 90..99) slot in parallel — an outage there degrades to an
-    empty invest list rather than 5xx'ing the whole picker."""
+    """Active NHC storms + invests. Replay storms are not offered."""
     active = [_summary_to_row(s) for s in fetch_active_summaries()]
-    replay = [_summary_to_row(s) for s in replay_summaries()]
     try:
         invests = [_invest_to_row(i) for i in fetch_active_invests()]
     except Exception:  # noqa: BLE001 — invest FTP outage → empty, not 5xx
         invests = []
     note = None
     if not active and not invests:
-        note = (
-            "No active Atlantic storms or invests right now. Pick a replay "
-            "storm below for a demo of the live-data overlays."
-        )
+        note = "No active Atlantic storms or invests right now."
     elif not active and invests:
         note = (
             "No active named/numbered storms — but "
@@ -464,7 +455,7 @@ def list_live_storms() -> LiveStormListResponse:
         )
     return LiveStormListResponse(
         active=active,
-        replay=replay,
+        replay=[],
         invests=invests,
         has_active=bool(active),
         note=note,

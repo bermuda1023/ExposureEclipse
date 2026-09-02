@@ -29,15 +29,12 @@ _FAKE_NHC_STORM = {
 }
 
 
-def test_storm_list_returns_replay_candidates_even_when_atlantic_is_quiet() -> None:
+def test_storm_list_has_no_replay_candidates() -> None:
     r = client.get("/api/live/storms")
     assert r.status_code == 200
     body = r.json()
-    # Replay candidates always available.
-    assert len(body["replay"]) >= 1
-    assert all("label" in r for r in body["replay"])
-    # When no live storms, the note explains the replay path.
-    if body["hasActive"] is False:
+    assert body["replay"] == []
+    if body["hasActive"] is False and not body.get("invests"):
         assert body["note"]
 
 

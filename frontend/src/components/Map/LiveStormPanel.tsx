@@ -1,5 +1,5 @@
 /**
- * Floating panel: pick a live (or replay) storm and toggle the overlay
+ * Floating panel: pick a live storm or invest and toggle the overlay
  * layers (alerts / buoys / land stations / SST / forecast history).
  *
  * Mounts top-right of the map container — clear of the existing
@@ -444,15 +444,6 @@ export function LiveStormPanel() {
                   rows={list.data.invests}
                   activeId={activeId}
                   variant="invest"
-                  onPick={pickStorm}
-                />
-              )}
-              {list.data.replay.length > 0 && (
-                <StormPicker
-                  label="Replay"
-                  rows={list.data.replay}
-                  activeId={activeId}
-                  variant="replay"
                   onPick={pickStorm}
                 />
               )}

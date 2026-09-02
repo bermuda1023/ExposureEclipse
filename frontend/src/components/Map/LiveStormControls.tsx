@@ -52,7 +52,7 @@ export function LiveStormControls() {
           ? "Live storm is in the Detail rail — click to float it back on the map"
           : activeId
             ? "Show or hide the live-storm panel. Overlays stay until you press ✕."
-            : "Live + replay hurricane overlay"
+            : "Live storm overlay"
       }
     >
       <span aria-hidden>🌀</span>

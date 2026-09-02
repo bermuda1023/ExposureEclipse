@@ -125,32 +125,33 @@ export function Methodology() {
 
       <Section id="hurricane-impact" title="Hurricane impact engine">
         <p>
-          Click any storm on the historical browser and the impact engine
-          computes a per-county exposure captured under that storm's wind
-          field. The output feeds an Excel export and the right-rail detail
-          panel.
+          County TIV under a storm wind field. Two entry points, two track
+          sources — they must not be mixed.
         </p>
-        <SubHead>Track ingestion</SubHead>
+        <SubHead>Which track is used</SubHead>
         <ul>
           <li>
-            Source: <b>IBTrACS v04r01</b> North Atlantic basin CSV, live-fetched
-            from NCEI and lru-cached for the process lifetime. Single-pass
-            parse builds three indexes: storm tracks (3-hour interpolated USA
-            fixes), recon <code>Rmax</code>, and per-quadrant{" "}
-            <code>R64</code>.
+            <b>Live storm → Run county impact</b>: the current NHC official
+            forecast (OFCL / CARQ a-deck, tau 0–120 h) plus the NHC
+            forecast-track KMZ for positions. Wind size comes from that
+            advisory&apos;s operational <code>RMW</code> and 34/50/64-kt
+            quadrant radii — the same field Tropical Tidbits draws. IBTrACS /
+            HURDAT is <em>not</em> consulted (the current year is not in
+            those archives, and a lookup would pull a 70 MB CSV).
           </li>
           <li>
-            Tracks include the full best-track record and interpolated
-            intermediate positions. Pre-1988 storms and any modern fix that
-            lacks recon data fall back to Willoughby et al. (2006) for Rmax
-            and a symmetric R64 estimate.
+            <b>Historical hurricane browser</b>: IBTrACS v04r01 North
+            Atlantic CSV (NCEI), process-lifetime cache. Tracks are 3-hour
+            interpolated USA fixes with recon <code>Rmax</code> and
+            per-quadrant <code>R64</code>. Missing recon falls back to
+            Willoughby et al. (2006).
           </li>
         </ul>
         <SubHead>Wind-field construction</SubHead>
         <ul>
           <li>
-            <b>Inner Rmax circle</b>: the eyewall — direct Rmax from
-            IBTrACS when available, else Willoughby:
+            <b>Inner Rmax</b> (eyewall): live NHC <code>RMW</code> when
+            present; else IBTrACS recon; else Willoughby:
             <Equation>
               Rmax(km) = 46.6 · exp(−0.0155 · V<sub>max</sub>(m/s) + 0.0169
               · |lat|)
@@ -158,11 +159,9 @@ export function Methodology() {
             with a floor of 8 nm.
           </li>
           <li>
-            <b>Outer asymmetric R64 quadrants</b>: IBTrACS-measured
-            per-quadrant NE/SE/SW/NW radii of 64-kt winds when available,
-            else symmetric fallback at{" "}
-            <code>DAMAGING_WIND_MULTIPLIER × Rmax</code>{" "}
-            (multiplier = 2.5).
+            <b>Outer asymmetric R64</b>: NHC a-deck quadrants (NE/SE/SW/NW)
+            for live storms; IBTrACS quadrants for historical storms;
+            otherwise symmetric <code>2.5 × Rmax</code>.
           </li>
           <li>
             Between fixes, quadrant radii are bearing-interpolated to the
@@ -210,6 +209,12 @@ export function Methodology() {
             >
               NOAA IBTrACS v04r01 (Public Domain)
             </a>
+            — historical browser only.
+          </li>
+          <li>
+            NHC ATCF a-decks (
+            <code>ftp.nhc.noaa.gov/atcf/aid_public/</code>
+            ) — live official track + RMW / R34 / R50 / R64.
           </li>
           <li>
             Willoughby, H.E., Darling, R.W.R., Rahn, M.E. (2006).{" "}
@@ -221,20 +226,30 @@ export function Methodology() {
 
       <Section id="live-storms" title="Live-storm overlay">
         <p>
-          When an Atlantic system is active, the live-storm overlay pulls
-          real NHC advisories and blends them with observation-derived layers.
+          When an Atlantic system is active, the overlay pulls NHC advisories
+          and observation layers. There is no replay/demo storm in the
+          picker — empty basin is empty.
         </p>
+        <SubHead>Panel chrome</SubHead>
+        <ul>
+          <li>
+            The live-storm panel is not glued to the map. <b>Collapse</b>{" "}
+            shrinks it to a one-line bar; <b>→ detail</b> moves the whole
+            panel into the right-hand Detail rail so the map is clear.
+            Overlays stay until ✕. The toolbar chip only shows/hides chrome;
+            it does not clear the storm.
+          </li>
+        </ul>
         <SubHead>Storm list</SubHead>
         <ul>
           <li>
             Active storms: <code>https://www.nhc.noaa.gov/CurrentStorms.json</code>{" "}
-            — free, no auth. Each entry carries the current center,
-            movement, intensity, and links to per-advisory GIS products.
+            — free, no auth. Center, motion, intensity, GIS product URLs.
           </li>
           <li>
-            Replay list: one curated retired storm (Ian 2022 at the moment)
-            with facts hard-coded in the router so the picker never blocks
-            on IBTrACS.
+            Invests (CY 90–99): probed from ATCF a-decks in parallel.
+            Model tracks and ensemble strike probability work; NHC cone /
+            watches / surge do not until an advisory exists.
           </li>
         </ul>
         <SubHead>Observed &amp; forecast tracks</SubHead>
@@ -271,20 +286,36 @@ export function Methodology() {
         <SubHead>Modelled wind field</SubHead>
         <ul>
           <li>
-            Reuses the historical impact engine's Rmax + R64 machinery
-            against the live storm's observed track and the latest NHC
-            forecast track.
+            Same Rmax / asymmetric R64 cone builder as historical impact,
+            applied to the observed track (tau 0) and the latest official
+            forecast (tau 12…120).
           </li>
           <li>
-            Live storms bypass IBTrACS lookup (their ATCF ID isn't in the
-            archive), so the cone drops straight through to Willoughby +
-            symmetric R64. This is what makes the bundle endpoint fast on
-            cold starts — no 70 MB CSV parse.
+            Radii come from the latest OFCL/CARQ a-deck: <code>RMW</code>{" "}
+            and 34/50/64-kt NE/SE/SW/NW quadrants. IBTrACS is not queried
+            for live storms. If a lead time has no radii, Willoughby +
+            symmetric <code>2.5 × Rmax</code> fills the gap.
           </li>
           <li>
-            Threshold: fixes below <b>25 kt</b> are dropped so the cone
-            follows the storm through TD-strength weakening. The old 34 kt
-            floor made it disappear abruptly.
+            Fixes below <b>25 kt</b> are dropped so the cone follows
+            weakening below TS strength.
+          </li>
+        </ul>
+        <SubHead>Model ensemble &amp; strike probability</SubHead>
+        <ul>
+          <li>
+            ATCF a-deck spaghetti (GFS, ECMWF, GEFS, AI models, NHC
+            official) for the latest init cycle. Ensemble strike
+            probability is P(track within a nautical-mile threshold) by
+            county.
+          </li>
+        </ul>
+        <SubHead>Formation outlook (TWO)</SubHead>
+        <ul>
+          <li>
+            NHC Tropical Weather Outlook — basin-wide, no storm required.
+            Yellow / orange / red = low / medium / high chance of
+            development in 7 days.
           </li>
         </ul>
         <SubHead>Peak storm surge</SubHead>
@@ -321,7 +352,7 @@ export function Methodology() {
         <Sources>
           <li>
             NHC <code>CurrentStorms.json</code>,{" "}
-            <code>storm_graphics/api/</code> KMZ/KML products (Public Domain).
+            <code>storm_graphics/api/</code> KMZ/KML, ATCF a-decks (Public Domain).
           </li>
           <li>
             NWS <code>api.weather.gov</code> alerts, observations (Public
@@ -571,8 +602,9 @@ export function Methodology() {
             up.
           </li>
           <li>
-            IBTrACS parse is guarded so a slow / unavailable NCEI response
-            never brings down the live-storm bundle or the picker list.
+            IBTrACS is not fetched for the live picker or live county
+            impact. A slow NCEI response cannot take down live-storm
+            mode. Historical impact still uses the cached IBTrACS parse.
           </li>
           <li>
             <code>fetch_prior_forecast_tracks</code> fires its candidate
