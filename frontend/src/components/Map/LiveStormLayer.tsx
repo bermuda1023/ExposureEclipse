@@ -275,6 +275,32 @@ function buildReconFC(points: import("../../api/live").ReconObs[]) {
   };
 }
 
+// Continuous surface-wind ramp. SSHWS steps paint everything under 34 kt
+// the same colour, which hides the eyewall on a hunter transect.
+export const SURFACE_WIND_STOPS: Array<[number, string]> = [
+  [0, "#e0f2fe"],
+  [15, "#84cc16"],
+  [25, "#facc15"],
+  [34, "#f97316"],
+  [50, "#dc2626"],
+  [64, "#7f1d1d"],
+  [96, "#6b21a8"],
+];
+
+function surfaceWindPaint(prop: string): unknown[] {
+  return [
+    "interpolate", ["linear"], ["get", prop],
+    ...SURFACE_WIND_STOPS.flatMap(([kt, color]) => [kt, color]),
+  ];
+}
+
+function hoursBetween(a: string, b: string): number {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
+  return Math.abs(tb - ta) / 3_600_000;
+}
+
 function buildReconTrackFC(points: import("../../api/live").ReconObs[]) {
   const byAc = new Map<string, import("../../api/live").ReconObs[]>();
   for (const p of points) {
@@ -283,17 +309,27 @@ function buildReconTrackFC(points: import("../../api/live").ReconObs[]) {
     arr.push(p);
     byAc.set(k, arr);
   }
+  // One short segment per pair so Mapbox can colour that stretch by the
+  // surface wind at its ends. A gap longer than a refuel is a new pass,
+  // not a line across the Gulf.
   const features = [...byAc.values()].flatMap((arr) => {
     const sorted = [...arr].sort((a, b) => a.observedAt.localeCompare(b.observedAt));
-    if (sorted.length < 2) return [];
-    return [{
-      type: "Feature" as const,
-      geometry: {
-        type: "LineString" as const,
-        coordinates: sorted.map((p) => [p.lon, p.lat]),
-      },
-      properties: { aircraft: sorted[0]!.aircraft },
-    }];
+    const segs = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1]!;
+      const cur = sorted[i]!;
+      if (hoursBetween(prev.observedAt, cur.observedAt) > 1.5) continue;
+      const surfaceKt = Math.round((prev.surfaceKt + cur.surfaceKt) / 2);
+      segs.push({
+        type: "Feature" as const,
+        geometry: {
+          type: "LineString" as const,
+          coordinates: [[prev.lon, prev.lat], [cur.lon, cur.lat]],
+        },
+        properties: { aircraft: cur.aircraft, surfaceKt },
+      });
+    }
+    return segs;
   });
   return { type: "FeatureCollection" as const, features };
 }
@@ -952,26 +988,37 @@ export function LiveStormLayer({ map }: Props) {
       ensureLayer(map, LAYER_RECON_TRACK, {
         id: LAYER_RECON_TRACK, type: "line", source: SRC_RECON_TRACK,
         paint: {
-          "line-color": "#a21caf",
-          "line-width": 1.6,
-          "line-opacity": 0.75,
-          "line-dasharray": [2, 1] as unknown as never,
+          "line-color": surfaceWindPaint("surfaceKt") as unknown as never,
+          "line-width": [
+            "interpolate", ["linear"], ["get", "surfaceKt"],
+            0, 2.2,
+            34, 3.6,
+            64, 5.5,
+            96, 7,
+          ] as unknown as never,
+          "line-opacity": 0.95,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
       ensureLayer(map, LAYER_RECON, {
         id: LAYER_RECON, type: "circle", source: SRC_RECON,
         paint: {
-          "circle-radius": 4,
-          "circle-color": ["step", ["get", "surfaceKt"], ...SSHWS_STEP_COLOR] as unknown as never,
-          "circle-stroke-color": "#86198f",
-          "circle-stroke-width": 1.2,
+          "circle-radius": [
+            "interpolate", ["linear"], ["get", "surfaceKt"],
+            0, 3.5,
+            34, 5.5,
+            64, 7.5,
+            96, 9,
+          ] as unknown as never,
+          "circle-color": surfaceWindPaint("surfaceKt") as unknown as never,
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 1.1,
           "circle-opacity": 0.95,
         },
       });
       ensureLayer(map, LAYER_RECON_TEXT, {
         id: LAYER_RECON_TEXT, type: "symbol", source: SRC_RECON,
-        minzoom: OBS_LABEL_MIN_ZOOM,
+        minzoom: 5,
         layout: {
           "text-field": [
             "concat",
@@ -984,7 +1031,7 @@ export function LiveStormLayer({ map }: Props) {
           "text-allow-overlap": false,
         },
         paint: {
-          "text-color": "#86198f",
+          "text-color": "#0f172a",
           "text-halo-color": "#ffffff",
           "text-halo-width": 1.4,
         },

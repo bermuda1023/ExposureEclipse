@@ -24,6 +24,7 @@ import {
   type WatchWarnExposureResponse,
   type WindModelGrid,
 } from "../../api/live";
+import { SURFACE_WIND_STOPS } from "./LiveStormLayer";
 import { FAMILY_COLOR } from "./ModelTrackLayer";
 import { GTWO_BUCKET_COLOR } from "./TWOLayer";
 
@@ -580,7 +581,7 @@ export function LiveStormPanel() {
               <SmartChip store={store} status={chipStatus.showWindMap} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
               <SmartChip store={store} status={chipStatus.showWindParticles} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
               <SmartChip store={store} status={chipStatus.showBuoys} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
-              <SmartChip store={store} status={chipStatus.showRecon} k="showRecon" label="Hurricane hunters" hint="HDOB SFMR + vortex fix when a plane is in the storm" color="#c026d3" />
+              <SmartChip store={store} status={chipStatus.showRecon} k="showRecon" label="Hurricane hunters" hint="Flight track colored by surface wind — SFMR, or 0.8× flight level" color="#c026d3" />
               <SmartChip store={store} status={chipStatus.showLand} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
               <SmartChip store={store} status={chipStatus.showSst} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
               <WindMapModeSelector store={store} />
@@ -2010,6 +2011,40 @@ function IntensitySparkline({
   );
 }
 
+function SurfaceWindScale({ maxKt }: { maxKt: number }) {
+  return (
+    <div style={{ display: "grid", gap: 2, marginTop: 2 }}>
+      <div style={{ fontSize: "0.62rem", color: "var(--ink-600)" }}>
+        Hunter surface wind · peak {Math.round(maxKt)} kt
+        <span style={{ color: "var(--ink-500)" }}> · SFMR, else 0.8× flight level</span>
+      </div>
+      <div
+        title="Surface wind, knots"
+        style={{
+          height: 8,
+          borderRadius: 3,
+          background: `linear-gradient(to right, ${SURFACE_WIND_STOPS.map(
+            ([kt, color]) => `${color} ${(kt / 96) * 100}%`,
+          ).join(", ")})`,
+        }}
+      />
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: "0.58rem",
+          color: "var(--ink-500)",
+        }}
+      >
+        <span>calm</span>
+        <span>34</span>
+        <span>50</span>
+        <span>64+ kt</span>
+      </div>
+    </div>
+  );
+}
+
 function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundle }) {
   const isInvest = data.storm.classification === "INVEST";
   // Invests get a distinct pale-yellow summary card matching the picker
@@ -2056,6 +2091,11 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
         {data.alerts.length} other alerts · {data.buoys.length} buoys
         {(data.recon?.length ?? 0) > 0 ? ` · ${data.recon.length} hunter pts` : ""}
       </div>
+      {(data.recon?.length ?? 0) > 0 && (
+        <SurfaceWindScale
+          maxKt={Math.max(...data.recon.map((p) => p.surfaceKt))}
+        />
+      )}
       {data.vortex && (
         <div>
           Vortex fix {data.vortex.aircraft}
