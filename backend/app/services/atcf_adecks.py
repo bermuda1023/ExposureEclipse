@@ -28,20 +28,27 @@ Stdlib-only per CLAUDE.md — no pandas, no external deps beyond ``gzip``.
 from __future__ import annotations
 
 import gzip
-import io
 import re
 import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass, field
-from functools import lru_cache
+from datetime import datetime
 from typing import Iterable
 
 from ..brand import USER_AGENT
+from .ttl_cache import TtlCache
 
 ADECK_URL_TEMPLATE = (
     "https://ftp.nhc.noaa.gov/atcf/aid_public/a{basin}{cy:02d}{year}.dat.gz"
 )
-FETCH_TIMEOUT_S = 30
+FETCH_TIMEOUT_S = 25
+# Early aids (OFCL, interpolated GFS) land on the new cycle hours before
+# GEFS members, ECMWF, and some AI runs. Keeping each model's own latest
+# cycle inside this window is what makes GFS / Euro / the ensembles show
+# up together instead of vanishing until they share one timestamp.
+MAX_CYCLE_LAG_HOURS = 24
+# Successes only. A 404 in the first hour after genesis must not stick.
+_ADECK_CACHE: TtlCache[tuple[str, int, int], bytes] = TtlCache(ttl_s=300, maxsize=24)
 
 
 # ─────────────────────────── model family taxonomy ───────────────────────────
@@ -58,28 +65,38 @@ MODEL_FAMILY: dict[str, str] = {
     # Deterministic global NWP
     "AVNO": "gfs_det", "AVNI": "gfs_det", "GFSO": "gfs_det", "GFSI": "gfs_det",
     "ECMF": "ecmwf_det", "ECMI": "ecmwf_det",
-    "CMC":  "cmc",     "CMCI": "cmc",
+    "CMC": "cmc", "CMCI": "cmc", "CMC2": "cmc",
+    "CEMN": "cmc", "CEMI": "cmc", "CEM2": "cmc",
     "UKM":  "ukmet",   "UKMI": "ukmet", "UKMO": "ukmet",
-    "NVGM": "navgem",  "NGX":  "navgem",
+    "NVGM": "navgem", "NVGI": "navgem", "NVG2": "navgem",
+    "NGX": "navgem", "NGXI": "navgem", "NGX2": "navgem",
     "EGRR": "ukmet",
     # Regional / hurricane-specific
-    "HWRF": "regional", "HWFI": "regional",
+    "HWRF": "regional", "HWFI": "regional", "HWF2": "regional",
     "HMON": "regional", "HMNI": "regional",
-    "COTC": "regional", "CTCI": "regional",
+    "COTC": "regional", "CTCI": "regional", "CTCX": "regional",
     "HAFS": "regional", "HAFA": "regional", "HAFB": "regional",
+    "HFSA": "regional", "HFSB": "regional", "HFAI": "regional", "HFBI": "regional",
     # GEFS ensemble: AC00 control + AP01..AP30 members + AEMN mean
     **{f"AP{i:02d}": "gefs_ens" for i in range(1, 31)},
     "AC00": "gefs_ens",
     "AEMN": "gefs_mean", "AEMI": "gefs_mean",
     # ECMWF ensemble: EE01..EE50 + EEMN mean (when present)
     **{f"EE{i:02d}": "ecmwf_ens" for i in range(1, 51)},
-    "EEMN": "ecmwf_mean", "EMXI": "ecmwf_mean",
+    "EEMN": "ecmwf_mean",
+    # EMXI is the early/interpolated ECMWF deterministic (the track
+    # Tropical Tidbits labels "ECMWF"), not the ensemble mean.
+    "EMXI": "ecmwf_det",
     "EMX":  "ecmwf_det",     # ECMWF deterministic (some vintages)
-    # AI models
-    "GRAP": "ai", "GRAI": "ai",     # Google GraphCast
+    "EMX2": "ecmwf_det", "ECM2": "ecmwf_det",
+    "EEMI": "ecmwf_mean",
+    # AI models. NHC's public a-deck names have moved: GraphCast is GDMI
+    # (interpolated) / GDMN (native), not the older GRAP label. Keep both.
+    "GRAP": "ai", "GRAI": "ai",     # older GraphCast label
+    "GDMI": "ai", "GDMN": "ai", "GDM1": "ai",  # Google DeepMind GraphCast
     "GENC": "ai",                    # Google GenCast
-    "AIFS": "ai",                    # ECMWF AIFS
-    "FNV3": "ai",                    # NVIDIA FourCastNet v3
+    "AIFS": "ai", "AIFN": "ai", "AIFC": "ai",  # ECMWF AIFS
+    "FNV3": "ai", "FCN3": "ai", "FCTN": "ai",  # NVIDIA FourCastNet
     "PANG": "ai",                    # Huawei Pangu-Weather
     # Consensus / statistical aids
     "TVCN": "consensus", "TVCE": "consensus", "TVCX": "consensus",
@@ -109,9 +126,13 @@ MODEL_LABEL: dict[str, str] = {
     "HMON": "HMON", "HMNI": "HMON (interp)",
     "COTC": "COAMPS-TC",
     "HAFS": "HAFS-A", "HAFA": "HAFS-A", "HAFB": "HAFS-B",
+    "HFSA": "HAFS-A", "HFAI": "HAFS-A (interp)",
+    "HFSB": "HAFS-B", "HFBI": "HAFS-B (interp)",
+    "GDMI": "GraphCast (Google)", "GDMN": "GraphCast (Google)",
+    "NVGI": "NAVGEM (interp)",
     "AC00": "GEFS control",
     "AEMN": "GEFS mean", "AEMI": "GEFS mean (interp)",
-    "EEMN": "ECMWF-ENS mean", "EMXI": "ECMWF-ENS mean",
+    "EEMN": "ECMWF-ENS mean", "EMXI": "ECMWF",
     "GRAP": "GraphCast (Google)", "GRAI": "GraphCast (interp)",
     "GENC": "GenCast (Google)",
     "AIFS": "AIFS (ECMWF)",
@@ -210,12 +231,21 @@ class ModelTrack:
 # ─────────────────────────── HTTP + parse ───────────────────────────
 
 
-@lru_cache(maxsize=16)
-def _download_adeck(basin: str, cy: int, year: int) -> bytes | None:
-    """Fetch the gzipped a-deck for one storm. Cached per (basin, cy, year)
-    so repeated bundle requests during a live event pay one network round-trip.
-    Returns None (not raise) on 404 / connection failure — the frontend
-    degrades to "no model tracks available" gracefully."""
+def _download_adeck(
+    basin: str, cy: int, year: int, *, refresh: bool = False,
+) -> bytes | None:
+    """Fetch the gzipped a-deck for one storm.
+
+    Successful payloads are cached for a few minutes. Failures are NOT
+    cached — a 404 or timeout in the first cycle after genesis used to
+    stick for the life of the process, and the UI had no way to recover
+    short of a restart.
+    """
+    key = (basin.lower(), cy, year)
+    if not refresh:
+        hit = _ADECK_CACHE.get(key)
+        if hit is not None:
+            return hit
 
     url = ADECK_URL_TEMPLATE.format(basin=basin.lower(), cy=cy, year=year)
     req = urllib.request.Request(
@@ -224,14 +254,23 @@ def _download_adeck(basin: str, cy: int, year: int) -> bytes | None:
     try:
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
             payload = resp.read()
-    except Exception:  # noqa: BLE001 — network / 404 → degrade
+    except Exception:  # noqa: BLE001 — network / 404 → degrade, do not cache
         return None
-    # Decompress (a-decks are gzipped by convention).
     try:
-        return gzip.decompress(payload)
+        data = gzip.decompress(payload)
     except OSError:
-        # Some servers deliver decompressed content already.
-        return payload
+        data = payload
+    if data:
+        _ADECK_CACHE.set(key, data)
+    return data
+
+
+def _clear_adeck_cache() -> None:
+    _ADECK_CACHE.clear()
+
+
+# Tests and a couple of call sites still use the lru_cache-style hook.
+_download_adeck.cache_clear = _clear_adeck_cache  # type: ignore[attr-defined]
 
 
 def _parse_lat(raw: str) -> float | None:
@@ -352,26 +391,65 @@ def _format_init_iso(yyyymmddhh: str) -> str:
 # ─────────────────────────── public ───────────────────────────
 
 
+def _parse_init(yyyymmddhh: str) -> datetime | None:
+    try:
+        return datetime.strptime(yyyymmddhh, "%Y%m%d%H")
+    except ValueError:
+        return None
+
+
+def _select_rows(
+    rows: list[dict], init_cycle: str | None,
+) -> list[dict]:
+    """Rows to plot.
+
+    An explicit ``init_cycle`` keeps the old single-cycle behaviour. The
+    default keeps each tech's own latest cycle, as long as it is within
+    ``MAX_CYCLE_LAG_HOURS`` of the newest row in the file. GEFS members and
+    ECMWF routinely arrive 6–12 h after the interpolated early aids; pinning
+    every model to one global timestamp dropped them and left the consensus
+    envelope, strike probability, and AI envelope with nothing to draw.
+    """
+    if init_cycle is not None:
+        return [r for r in rows if r["init"] == init_cycle]
+    newest_s = max(r["init"] for r in rows)
+    newest = _parse_init(newest_s)
+    if newest is None:
+        return [r for r in rows if r["init"] == newest_s]
+    best: dict[str, str] = {}
+    for r in rows:
+        dt = _parse_init(r["init"])
+        if dt is None:
+            continue
+        if (newest - dt).total_seconds() > MAX_CYCLE_LAG_HOURS * 3600:
+            continue
+        prev = best.get(r["tech"])
+        if prev is None or r["init"] > prev:
+            best[r["tech"]] = r["init"]
+    return [r for r in rows if best.get(r["tech"]) == r["init"]]
+
+
 def fetch_model_tracks(
     atcf_id: str,
     *,
     init_cycle: str | None = None,
     include_baselines: bool = False,
     include_analysis: bool = False,
+    refresh: bool = False,
 ) -> list[ModelTrack]:
-    """Return per-model tracks for one storm's LATEST init cycle (or the one
-    named by ``init_cycle`` as ``YYYYMMDDHH``).
+    """Return per-model tracks.
 
     Args:
         atcf_id: NHC ATCF storm id, e.g. ``AL092024``.
         init_cycle: Restrict to a specific init cycle (``YYYYMMDDHH``). If
-            None, uses the most recent cycle present in the a-deck.
+            None, each tech uses its own latest cycle inside the lag window.
         include_baselines: Include CLIPER / SHIPS / XTRP / TABM statistical
             baselines. Off by default — they clutter a spaghetti plot without
             adding forecaster value, but Phase 3 verification wants them.
         include_analysis: Include CARQ (operational analysis) rows. Off by
             default — CARQ is best-track information, not a forecast, so
             it appears as a single point at TAU=0.
+        refresh: Bypass the a-deck cache and hit NHC again.
 
     Returns:
         List of ModelTrack sorted by family display order then tech id. Empty
@@ -382,7 +460,7 @@ def fetch_model_tracks(
     if parts is None:
         return []
     basin, cy, year = parts
-    payload = _download_adeck(basin, cy, year)
+    payload = _download_adeck(basin, cy, year, refresh=refresh)
     if payload is None:
         return []
 
@@ -390,12 +468,7 @@ def fetch_model_tracks(
     if not rows:
         return []
 
-    # Pick the target init cycle.
-    if init_cycle is None:
-        init_cycle = max(r["init"] for r in rows)
-
-    # Filter by cycle.
-    rows = [r for r in rows if r["init"] == init_cycle]
+    rows = _select_rows(rows, init_cycle)
 
     # Group (tech, tau) — a well-formed a-deck emits one wind-radius block per
     # (init, tech, tau, rad) so a tech + tau can repeat; take the FIRST fix
@@ -419,13 +492,21 @@ def fetch_model_tracks(
             pressure_mb=r["pressure_mb"],
         )
 
-    # Assemble ModelTracks.
+    # Assemble ModelTracks. A tech can now come from its own cycle, so the
+    # init stamped on the track is that tech's cycle, not one global value.
     by_tech: dict[str, list[ModelFix]] = defaultdict(list)
+    init_by_tech: dict[str, str] = {}
+    for r in rows:
+        key = (r["tech"], r["tau"])
+        if key not in seen:
+            continue
+        prev = init_by_tech.get(r["tech"])
+        if prev is None or r["init"] > prev:
+            init_by_tech[r["tech"]] = r["init"]
     for (tech, _tau), fix in seen.items():
         by_tech[tech].append(fix)
 
     tracks: list[ModelTrack] = []
-    init_iso = _format_init_iso(init_cycle)
     for tech, fixes in by_tech.items():
         family = MODEL_FAMILY.get(tech, "other")
         # A single point isn't a track. Skip singletons (usually CARQ TAU=0
@@ -438,7 +519,7 @@ def fetch_model_tracks(
                 tech_id=tech,
                 label=MODEL_LABEL.get(tech, tech),
                 family=family,
-                init_cycle=init_iso,
+                init_cycle=_format_init_iso(init_by_tech.get(tech, "")),
                 fixes=fixes,
             )
         )
@@ -448,14 +529,16 @@ def fetch_model_tracks(
     return tracks
 
 
-def list_available_cycles(atcf_id: str, *, limit: int = 8) -> list[str]:
+def list_available_cycles(
+    atcf_id: str, *, limit: int = 8, refresh: bool = False,
+) -> list[str]:
     """Return the most recent ``limit`` init cycles present in the storm's
     a-deck, newest first. Empty list on upstream failure."""
     parts = _split_atcf(atcf_id)
     if parts is None:
         return []
     basin, cy, year = parts
-    payload = _download_adeck(basin, cy, year)
+    payload = _download_adeck(basin, cy, year, refresh=refresh)
     if payload is None:
         return []
     cycles = {r["init"] for r in _parse_lines(payload)}
@@ -466,7 +549,7 @@ def list_available_cycles(atcf_id: str, *, limit: int = 8) -> list[str]:
 _OFFICIAL_TECH_RANK = {"OFCL": 0, "OFCI": 1, "CARQ": 2}
 
 
-def fetch_official_fixes(atcf_id: str) -> list[OfficialFix]:
+def fetch_official_fixes(atcf_id: str, *, refresh: bool = False) -> list[OfficialFix]:
     """Latest-cycle NHC official forecast + analysis, with wind radii.
 
     One row per lead time (0, 12, 24, …). Radii from OFCL/OFCI/CARQ lines
@@ -477,7 +560,7 @@ def fetch_official_fixes(atcf_id: str) -> list[OfficialFix]:
     if parts is None:
         return []
     basin, cy, year = parts
-    payload = _download_adeck(basin, cy, year)
+    payload = _download_adeck(basin, cy, year, refresh=refresh)
     if payload is None:
         return []
     rows = [

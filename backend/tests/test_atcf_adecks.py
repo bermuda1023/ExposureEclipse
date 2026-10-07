@@ -92,7 +92,7 @@ def _patch_download(monkeypatch: pytest.MonkeyPatch) -> None:
     atcf_adecks._download_adeck.cache_clear()
     monkeypatch.setattr(
         atcf_adecks, "_download_adeck",
-        lambda basin, cy, year: _make_adeck(),
+        lambda basin, cy, year, *, refresh=False: _make_adeck(),
     )
 
 
@@ -253,7 +253,10 @@ def test_fetch_official_fixes_merges_rad_bands(monkeypatch: pytest.MonkeyPatch) 
         "AL, 09, 2024092612, 03, OFCL,  24, 255N,  820W,  85,  965, HU, "
         "64, NEQ,  50,  40,  20,  35, 1012, 180,  20,  100,\n"
     ).encode("ascii")
-    monkeypatch.setattr(atcf_adecks, "_download_adeck", lambda basin, cy, year: payload)
+    monkeypatch.setattr(
+        atcf_adecks, "_download_adeck",
+        lambda basin, cy, year, *, refresh=False: payload,
+    )
     fixes = fetch_official_fixes("AL092024")
     by_tau = {f.hours_out: f for f in fixes}
     assert 0 in by_tau and 24 in by_tau

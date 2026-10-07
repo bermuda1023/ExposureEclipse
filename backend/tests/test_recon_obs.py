@@ -148,3 +148,86 @@ def test_html_wrapped_bulletin_still_parses() -> None:
     )
     fixes = parse_hdob_text(html)
     assert len(fixes) == 2
+
+
+# NOAA P-3 ident line ("NOAA9"), same HDOB body as the USAF product.
+NOAA9_HDOB = """
+URNT15 KWBC 071200
+NOAA9 0901A ISAIAS             HDOB 05 20261007
+120000 2206N 09412W 7010 03057 9282 +080 +080 180040 040 055 000 00
+$$
+"""
+
+_INDEX_HTML = """
+<html>
+<a href="AHONT1-KNHC.202610071200.txt">AHONT1-KNHC.202610071200.txt</a>
+<a href="AHONT1-KWBC.202610071130.txt">AHONT1-KWBC.202610071130.txt</a>
+<a href="readme.txt">ignore</a>
+</html>
+"""
+
+
+def test_hdob_noaa_aircraft() -> None:
+    fixes = parse_hdob_text(NOAA9_HDOB)
+    assert len(fixes) == 1
+    fix = fixes[0]
+    assert fix.aircraft == "NOAA9"
+    assert fix.storm_name == "ISAIAS"
+    assert fix.surface_source == "sfmr"
+    assert fix.sfmr_kt == 55
+    assert fix.fl_wind_kt == 40
+    assert abs(fix.lat - (22 + 6 / 60)) < 1e-3
+    assert abs(fix.lon - -(94 + 12 / 60)) < 1e-3
+
+
+def test_parse_recon_index_hrefs() -> None:
+    from app.services.recon_obs import parse_recon_index
+
+    names = parse_recon_index(_INDEX_HTML)
+    assert [n for n, _ts in names] == [
+        "AHONT1-KNHC.202610071200.txt",
+        "AHONT1-KWBC.202610071130.txt",
+    ]
+
+
+def test_failed_recon_index_is_not_cached(monkeypatch) -> None:
+    from app.services import recon_obs
+
+    recon_obs._INDEX_CACHE.clear()
+    calls = {"n": 0}
+
+    def fake_get(_url: str) -> str | None:
+        calls["n"] += 1
+        return None if calls["n"] == 1 else _INDEX_HTML
+
+    monkeypatch.setattr(recon_obs, "_get", fake_get)
+    now = datetime(2026, 10, 7, 12, 30, tzinfo=timezone.utc)
+    assert recon_obs._list_recent_files(2026, "AHONT1", now) == []
+    second = recon_obs._list_recent_files(2026, "AHONT1", now)
+    assert len(second) == 2
+    assert calls["n"] == 2
+
+
+def test_recon_keeps_fix_just_outside_the_storm_bbox(monkeypatch) -> None:
+    from app.services import recon_obs
+    from app.services.recon_obs import fetch_recon_bundle
+
+    monkeypatch.setattr(recon_obs, "_list_recent_files", lambda *_a, **_k: [])
+
+    def fake_get(url: str) -> str | None:
+        return NOAA9_HDOB if "URNT15" in url else None
+
+    monkeypatch.setattr(recon_obs, "_get", fake_get)
+    now = datetime(2026, 10, 7, 12, 30, tzinfo=timezone.utc)
+    # Fix is 22.1N. 1.1° south of this box — inside the 1.5° pad.
+    near = fetch_recon_bundle(
+        (-96.0, 23.2, -92.0, 26.0),
+        atcf_id="AL092026", storm_name="ISAIAS", now=now,
+    )
+    assert len(near.fixes) == 1
+    # 1.9° outside the pad — still dropped.
+    far = fetch_recon_bundle(
+        (-96.0, 24.0, -92.0, 26.0),
+        atcf_id="AL092026", storm_name="ISAIAS", now=now,
+    )
+    assert far.fixes == []

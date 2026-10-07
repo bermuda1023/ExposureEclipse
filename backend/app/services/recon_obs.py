@@ -39,8 +39,11 @@ FL_TO_SURFACE = 0.80
 # paint a 300 km ribbon of eyewall wind. Map overlay uses a tighter step.
 IDW_THIN_DEG = 0.10
 MAP_THIN_DEG = 0.035
-MAX_HDOB_FILES = 36
-MAX_VDM_FILES = 8
+MAX_HDOB_FILES = 48
+MAX_VDM_FILES = 12
+# Aircraft often fix the center a degree or so outside the storm bbox
+# (the bbox is the track, not the flight). Dropping those hides the mission.
+BBOX_PAD_DEG = 1.5
 INDEX_TTL_S = 6 * 60
 RAIN_SFMR_SKIP_MM_HR = 20.0
 
@@ -430,6 +433,20 @@ def _parse_one_vdm(bulletin: str, *, year: int | None) -> VortexFix | None:
     )
 
 
+def parse_recon_index(html: str) -> list[tuple[str, datetime]]:
+    """Archive-index hrefs, newest first. Filenames carry no storm id."""
+    names: list[tuple[str, datetime]] = []
+    for m in _HREF_RE.finditer(html or ""):
+        fname, _cc, stamp = m.group(1), m.group(2), m.group(3)
+        try:
+            ts = datetime.strptime(stamp, "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        names.append((fname, ts))
+    names.sort(key=lambda p: p[1], reverse=True)
+    return names
+
+
 def _list_recent_files(year: int, folder: str, now: datetime) -> list[tuple[str, datetime]]:
     """Recent archive filenames for ``folder``, newest first."""
     cache_key = f"{year}/{folder}"
@@ -439,17 +456,16 @@ def _list_recent_files(year: int, folder: str, now: datetime) -> list[tuple[str,
         names = hit[1]
     else:
         url = f"{ARCHIVE_BASE}/{year}/{folder}/?C=M;O=D"
-        html = _get(url) or ""
-        names = []
-        for m in _HREF_RE.finditer(html):
-            fname, _cc, stamp = m.group(1), m.group(2), m.group(3)
-            try:
-                ts = datetime.strptime(stamp, "%Y%m%d%H%M").replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-            names.append((fname, ts))
-        names.sort(key=lambda p: p[1], reverse=True)
-        _INDEX_CACHE[cache_key] = (t, names)
+        html = _get(url)
+        # A failed fetch or an index with no mission files must not stick.
+        # Caching [] for six minutes hid a hunter that took off during the
+        # outage, and the chip had no way back until the TTL elapsed.
+        if not html:
+            names = []
+        else:
+            names = parse_recon_index(html)
+            if names:
+                _INDEX_CACHE[cache_key] = (t, names)
 
     cutoff = now - timedelta(hours=MAX_AGE_HOURS)
     return [(n, ts) for (n, ts) in names if ts >= cutoff]
@@ -483,6 +499,13 @@ def _thin(fixes: list[ReconFix], min_deg: float) -> list[ReconFix]:
     return kept
 
 
+def _widen_bbox(
+    bbox: tuple[float, float, float, float], pad: float = BBOX_PAD_DEG,
+) -> tuple[float, float, float, float]:
+    west, south, east, north = bbox
+    return (west - pad, max(-90.0, south - pad), east + pad, min(90.0, north + pad))
+
+
 def _in_bbox(lat: float, lon: float, bbox: tuple[float, float, float, float]) -> bool:
     west, south, east, north = bbox
     return south <= lat <= north and west <= lon <= east
@@ -498,6 +521,7 @@ def fetch_recon_bundle(
     """Live recon in ``bbox`` for this storm. Empty when nothing is flying."""
     if now is None:
         now = datetime.now(timezone.utc)
+    bbox = _widen_bbox(bbox)
     basin = _basin(atcf_id)
     year = now.year
     folder = HDOB_FOLDER[basin]
@@ -592,6 +616,7 @@ __all__ = [
     "VortexFix",
     "fetch_recon_bundle",
     "parse_hdob_text",
+    "parse_recon_index",
     "parse_vdm_text",
     "recon_for_idw",
     "MAX_AGE_HOURS",

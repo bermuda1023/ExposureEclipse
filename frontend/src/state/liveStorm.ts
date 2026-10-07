@@ -63,6 +63,14 @@ interface LiveStormState {
   ecmwfGrid: WindModelGrid | null;
   gfsGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
   ecmwfGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  // Nonce of the reload that last started a GFS/Euro fetch. A finished
+  // attempt (ok / empty / error) for the current reload is not repeated;
+  // Retry bumps `reloadNonce` so the panel fetches again.
+  gfsAttemptNonce: number;
+  ecmwfAttemptNonce: number;
+  // Bumped by Retry. The bundle effect refetches without changing
+  // activeStormId and without blanking data already on the map.
+  reloadNonce: number;
   // Index into the model grid's frames array. 0 = now; higher = further
   // into the forecast. Observed mode ignores this (obs is always "now").
   windMapFrameIndex: number;
@@ -109,6 +117,9 @@ interface LiveStormState {
   setEcmwfGrid: (g: WindModelGrid | null) => void;
   setGfsGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
   setEcmwfGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
+  setGfsAttemptNonce: (n: number) => void;
+  setEcmwfAttemptNonce: (n: number) => void;
+  retryLoads: () => void;
   setHighlightObs: (obs: WindObs[] | null) => void;
   setWindMapFrameIndex: (i: number) => void;
   setModelTracks: (r: ModelTracksResponse | null) => void;
@@ -126,6 +137,13 @@ interface LiveStormState {
   setGTWOStatus: (
     s: "idle" | "loading" | "ok" | "empty" | "error",
   ) => void;
+}
+
+/** A model grid the map can draw. Cells with no frames, or frames whose
+ * winds are all zero, are a failed Open-Meteo response — not a calm Gulf. */
+export function windGridUsable(grid: WindModelGrid | null | undefined): boolean {
+  if (!grid || grid.cells.length === 0 || grid.frames.length === 0) return false;
+  return grid.frames.some((frame) => frame.windKt.some((kt) => kt > 0));
 }
 
 export type ToggleKey =
@@ -160,13 +178,16 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   // NHC watches/warnings default ON — they are the primary operational signal
   // for pre-loss underwriting during a live event.
   showWatchesWarnings: true,
-  // NDBC buoys, wind-field cone, and NHC peak-surge polygons all default
-  // OFF now — they get busy fast and users mostly want them on-demand.
+  // NDBC buoys and NHC peak-surge polygons default off — they get busy
+  // and are usually wanted on demand. The wind swath stays on.
   showBuoys: false,
   showRecon: true,
   showLand: false,
   showSst: false,
-  showWindField: false,
+  // Wind swath and the consensus envelope are the products underwriters
+  // open a live storm to see. They used to default off, so a successful
+  // load still looked like "nothing drew".
+  showWindField: true,
   showForecastCone: true,
   showSurge: false,
   showWindMap: true,
@@ -176,6 +197,9 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   ecmwfGrid: null,
   gfsGridStatus: "idle" as const,
   ecmwfGridStatus: "idle" as const,
+  gfsAttemptNonce: -1,
+  ecmwfAttemptNonce: -1,
+  reloadNonce: 0,
   windMapFrameIndex: 0,
   highlightObs: null,
   modelTracks: null,
@@ -194,7 +218,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     "ecmwf_mean",
   ]),
   showModelTracks: false,
-  showEnsembleEnvelope: false,
+  showEnsembleEnvelope: true,
   showAiEnvelope: false,
   ensembleRisk: null,
   ensembleRiskStatus: "idle" as const,
@@ -215,6 +239,9 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       ecmwfGrid: null,
       gfsGridStatus: "idle",
       ecmwfGridStatus: "idle",
+      gfsAttemptNonce: -1,
+      ecmwfAttemptNonce: -1,
+      reloadNonce: 0,
       windMapFrameIndex: 0,
       highlightObs: null,
       windMapMode: "observed",
@@ -235,6 +262,8 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     pickerOpen: false, collapsed: false, pushedToDetail: false,
     gfsGrid: null, ecmwfGrid: null,
     gfsGridStatus: "idle", ecmwfGridStatus: "idle",
+    gfsAttemptNonce: -1, ecmwfAttemptNonce: -1,
+    reloadNonce: 0,
     windMapFrameIndex: 0,
     highlightObs: null,
     windMapMode: "observed",
@@ -253,6 +282,26 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   setEcmwfGrid: (g) => set({ ecmwfGrid: g }),
   setGfsGridStatus: (s) => set({ gfsGridStatus: s }),
   setEcmwfGridStatus: (s) => set({ ecmwfGridStatus: s }),
+  setGfsAttemptNonce: (n) => set({ gfsAttemptNonce: n }),
+  setEcmwfAttemptNonce: (n) => set({ ecmwfAttemptNonce: n }),
+  retryLoads: () => {
+    const cur = get();
+    if (!cur.activeStormId) return;
+    // Keep the bundle and any model grid already on the map. The panel
+    // effects watch reloadNonce and replace them when the new response lands.
+    set({
+      reloadNonce: cur.reloadNonce + 1,
+      isLoading: true,
+      error: null,
+      gfsGridStatus: "idle",
+      ecmwfGridStatus: "idle",
+      gfsAttemptNonce: -1,
+      ecmwfAttemptNonce: -1,
+      modelTracksStatus: "loading",
+      ensembleRisk: null,
+      ensembleRiskStatus: "idle",
+    });
+  },
   setHighlightObs: (obs) => set({ highlightObs: obs }),
   setWindMapFrameIndex: (i) => set({ windMapFrameIndex: i }),
   setModelTracks: (r) => set({ modelTracks: r }),

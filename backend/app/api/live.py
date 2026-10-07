@@ -13,6 +13,9 @@ text-advisory scraping is out of scope for v1.
 
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, HTTPException, Query
 
 from ..models.common import CamelModel
@@ -20,10 +23,13 @@ from ..services.hurdat2 import category_for_wind
 from ..services.live_hurricane import (
     LiveStormSummary,
     build_wind_cones,
+    clear_current_storms_cache,
     fetch_active_summaries,
     fetch_live_forecast_cone,
     fetch_live_peak_surge,
+    fetch_live_wind_radii,
     storm_and_forecasts,
+    synthetic_forecast_cone,
 )
 from ..services.atcf_adecks import (
     FAMILY_ORDER,
@@ -439,6 +445,47 @@ def _bbox_for_storm(observed_track, forecasts) -> tuple[float, float, float, flo
     return (west, south, east, north)
 
 
+def _gather(
+    jobs: dict[str, tuple],
+    timeout_s: float,
+) -> dict:
+    """Run callables together and stop waiting at one shared deadline.
+
+    A hung SST or recon feed must not add its timeout on top of the cone
+    fetch. Whatever is still running when the deadline passes comes back
+    as the job's default. ``jobs`` values are ``(fn, default)``.
+    """
+    if not jobs:
+        return {}
+    ex = ThreadPoolExecutor(max_workers=min(8, len(jobs)))
+    futs = {name: ex.submit(fn) for name, (fn, _default) in jobs.items()}
+    out: dict = {}
+    deadline = time.monotonic() + timeout_s
+    try:
+        for name, (_fn, default) in jobs.items():
+            fut = futs[name]
+            remaining = deadline - time.monotonic()
+            # A slow earlier job must not discard a feed that already
+            # finished. Waiting on the a-deck first used to drop a cone
+            # KMZ that had returned seconds earlier.
+            if fut.done():
+                try:
+                    out[name] = fut.result()
+                except Exception:  # noqa: BLE001
+                    out[name] = default
+                continue
+            if remaining <= 0:
+                out[name] = default
+                continue
+            try:
+                out[name] = fut.result(timeout=remaining)
+            except Exception:  # noqa: BLE001
+                out[name] = default
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+    return out
+
+
 def _states_in_bbox(bbox: tuple[float, float, float, float]) -> list[str]:
     """Rough state filter for NWS alerts: returns the USPS codes whose
     bounding boxes overlap ``bbox``. Used to narrow the alerts request.
@@ -509,9 +556,19 @@ def live_storm_bundle(
     include_land: bool = Query(default=True, alias="includeLand"),
     include_surge: bool = Query(default=True, alias="includeSurge"),
     include_wind_map: bool = Query(default=True, alias="includeWindMap"),
+    refresh: bool = Query(default=False, alias="refresh"),
 ) -> LiveStormBundle:
-    """Full data bundle for one storm — track + forecast + obs + alerts + SST."""
-    result = storm_and_forecasts(atcf_id, as_of_index=as_of_index)
+    """Full data bundle for one storm — track + forecast + obs + alerts + SST.
+
+    Ancillary feeds (alerts, buoys, land, SST, recon, wind map) run together
+    under one deadline so a slow one cannot drop the cone and wind field.
+    ``refresh`` drops the short-lived NHC caches and fetches again.
+    """
+    if refresh:
+        clear_current_storms_cache()
+    result = storm_and_forecasts(
+        atcf_id, as_of_index=as_of_index, refresh=refresh,
+    )
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -557,19 +614,77 @@ def live_storm_bundle(
 
     bbox = _bbox_for_storm(observed_storm.track, forecasts)
 
+    def _job_alerts():
+        states = _states_in_bbox(bbox)
+        try:
+            return fetch_active_alerts(bbox=bbox, states=states or None)
+        except AlertFeedUnavailable:
+            return []
+
+    def _job_buoys():
+        return list(buoys_in_bbox(*bbox))
+
+    def _job_land():
+        return list(land_stations_in_bbox(*bbox))
+
+    def _job_sst():
+        return sst_field(bbox)
+
+    def _job_official():
+        if not is_live:
+            return []
+        return fetch_official_fixes(atcf_id, refresh=refresh)
+
+    def _job_cone():
+        return fetch_live_forecast_cone(atcf_id, refresh=refresh)
+
+    def _job_radii():
+        return fetch_live_wind_radii(atcf_id, refresh=refresh)
+
+    def _job_surge():
+        return fetch_live_peak_surge(atcf_id, refresh=refresh)
+
+    def _job_recon():
+        return fetch_recon_bundle(
+            bbox, atcf_id=atcf_id, storm_name=observed_storm.name,
+        )
+
+    def _job_wind():
+        return wind_field_grid(*bbox)
+
+    # Cone and wind radii go in first so they start immediately and the
+    # shared deadline is spent on them, not on a hung a-deck or SST call.
+    # Each product is its own job: a slow surge KML must not throw away
+    # a cone that already parsed.
+    jobs: dict[str, tuple] = {}
+    if is_live:
+        jobs["cone"] = (_job_cone, [])
+        jobs["radii"] = (_job_radii, ([], []))
+        if include_surge:
+            jobs["surge"] = (_job_surge, [])
+        jobs["recon"] = (_job_recon, None)
+    jobs["official"] = (_job_official, [])
+    if include_alerts:
+        jobs["alerts"] = (_job_alerts, [])
+    if include_obs:
+        jobs["buoys"] = (_job_buoys, [])
+    if include_land:
+        jobs["land"] = (_job_land, [])
+    if include_sst:
+        jobs["sst"] = (_job_sst, ([], "synthetic"))
+    if include_wind_map:
+        jobs["wind"] = (_job_wind, ([], 0.5, []))
+    # One deadline for every feed. The cone and wind swath are in this set,
+    # so they come back even when land stations or the recon archive stall.
+    got = _gather(jobs, 14.0)
+
     alerts_out: list[WeatherAlertOut] = []
     watches_warnings_out: list[NHCWatchWarnOut] = []
     zone_only_ww_count = 0
     if include_alerts:
         # Live alerts as of today — used for demo even when the replay storm
         # is historical, per user instruction.
-        states = _states_in_bbox(bbox)
-        try:
-            live_alerts = fetch_active_alerts(bbox=bbox, states=states or None)
-        except AlertFeedUnavailable:
-            # Alerts are context around the storm, not the storm itself — the
-            # bundle is still useful without them.
-            live_alerts = []
+        live_alerts = got.get("alerts") or []
         # Split NHC Tropical Cyclone watches/warnings out of the generic
         # alerts stream so they render with the operational NHC colour
         # scheme + carry their own exposure rollup. Residual alerts (flood,
@@ -614,7 +729,7 @@ def live_storm_bundle(
     buoys_out: list[BuoyOut] = []
     land_out: list[LandObsOut] = []
     if include_obs:
-        for b in buoys_in_bbox(*bbox):
+        for b in got.get("buoys") or []:
             buoys_out.append(
                 BuoyOut(
                     station_id=b.station_id,
@@ -634,7 +749,7 @@ def live_storm_bundle(
         # max_stations=80 is the service default — gives a spatially uniform
         # grid subsample instead of clumping into whichever region has the
         # densest instrumentation.
-        for ls in land_stations_in_bbox(*bbox):
+        for ls in got.get("land") or []:
             land_out.append(
                 LandObsOut(
                     station_id=ls.station_id,
@@ -656,7 +771,7 @@ def live_storm_bundle(
     span = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
     sst_step = 0.05 if span < 6 else 0.10 if span < 12 else 0.25 if span < 25 else 0.5
     if include_sst:
-        grid, sst_source = sst_field(bbox)
+        grid, sst_source = got.get("sst") or ([], "synthetic")
         sst_out = [
             SSTOut(
                 lat=p.lat,
@@ -690,7 +805,7 @@ def live_storm_bundle(
     # never contain the current year, and even the failing lookup would
     # trigger a 70 MB CSV fetch that blew Vercel's cold-start budget.
     cone_storm_id = "" if is_live else observed_storm.storm_id
-    official_radii = {f.hours_out: f for f in fetch_official_fixes(atcf_id)} if is_live else {}
+    official_radii = {f.hours_out: f for f in (got.get("official") or [])}
     observed_fixes_for_cone = [
         (p.lat, p.lon, p.wind_kt, p.datetime_utc) for p in observed_storm.track
     ]
@@ -735,36 +850,70 @@ def live_storm_bundle(
             r64_source=r["r64_source"],
         )
 
+    def _nhc_rings(polys: list[tuple[int, list[tuple[float, float]]]]) -> list[OuterRingOut]:
+        rings: list[OuterRingOut] = []
+        for wind_kt, ring in polys:
+            if len(ring) < 4:
+                continue
+            rings.append(
+                OuterRingOut(
+                    corners=[[round(lon, 4), round(lat, 4)] for lon, lat in ring],
+                    wind_kt=wind_kt,
+                    r64_nm=0.0,
+                    r64_source="nhc",
+                )
+            )
+        return rings
+
+    nhc_initial: list = []
+    nhc_forecast_radii: list = []
+    cone_ring: list = []
+    surge_polys: list = []
+    if is_live:
+        cone_ring = got.get("cone") or []
+        nhc_initial, nhc_forecast_radii = got.get("radii") or ([], [])
+        surge_polys = got.get("surge") or []
+        if not cone_ring and forecasts:
+            latest_pts = max(forecasts, key=lambda f: f.advisory_number).points
+            cone_ring = synthetic_forecast_cone(
+                [(p.lat, p.lon, p.hours_out) for p in latest_pts],
+                basin=atcf_id[:2].upper(),
+            )
+
+    # Prefer NHC's operational 34/50/64 kt swath. The parametric R64 cone is
+    # the fallback (and the only product for replay storms). A tropical
+    # storm's 34-kt polygon is what was missing when the chip looked empty.
+    obs_outer_rings = _nhc_rings(nhc_initial) or [_r_out(r) for r in obs_rings]
+    fcst_outer_rings = _nhc_rings(nhc_forecast_radii) or [_r_out(r) for r in fcst_rings]
+
     observed_wind = WindFieldOut(
         inner_cone=[_q_out(q) for q in obs_inner],
         outer_cone=[_q_out(q) for q in obs_outer],
-        outer_rings=[_r_out(r) for r in obs_rings],
+        outer_rings=obs_outer_rings,
     )
     forecast_wind = WindFieldOut(
         inner_cone=[_q_out(q) for q in fcst_inner],
         outer_cone=[_q_out(q) for q in fcst_outer],
-        outer_rings=[_r_out(r) for r in fcst_rings],
+        outer_rings=fcst_outer_rings,
     )
 
     # NHC-issued products only exist for live storms. Cone is a single ring;
     # peak surge is per-band coloured polygons along the coast.
     forecast_cone_out: ForecastConeOut | None = None
     peak_surge_out: list[SurgePolygonOut] = []
-    if is_live:
-        cone_ring = fetch_live_forecast_cone(atcf_id)
-        if cone_ring:
-            forecast_cone_out = ForecastConeOut(
-                ring=[[round(lon, 4), round(lat, 4)] for lon, lat in cone_ring],
-            )
-        if include_surge:
-            for poly in fetch_live_peak_surge(atcf_id):
-                peak_surge_out.append(
-                    SurgePolygonOut(
-                        ring=[[round(lon, 5), round(lat, 5)] for lon, lat in poly.coords],
-                        surge_range=poly.surge_range,
-                        color=poly.color,
-                    )
+    if is_live and cone_ring:
+        forecast_cone_out = ForecastConeOut(
+            ring=[[round(lon, 4), round(lat, 4)] for lon, lat in cone_ring],
+        )
+    if is_live and include_surge:
+        for poly in surge_polys:
+            peak_surge_out.append(
+                SurgePolygonOut(
+                    ring=[[round(lon, 5), round(lat, 5)] for lon, lat in poly.coords],
+                    surge_range=poly.surge_range,
+                    color=poly.color,
                 )
+            )
 
     # Hurricane hunters — live missions only. Replay storms have no
     # current HDOB; pulling today's archive would mix in the wrong system.
@@ -772,14 +921,7 @@ def live_storm_bundle(
     vortex_out: VortexFixOut | None = None
     recon_idw: list[WindObs] = []
     if is_live:
-        try:
-            recon_bundle = fetch_recon_bundle(
-                bbox,
-                atcf_id=atcf_id,
-                storm_name=observed_storm.name,
-            )
-        except Exception:  # noqa: BLE001
-            recon_bundle = None
+        recon_bundle = got.get("recon")
         if recon_bundle is not None:
             for fx in recon_bundle.fixes:
                 recon_out.append(
@@ -817,9 +959,10 @@ def live_storm_bundle(
     wind_obs_out: list[WindObsOut] = []
     wind_step = 0.5
     if include_wind_map:
-        cells, wind_step, obs_pool = wind_field_grid(
-            *bbox, extra_obs=recon_idw or None,
-        )
+        try:
+            cells, wind_step, obs_pool = got.get("wind") or ([], 0.5, [])
+        except Exception:  # noqa: BLE001
+            cells, wind_step, obs_pool = [], 0.5, []
         wind_map_out = [
             WindGridPointOut(
                 lat=c.lat,
@@ -843,7 +986,7 @@ def live_storm_bundle(
                 source=o.source, station_id=o.station_id,
                 observed_at=o.observed_at,
             )
-            for o in obs_pool
+            for o in list(obs_pool) + list(recon_idw)
         ]
 
     return LiveStormBundle(
@@ -881,13 +1024,16 @@ def wind_model_grid(
     east: float = Query(..., ge=-180.0, le=180.0),
     north: float = Query(..., ge=-90.0, le=90.0),
     model: str = Query(..., pattern="^(gfs|ecmwf)$"),
+    refresh: bool = Query(default=False, alias="refresh"),
 ) -> WindModelGridOut:
     """GFS or ECMWF surface-wind grid over a bbox at 0.25° resolution, as
     multiple forecast frames (0 → 120 h from now). Powers both the
     mode-selector single-hour views and the time-slider evolution view.
     Fetches from Open-Meteo — degrades to an empty grid on failure rather
     than 5xx'ing the mode selector."""
-    grid = fetch_model_wind_grid(west, south, east, north, model)
+    grid = fetch_model_wind_grid(
+        west, south, east, north, model, refresh=refresh,
+    )
     return WindModelGridOut(
         model=grid.model,
         step_deg=grid.step_deg,
@@ -1072,6 +1218,7 @@ def model_tracks(
     atcf_id: str,
     init_cycle: str | None = Query(default=None, alias="initCycle"),
     include_baselines: bool = Query(default=False, alias="includeBaselines"),
+    refresh: bool = Query(default=False, alias="refresh"),
 ) -> ModelTracksResponse:
     """Per-model projected tracks for one storm's latest init cycle.
 
@@ -1089,8 +1236,9 @@ def model_tracks(
         atcf_id,
         init_cycle=init_cycle,
         include_baselines=include_baselines,
+        refresh=refresh,
     )
-    cycles = list_available_cycles(atcf_id, limit=8)
+    cycles = list_available_cycles(atcf_id, limit=8, refresh=refresh)
     notes: list[str] = []
 
     if not tracks:
@@ -1146,21 +1294,32 @@ def model_tracks(
     # AI-only envelope: interesting stand-alone signal — "how much do the
     # newest AI models agree with each other?". Often tighter than the NWP
     # ensembles' spaghetti, sometimes surprisingly not.
+    # One GraphCast run is still a useful envelope (drawn as a corridor
+    # when the track is nearly straight). Requiring two AI techs left the
+    # chip gray on every storm whose a-deck only carries GDMI.
     ai_env = build_envelope(
-        tracks, include_families=frozenset({"ai"}), min_members=2,
+        tracks, include_families=frozenset({"ai"}), min_members=1,
     )
 
     if ens_env is None:
         notes.append(
             "Ensemble consensus envelope not built — fewer than 5 ensemble "
-            "members returned tracks for this cycle."
+            "members (GEFS, ECMWF-ENS, AI) returned tracks in the last 24h."
+        )
+    inits = {t.init_cycle for t in tracks}
+    if len(inits) > 1:
+        notes.append(
+            "Each model is shown at its own latest cycle from the last 24 "
+            "hours. GEFS and ECMWF often publish a cycle behind the early "
+            "NHC aids, so they are not dropped while that cycle is still in."
         )
 
     tracks_out = [_track_out(t) for t in tracks]
+    newest_init = max(inits) if inits else None
 
     return ModelTracksResponse(
         storm_id=atcf_id.upper(),
-        init_cycle=tracks[0].init_cycle if tracks else None,
+        init_cycle=newest_init,
         available_cycles=cycles,
         tracks=tracks_out,
         families=families,
@@ -1242,6 +1401,7 @@ def ensemble_risk_endpoint(
         alias="thresholdNm",
     ),
     all_states: bool = Query(default=False, alias="allStates"),
+    refresh: bool = Query(default=False, alias="refresh"),
 ) -> EnsembleRiskResponse:
     """Per-county ensemble strike probability + per-lead intensity spread.
 
@@ -1250,7 +1410,7 @@ def ensemble_risk_endpoint(
     is in nautical miles from the county centroid to the nearest point on
     each member's track. Default 60 nm ≈ R64 envelope of a mature hurricane.
     """
-    tracks = fetch_model_tracks(atcf_id)
+    tracks = fetch_model_tracks(atcf_id, refresh=refresh)
     notes: list[str] = []
     if not tracks:
         notes.append(

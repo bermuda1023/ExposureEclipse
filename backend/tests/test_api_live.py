@@ -85,7 +85,7 @@ def test_live_bundle_builds_from_nhc_feed(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         live_hurricane,
         "_fetch_current_storms_raw",
-        lambda: {"activeStorms": [_FAKE_NHC_STORM]},
+        lambda *, refresh=False: {"activeStorms": [_FAKE_NHC_STORM]},
     )
     r = client.get(
         "/api/live/storms/AL022026",

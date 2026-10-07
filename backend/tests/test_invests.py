@@ -50,7 +50,7 @@ def test_probe_returns_invest_from_fresh_adeck(monkeypatch: pytest.MonkeyPatch) 
         + _adeck_row("AVNO", 24, 255, 790, cycle)
     ).encode()
 
-    def _fake_download(basin: str, cy: int, year: int) -> bytes | None:
+    def _fake_download(basin: str, cy: int, year: int, *, refresh: bool = False) -> bytes | None:
         # Only respond for the exact invest slot we're seeding.
         if basin.lower() == "al" and cy == 91:
             return fake_adeck
@@ -78,7 +78,7 @@ def test_probe_filters_stale_adecks(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         atcf_adecks, "_download_adeck",
-        lambda basin, cy, year: stale_payload if (basin.lower(), cy) == ("al", 92) else None,
+        lambda basin, cy, year, *, refresh=False: stale_payload if (basin.lower(), cy) == ("al", 92) else None,
     )
     assert invests.fetch_active_invests() == []
 
@@ -98,7 +98,7 @@ def test_storms_list_includes_invests(monkeypatch: pytest.MonkeyPatch) -> None:
     ).encode()
     monkeypatch.setattr(
         atcf_adecks, "_download_adeck",
-        lambda basin, cy, year: fake_adeck if (basin.lower(), cy) == ("al", 93) else None,
+        lambda basin, cy, year, *, refresh=False: fake_adeck if (basin.lower(), cy) == ("al", 93) else None,
     )
     client = TestClient(app)
     r = client.get("/api/live/storms")

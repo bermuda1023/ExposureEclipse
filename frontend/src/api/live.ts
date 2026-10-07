@@ -349,13 +349,14 @@ export interface ModelTracksResponse {
 
 export const fetchModelTracks = (
   stormId: string,
-  options: { initCycle?: string; includeBaselines?: boolean } = {},
+  options: { initCycle?: string; includeBaselines?: boolean; refresh?: boolean } = {},
 ) =>
   apiGet<ModelTracksResponse>(
     `/live/storms/${encodeURIComponent(stormId)}/model-tracks`,
     {
       initCycle: options.initCycle,
       includeBaselines: options.includeBaselines ?? false,
+      refresh: options.refresh ? true : undefined,
     },
   );
 
@@ -419,13 +420,14 @@ export const fetchGTWO = (basin: "atl" | "pac" | "cpac" = "atl") =>
 
 export const fetchEnsembleRisk = (
   stormId: string,
-  options: { thresholdNm?: number; allStates?: boolean } = {},
+  options: { thresholdNm?: number; allStates?: boolean; refresh?: boolean } = {},
 ) =>
   apiGet<EnsembleRiskResponse>(
     `/live/storms/${encodeURIComponent(stormId)}/ensemble-risk`,
     {
       thresholdNm: options.thresholdNm,
       allStates: options.allStates ?? false,
+      refresh: options.refresh ? true : undefined,
     },
   );
 
@@ -438,9 +440,11 @@ export const fetchWindPointForecast = (lat: number, lon: number) =>
 export const fetchWindModelGrid = (
   bbox: [number, number, number, number],
   model: "gfs" | "ecmwf",
+  options: { refresh?: boolean } = {},
 ) =>
   apiGet<WindModelGrid>("/live/wind-model-grid", {
     west: bbox[0], south: bbox[1], east: bbox[2], north: bbox[3], model,
+    refresh: options.refresh ? true : undefined,
   });
 
 // POST body for the watch/warning exposure endpoint — mirrors the shape
@@ -493,6 +497,7 @@ export const fetchLiveStormBundle = (
     includeLand?: boolean;
     includeSurge?: boolean;
     includeWindMap?: boolean;
+    refresh?: boolean;
   } = {},
 ) =>
   apiGet<LiveStormBundle>(`/live/storms/${encodeURIComponent(stormId)}`, {
@@ -502,4 +507,5 @@ export const fetchLiveStormBundle = (
     includeLand: options.includeLand ?? false, // NWS land station fetch is slow
     includeSurge: options.includeSurge ?? true,
     includeWindMap: options.includeWindMap ?? true,
+    refresh: options.refresh ? true : undefined,
   });

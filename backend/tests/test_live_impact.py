@@ -57,7 +57,7 @@ def test_storm_for_impact_prefers_official_adecks(monkeypatch) -> None:
         "_get_live_entry",
         lambda atcf: {"id": atcf, "name": "Gabrielle", "forecastTrack": {}},
     )
-    monkeypatch.setattr(lh, "fetch_forecast_track", lambda url: [])
+    monkeypatch.setattr(lh, "fetch_forecast_track", lambda url, *, refresh=False: [])
     monkeypatch.setattr(
         lh,
         "fetch_official_fixes",

@@ -23,11 +23,15 @@ import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from functools import lru_cache
 
 from ..brand import USER_AGENT
+from .ttl_cache import TtlCache
 
-FETCH_TIMEOUT_S = 30
+FETCH_TIMEOUT_S = 20
+# Successful KMZ bytes only. A new advisory is a new URL, but a file that
+# was still being written on the first hit must not stick for the process
+# lifetime. Failures raise and are not stored.
+_DOWNLOAD_CACHE: TtlCache[str, bytes] = TtlCache(ttl_s=180, maxsize=64)
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 
 # NHC forecast-fix header patterns inside Placemark descriptions.
@@ -56,13 +60,19 @@ class NHCSurgePolygon:
 # ─────────────────────────── HTTP ───────────────────────────
 
 
-@lru_cache(maxsize=64)
-def _download(url: str) -> bytes:
+def _download(url: str, *, refresh: bool = False) -> bytes:
+    if not refresh:
+        hit = _DOWNLOAD_CACHE.get(url)
+        if hit is not None:
+            return hit
     req = urllib.request.Request(
         url, headers={"User-Agent": USER_AGENT}
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
-        return resp.read()
+        payload = resp.read()
+    if payload:
+        _DOWNLOAD_CACHE.set(url, payload)
+    return payload
 
 
 def _kml_from_kmz(payload: bytes) -> bytes:
@@ -74,9 +84,9 @@ def _kml_from_kmz(payload: bytes) -> bytes:
     raise ValueError("KMZ archive contains no .kml file")
 
 
-def _fetch_kml(url: str) -> bytes:
+def _fetch_kml(url: str, *, refresh: bool = False) -> bytes:
     """Fetch a KML or KMZ URL and return the raw KML bytes."""
-    payload = _download(url)
+    payload = _download(url, refresh=refresh)
     if url.lower().endswith(".kmz"):
         return _kml_from_kmz(payload)
     return payload
@@ -116,7 +126,7 @@ def _extract_coord_list(text: str) -> list[tuple[float, float]]:
 # ─────────────────────────── forecast track ───────────────────────────
 
 
-def fetch_forecast_track(kmz_url: str) -> list[NHCForecastFix]:
+def fetch_forecast_track(kmz_url: str, *, refresh: bool = False) -> list[NHCForecastFix]:
     """Fetch NHC's forecast-track KMZ and return one fix per Placemark point.
 
     The KML holds one Point Placemark per lead-time anchor (Advisory
@@ -126,7 +136,7 @@ def fetch_forecast_track(kmz_url: str) -> list[NHCForecastFix]:
     fixes.
     """
     try:
-        kml = _fetch_kml(kmz_url)
+        kml = _fetch_kml(kmz_url, refresh=refresh)
     except Exception:  # noqa: BLE001 — network / parse failure → empty
         return []
     fixes: list[NHCForecastFix] = []
@@ -181,7 +191,55 @@ def fetch_forecast_track(kmz_url: str) -> list[NHCForecastFix]:
 # ─────────────────────────── track cone ───────────────────────────
 
 
-def fetch_track_cone(kmz_url: str) -> list[tuple[float, float]]:
+def _closed(coords: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    if len(coords) >= 3 and coords[0] != coords[-1]:
+        coords = coords + [coords[0]]
+    return coords
+
+
+def parse_wind_radii_kml(kml_bytes: bytes) -> list[tuple[int, list[tuple[float, float]]]]:
+    """NHC initial / forecast wind-radii KML.
+
+    Each Placemark is one threshold polygon. The ``<name>`` is ``34``,
+    ``50``, or ``64`` (knots). Returns ``(wind_kt, closed ring)`` pairs.
+    """
+    out: list[tuple[int, list[tuple[float, float]]]] = []
+    for pm in _iter_placemarks(kml_bytes):
+        name_el = pm.find("name")
+        name = (name_el.text or "").strip() if name_el is not None else ""
+        if not name.isdigit():
+            continue
+        wind = int(name)
+        if wind not in (34, 50, 64):
+            continue
+        polygon = pm.find("Polygon")
+        if polygon is None:
+            continue
+        ring = polygon.find(".//outerBoundaryIs/LinearRing/coordinates")
+        if ring is None or not (ring.text or "").strip():
+            continue
+        coords = _closed(_extract_coord_list(ring.text or ""))
+        if len(coords) >= 4:
+            out.append((wind, coords))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def fetch_wind_radii(
+    kmz_url: str, *, refresh: bool = False,
+) -> list[tuple[int, list[tuple[float, float]]]]:
+    """Fetch an NHC wind-radii KMZ. Empty list on failure — never raises."""
+    try:
+        kml = _fetch_kml(kmz_url, refresh=refresh)
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        return parse_wind_radii_kml(kml)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def fetch_track_cone(kmz_url: str, *, refresh: bool = False) -> list[tuple[float, float]]:
     """Fetch NHC's cone-of-uncertainty KMZ. Returns the outer boundary as a
     closed [(lon, lat), ...] ring, or an empty list on failure.
 
@@ -189,7 +247,7 @@ def fetch_track_cone(kmz_url: str) -> list[tuple[float, float]]:
     LinearRing coordinates.
     """
     try:
-        kml = _fetch_kml(kmz_url)
+        kml = _fetch_kml(kmz_url, refresh=refresh)
     except Exception:  # noqa: BLE001
         return []
     for pm in _iter_placemarks(kml):
@@ -210,7 +268,7 @@ def fetch_track_cone(kmz_url: str) -> list[tuple[float, float]]:
 # ─────────────────────────── peak storm surge ───────────────────────────
 
 
-def fetch_peak_surge(kml_url: str) -> list[NHCSurgePolygon]:
+def fetch_peak_surge(kml_url: str, *, refresh: bool = False) -> list[NHCSurgePolygon]:
     """Fetch NHC's peak storm surge KML and return one polygon per surge band.
 
     Each Placemark has a name like ``"Perdido Bay...1-2 ft"`` and a
@@ -219,7 +277,7 @@ def fetch_peak_surge(kml_url: str) -> list[NHCSurgePolygon]:
     tropical storm) the file may 404 — we degrade to an empty list.
     """
     try:
-        kml = _fetch_kml(kml_url)
+        kml = _fetch_kml(kml_url, refresh=refresh)
     except Exception:  # noqa: BLE001
         return []
     polygons: list[NHCSurgePolygon] = []
@@ -290,7 +348,11 @@ def _prior_advisory_labels(current_adv_num: str, n_prior: int) -> list[str]:
 
 
 def fetch_prior_forecast_tracks(
-    atcf_id: str, current_adv_num: str, *, n_prior: int = 4,
+    atcf_id: str,
+    current_adv_num: str,
+    *,
+    n_prior: int = 4,
+    timeout_s: float = 8.0,
 ) -> list[tuple[str, list[NHCForecastFix]]]:
     """Return (advisory_label, fixes) for up to ``n_prior`` past advisories.
 
@@ -308,12 +370,16 @@ def fetch_prior_forecast_tracks(
         f"https://www.nhc.noaa.gov/storm_graphics/api/{atcf_id.upper()}_"
     )
     results: dict[str, list[NHCForecastFix]] = {}
-    with ThreadPoolExecutor(max_workers=min(8, len(labels))) as pool:
-        futures = {
-            pool.submit(fetch_forecast_track, f"{base_url}{label}adv_TRACK.kmz"): label
-            for label in labels
-        }
-        for fut in as_completed(futures, timeout=30):
+    # Do not use the executor as a context manager: its shutdown waits for
+    # every download, so one slow advisory used to hold the whole live
+    # bundle (and then as_completed's TimeoutError aborted it, cone included).
+    pool = ThreadPoolExecutor(max_workers=min(8, len(labels)))
+    futures = {
+        pool.submit(fetch_forecast_track, f"{base_url}{label}adv_TRACK.kmz"): label
+        for label in labels
+    }
+    try:
+        for fut in as_completed(futures, timeout=timeout_s):
             label = futures[fut]
             try:
                 fixes = fut.result()
@@ -321,6 +387,10 @@ def fetch_prior_forecast_tracks(
                 continue
             if fixes:
                 results[label] = fixes
+    except TimeoutError:
+        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     # Preserve the caller's requested ordering (newest first) and cap.
     return [(lbl, results[lbl]) for lbl in labels if lbl in results][:n_prior]
 
@@ -332,4 +402,6 @@ __all__ = [
     "fetch_prior_forecast_tracks",
     "fetch_track_cone",
     "fetch_peak_surge",
+    "fetch_wind_radii",
+    "parse_wind_radii_kml",
 ]

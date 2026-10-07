@@ -273,10 +273,12 @@ export function ModelTrackLayer({ map }: Props) {
 
       setVis(map, LAYER_TRACKS, showTracks);
       setVis(map, LAYER_TRACK_END_LABELS, showTracks);
-      setVis(map, LAYER_ENVELOPE, showTracks && showEnv);
-      setVis(map, LAYER_ENVELOPE_LINE, showTracks && showEnv);
-      setVis(map, LAYER_AI_ENVELOPE, showTracks && showAiEnv);
-      setVis(map, LAYER_AI_ENVELOPE_LINE, showTracks && showAiEnv);
+      // Envelope chips are independent of the spaghetti toggle. Requiring
+      // model tracks left the consensus polygon off even when its chip was on.
+      setVis(map, LAYER_ENVELOPE, showEnv);
+      setVis(map, LAYER_ENVELOPE_LINE, showEnv);
+      setVis(map, LAYER_AI_ENVELOPE, showAiEnv);
+      setVis(map, LAYER_AI_ENVELOPE_LINE, showAiEnv);
     };
 
     if (map.isStyleLoaded()) apply();

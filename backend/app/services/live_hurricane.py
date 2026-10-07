@@ -25,9 +25,9 @@ import math
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 
 from ..brand import USER_AGENT
+from .ttl_cache import TtlCache
 from .hurdat2 import category_for_wind
 from .hurricane_impact import (
     ConeQuad,
@@ -40,12 +40,14 @@ from .hurricane_impact import (
 from .atcf_adecks import OfficialFix, fetch_official_fixes
 from .ibtracs import Storm, TrackPoint, fetch_storms, lookup_r64_quads_nm
 from .invests import fetch_active_invests, is_invest_id
+from .ensemble_envelope import _convex_hull
 from .nhc_gis import (
     NHCSurgePolygon,
     fetch_forecast_track,
     fetch_peak_surge,
     fetch_prior_forecast_tracks,
     fetch_track_cone,
+    fetch_wind_radii,
 )
 
 CURRENT_STORMS_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
@@ -199,14 +201,30 @@ class ForecastTrack:
 # ─────────────────────────── live NHC fetch ───────────────────────────
 
 
-@lru_cache(maxsize=1)
-def _fetch_current_storms_raw() -> dict:
+# Two minutes. Long enough to coalesce a burst of bundle requests, short
+# enough that a storm which just formed (or whose cone URL just appeared)
+# is not stuck on the snapshot from process start.
+_STORMS_CACHE: TtlCache[str, dict] = TtlCache(ttl_s=120, maxsize=1)
+
+
+def _fetch_current_storms_raw(*, refresh: bool = False) -> dict:
+    if not refresh:
+        hit = _STORMS_CACHE.get("current")
+        if hit is not None:
+            return hit
     req = urllib.request.Request(
         CURRENT_STORMS_URL,
         headers={"User-Agent": USER_AGENT},
     )
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        data = json.loads(resp.read().decode("utf-8"))
+    if isinstance(data, dict):
+        _STORMS_CACHE.set("current", data)
+    return data
+
+
+def clear_current_storms_cache() -> None:
+    _STORMS_CACHE.clear()
 
 
 def _coerce_float(v) -> float | None:
@@ -234,10 +252,10 @@ def _year_from_atcf(atcf_id: str) -> int:
         return 0
 
 
-def fetch_active_summaries() -> list[LiveStormSummary]:
+def fetch_active_summaries(*, refresh: bool = False) -> list[LiveStormSummary]:
     """Return the live list from NHC; empty list when nothing's active."""
     try:
-        data = _fetch_current_storms_raw()
+        data = _fetch_current_storms_raw(refresh=refresh)
     except Exception:  # noqa: BLE001 — network failure → degrade to empty
         return []
     out: list[LiveStormSummary] = []
@@ -274,10 +292,10 @@ def fetch_active_summaries() -> list[LiveStormSummary]:
     return out
 
 
-def _get_live_entry(atcf_id: str) -> dict | None:
+def _get_live_entry(atcf_id: str, *, refresh: bool = False) -> dict | None:
     """Look up the raw CurrentStorms.json entry for one live NHC storm."""
     try:
-        data = _fetch_current_storms_raw()
+        data = _fetch_current_storms_raw(refresh=refresh)
     except Exception:  # noqa: BLE001
         return None
     target = atcf_id.upper()
@@ -288,32 +306,112 @@ def _get_live_entry(atcf_id: str) -> dict | None:
     return None
 
 
-def fetch_live_forecast_cone(atcf_id: str) -> list[tuple[float, float]]:
+def fetch_live_forecast_cone(
+    atcf_id: str, *, refresh: bool = False,
+) -> list[tuple[float, float]]:
     """NHC's forecast cone-of-uncertainty polygon for a live storm — the
     familiar swept-circle envelope shown on hurricanes.gov. Empty list when
     the storm is not in the live feed or the KMZ is unreachable."""
-    entry = _get_live_entry(atcf_id)
+    entry = _get_live_entry(atcf_id, refresh=refresh)
     if entry is None:
         return []
     cone_kmz = (entry.get("trackCone") or {}).get("kmzFile")
     if not cone_kmz:
         return []
-    return fetch_track_cone(cone_kmz)
+    return fetch_track_cone(cone_kmz, refresh=refresh)
 
 
-def fetch_live_peak_surge(atcf_id: str) -> list[NHCSurgePolygon]:
+def fetch_live_wind_radii(
+    atcf_id: str, *, refresh: bool = False,
+) -> tuple[list[tuple[int, list[tuple[float, float]]]], list[tuple[int, list[tuple[float, float]]]]]:
+    """NHC operational wind swath: (initial 34/50/64, forecast 34/50/64).
+
+    These are the polygons on hurricanes.gov, not the parametric R64 cone.
+    A tropical storm often has a 34-kt swath and no hurricane-force radii;
+    the parametric fallback then looks empty. Empty lists on failure.
+    """
+    entry = _get_live_entry(atcf_id, refresh=refresh)
+    if entry is None:
+        return [], []
+    initial_url = (entry.get("initialWindExtent") or {}).get("kmzFile")
+    forecast_url = (entry.get("forecastWindRadiiGIS") or {}).get("kmzFile")
+    initial = fetch_wind_radii(initial_url, refresh=refresh) if initial_url else []
+    forecast = fetch_wind_radii(forecast_url, refresh=refresh) if forecast_url else []
+    return initial, forecast
+
+
+# NHC 5-year mean official track-error radii (nm), used ONLY when the cone
+# KMZ is missing or fails to parse. Atlantic values follow the 2024 cone
+# size table; East Pacific is a bit tighter. Not a substitute for the KMZ.
+_CONE_RADIUS_NM = {
+    "AL": {0: 0, 12: 26, 24: 41, 36: 55, 48: 70, 60: 88, 72: 102, 96: 145, 120: 196},
+    "EP": {0: 0, 12: 22, 24: 34, 36: 45, 48: 58, 60: 72, 72: 85, 96: 120, 120: 160},
+    "CP": {0: 0, 12: 22, 24: 34, 36: 45, 48: 58, 60: 72, 72: 85, 96: 120, 120: 160},
+}
+
+
+def _cone_radius_nm(basin: str, hours: int) -> float:
+    table = _CONE_RADIUS_NM.get(basin, _CONE_RADIUS_NM["AL"])
+    if hours in table:
+        return float(table[hours])
+    keys = sorted(table)
+    if hours <= keys[0]:
+        return float(table[keys[0]])
+    if hours >= keys[-1]:
+        return float(table[keys[-1]])
+    for lo, hi in zip(keys, keys[1:]):
+        if lo <= hours <= hi:
+            span = hi - lo or 1
+            w = (hours - lo) / span
+            return float(table[lo]) * (1 - w) + float(table[hi]) * w
+    return float(table[keys[-1]])
+
+
+def synthetic_forecast_cone(
+    points: list[tuple[float, float, int]],
+    *,
+    basin: str = "AL",
+) -> list[tuple[float, float]]:
+    """Fallback cone: circles of climatological forecast error at each fix.
+
+    ``points`` is ``(lat, lon, hours_out)``. Returns a closed (lon, lat) ring
+    or an empty list when there isn't enough track to draw one.
+    """
+    samples: list[tuple[float, float]] = []
+    for lat, lon, hours in points:
+        radius = _cone_radius_nm(basin, hours)
+        if radius <= 1:
+            samples.append((lon, lat))
+            continue
+        for i in range(12):
+            bearing = 360.0 * i / 12.0
+            plat, plon = _project_point(lat, lon, bearing, radius)
+            samples.append((plon, plat))
+    if len(samples) < 3:
+        return []
+    ring = _convex_hull(samples)
+    if len(ring) < 3:
+        return []
+    if ring[0] != ring[-1]:
+        ring = ring + [ring[0]]
+    return ring
+
+
+def fetch_live_peak_surge(
+    atcf_id: str, *, refresh: bool = False,
+) -> list[NHCSurgePolygon]:
     """NHC's peak storm-surge forecast for a live storm — coloured coastal
     polygons per surge band (1-2 ft, 3-6 ft, ...). Not every storm publishes a
     surge product (open-ocean systems, weak systems); empty list in that case.
     """
-    entry = _get_live_entry(atcf_id)
+    entry = _get_live_entry(atcf_id, refresh=refresh)
     if entry is None:
         return []
     surge = entry.get("peakSurgeKML") or {}
     surge_url = surge.get("peakSurgeKMLFile")
     if not surge_url:
         return []
-    return fetch_peak_surge(surge_url)
+    return fetch_peak_surge(surge_url, refresh=refresh)
 
 
 def _project_point(
@@ -413,6 +511,8 @@ FORECAST_HOUR_ANCHORS: tuple[int, ...] = (0, 12, 24, 36, 48, 72, 96, 120)
 
 def _live_storm_and_forecasts(
     entry: dict,
+    *,
+    refresh: bool = False,
 ) -> tuple[Storm, list[ForecastTrack]] | None:
     """Build (observed_storm, [current_advisory]) from a live NHC
     CurrentStorms.json entry. Observed track = current fix plus two
@@ -483,7 +583,7 @@ def _live_storm_and_forecasts(
     # -vector extrapolation only if the KMZ is missing or fails to parse.
     forecast_kmz = (entry.get("forecastTrack") or {}).get("kmzFile")
     if forecast_kmz:
-        for fix in fetch_forecast_track(forecast_kmz):
+        for fix in fetch_forecast_track(forecast_kmz, refresh=refresh):
             forecast_points.append(
                 ForecastPoint(
                     lat=fix.lat,
@@ -714,6 +814,7 @@ def storm_and_forecasts(
     *,
     as_of_index: int | None = None,
     n_prior_advisories: int = 5,
+    refresh: bool = False,
 ) -> tuple[Storm, list[ForecastTrack], bool] | None:
     """Return (observed_storm_so_far, [latest_forecast, prior_forecasts...],
     is_live).
@@ -728,9 +829,9 @@ def storm_and_forecasts(
     meaningful. Earlier "advisories" are synthesized by truncating the track
     at earlier points and laterally perturbing the forecast tail.
     """
-    live_entry = _get_live_entry(atcf_id)
+    live_entry = _get_live_entry(atcf_id, refresh=refresh)
     if live_entry is not None:
-        live_result = _live_storm_and_forecasts(live_entry)
+        live_result = _live_storm_and_forecasts(live_entry, refresh=refresh)
         if live_result is not None:
             live_storm, live_advisories = live_result
             return live_storm, live_advisories, True

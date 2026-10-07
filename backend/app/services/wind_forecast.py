@@ -329,17 +329,36 @@ _BULK_CACHE_MAX = 64
 _bulk_cache: OrderedDict[tuple[str, str, str], tuple[dict, ...]] = OrderedDict()
 
 
+def _chunk_has_real_wind(items: tuple[dict, ...]) -> bool:
+    """True when Open-Meteo actually returned a wind speed.
+
+    A HTTP 200 whose ``wind_speed_10m`` values are all null is an empty
+    model (mid-Pacific ECMWF, or a blip), not a calm grid. Caching it
+    made GFS/Euro look permanently unavailable until the process restarted.
+    A real 0 m/s is kept — that is calm wind, not a missing field.
+    """
+    for item in items:
+        hourly = (item or {}).get("hourly") or {}
+        for speed in hourly.get("wind_speed_10m") or []:
+            if speed is not None:
+                return True
+    return False
+
+
 def _fetch_bulk_chunk(
-    lat_str: str, lon_str: str, model_key: str,
+    lat_str: str, lon_str: str, model_key: str, *, refresh: bool = False,
 ) -> tuple[dict, ...]:
     """Fetch one multi-location Open-Meteo chunk with retries on 429.
-    Successful non-empty responses are cached; failures + empties are not
-    (so a transient rate-limit doesn't permanently poison the bbox)."""
+    Successful responses that contain at least one real wind value are
+    cached; failures, empty bodies, and all-null winds are not (so a
+    transient rate-limit doesn't permanently poison the bbox).
+    ``refresh`` bypasses the cache read."""
     key = (lat_str, lon_str, model_key)
-    hit = _bulk_cache.get(key)
-    if hit is not None:
-        _bulk_cache.move_to_end(key)
-        return hit
+    if not refresh:
+        hit = _bulk_cache.get(key)
+        if hit is not None:
+            _bulk_cache.move_to_end(key)
+            return hit
 
     import time as _t
     params = {
@@ -395,7 +414,7 @@ def _fetch_bulk_chunk(
         except Exception:  # noqa: BLE001
             break
 
-    if items:
+    if items and _chunk_has_real_wind(items):
         _bulk_cache[key] = items
         while len(_bulk_cache) > _BULK_CACHE_MAX:
             _bulk_cache.popitem(last=False)
@@ -404,7 +423,7 @@ def _fetch_bulk_chunk(
 
 def fetch_model_wind_grid(
     west: float, south: float, east: float, north: float,
-    model_wire: str, *, step_deg: float = 0.25,
+    model_wire: str, *, step_deg: float = 0.25, refresh: bool = False,
 ) -> ModelWindGrid:
     """GFS or ECMWF wind grid over the bbox, at ``step_deg`` resolution,
     returned as multiple forecast frames (see ``_FORECAST_HOURS``).
@@ -453,7 +472,10 @@ def fetch_model_wind_grid(
             lat_str = ",".join(f"{c[0]:.3f}" for c in ch)
             lon_str = ",".join(f"{c[1]:.3f}" for c in ch)
             futures.append(
-                (ch, pool.submit(_fetch_bulk_chunk, lat_str, lon_str, model_key))
+                (ch, pool.submit(
+                    _fetch_bulk_chunk, lat_str, lon_str, model_key,
+                    refresh=refresh,
+                ))
             )
         for ch, fut in futures:
             try:

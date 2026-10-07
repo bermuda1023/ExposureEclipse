@@ -22,6 +22,7 @@ import {
   type ModelFamily,
   type NHCWatchWarn,
   type WatchWarnExposureResponse,
+  type WindModelGrid,
 } from "../../api/live";
 import { FAMILY_COLOR } from "./ModelTrackLayer";
 import { GTWO_BUCKET_COLOR } from "./TWOLayer";
@@ -41,7 +42,7 @@ import { fetchHurricaneImpact } from "../../api/hurricanes";
 import { useFiltersStore } from "../../state/filters";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
-  useLiveStormStore, type ToggleKey, type WindMapMode,
+  useLiveStormStore, windGridUsable, type ToggleKey, type WindMapMode,
 } from "../../state/liveStorm";
 import { useEffectiveScope } from "../../state/useEffectiveScope";
 import { useViewStore } from "../../state/view";
@@ -119,11 +120,18 @@ export function LiveStormPanel() {
       .catch((e) => impactStore.setError(String(e?.message ?? e)));
   }
 
-  // Lazy-fetch model grids whenever the mode requires them and we don't
-  // already have them cached. Each model grid is one Open-Meteo call, so
-  // triggering only on demand keeps the initial bundle fast.
+  // Lazy-fetch model grids whenever the mode requires them. Retry bumps
+  // reloadNonce; a finished attempt for that nonce is not repeated, and an
+  // all-zero / frameless grid is stored as empty so the next Retry can run.
   useEffect(() => {
-    const mode = store.windMapMode;
+    const snap = useLiveStormStore.getState();
+    const mode = snap.windMapMode;
+    const nonce = snap.reloadNonce;
+    const data = snap.data;
+    const stormId = snap.activeStormId;
+    if (!data || !stormId) return;
+    const bbox = data.bbox;
+    let cancelled = false;
     const needGfs =
       mode === "gfs"
       || mode === "diff-obs-vs-gfs"
@@ -132,81 +140,161 @@ export function LiveStormPanel() {
       mode === "ecmwf"
       || mode === "diff-obs-vs-ecmwf"
       || mode === "diff-gfs-vs-ecmwf";
-    if (!store.data) return;
-    const bbox = store.data.bbox;
-    // One automatic retry after a short delay covers Open-Meteo transient
-    // failures (rate-limit bursts, cold DNS resolution). If the retry also
-    // comes back empty then the model genuinely has no coverage for this
-    // bbox — the user gets the "returned no data" note without more retries
-    // fighting a persistent issue.
-    async function fetchWithRetry(
-      model: "gfs" | "ecmwf",
-    ) {
+
+    const stillCurrent = () => {
+      const s = useLiveStormStore.getState();
+      return !cancelled && s.activeStormId === stormId && s.reloadNonce === nonce;
+    };
+
+    async function fetchWithRetry(model: "gfs" | "ecmwf") {
       const state = useLiveStormStore.getState();
-      const setStatus = model === "gfs"
-        ? state.setGfsGridStatus
-        : state.setEcmwfGridStatus;
+      const status = model === "gfs" ? state.gfsGridStatus : state.ecmwfGridStatus;
+      const attempted = model === "gfs" ? state.gfsAttemptNonce : state.ecmwfAttemptNonce;
+      if (
+        attempted === nonce
+        && (status === "ok" || status === "empty" || status === "error")
+      ) {
+        return;
+      }
+      const setStatus = model === "gfs" ? state.setGfsGridStatus : state.setEcmwfGridStatus;
       const setGrid = model === "gfs" ? state.setGfsGrid : state.setEcmwfGrid;
+      const setAttempt = model === "gfs" ? state.setGfsAttemptNonce : state.setEcmwfAttemptNonce;
+      setAttempt(nonce);
       setStatus("loading");
-      const attempt = async () => fetchWindModelGrid(bbox, model);
-      try {
-        let g = await attempt();
-        if (g.cells.length === 0) {
-          // 1.5 s delay is long enough to clear Open-Meteo's burst rate
-          // limit but short enough that the user doesn't notice a slow
-          // panel.
-          await new Promise((r) => setTimeout(r, 1500));
-          g = await attempt();
+      const refresh = nonce > 0;
+      const apply = (g: WindModelGrid) => {
+        if (!stillCurrent()) return;
+        if (windGridUsable(g)) {
+          setGrid(g);
+          setStatus("ok");
+        } else {
+          setGrid(null);
+          setStatus("empty");
         }
-        setGrid(g);
-        setStatus(g.cells.length > 0 ? "ok" : "empty");
+      };
+      try {
+        let g = await fetchWindModelGrid(bbox, model, { refresh });
+        if (!stillCurrent()) return;
+        // One automatic bypass of the backend cache. Cells with null winds
+        // used to count as success and could never be asked for again.
+        if (!windGridUsable(g) && !refresh) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (!stillCurrent()) return;
+          g = await fetchWindModelGrid(bbox, model, { refresh: true });
+        }
+        apply(g);
       } catch {
+        if (!stillCurrent()) return;
+        if (!refresh) {
+          try {
+            await new Promise((r) => setTimeout(r, 1500));
+            if (!stillCurrent()) return;
+            apply(await fetchWindModelGrid(bbox, model, { refresh: true }));
+            return;
+          } catch {
+            // The explicit refresh also failed — surface the error.
+          }
+        }
+        if (!stillCurrent()) return;
+        setGrid(null);
         setStatus("error");
       }
     }
 
-    if (needGfs && !store.gfsGrid && store.gfsGridStatus !== "loading") {
-      void fetchWithRetry("gfs");
-    }
-    if (needEcmwf && !store.ecmwfGrid && store.ecmwfGridStatus !== "loading") {
-      void fetchWithRetry("ecmwf");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.windMapMode, store.data, store.gfsGrid, store.ecmwfGrid]);
+    if (needGfs) void fetchWithRetry("gfs");
+    if (needEcmwf) void fetchWithRetry("ecmwf");
+    return () => {
+      cancelled = true;
+    };
+  }, [store.windMapMode, store.data, store.reloadNonce]);
 
-  // Fetch the FULL bundle whenever activeId changes, once per storm. Every
-  // sub-layer is fetched regardless of whether its chip is enabled — the
-  // availability signal (which chips should be greyed out) is derived from
-  // the bundle response, so we need it all up-front. Previously each
-  // include* flag was tied to a chip toggle, which meant switching a chip
-  // triggered a full refetch and empty responses were indistinguishable
-  // from "not fetched yet".
+  // Full bundle + model tracks. activeId selects the storm (the picker
+  // already called start()). reloadNonce is Retry: same storm, do not call
+  // start() — that cleared the cone and reset the nonce, so Retry never
+  // actually ran. A failed first load tries once more with refresh=true.
   useEffect(() => {
     if (!activeId) return;
-    store.start(activeId);
-    fetchLiveStormBundle(activeId, {
+    const nonce = useLiveStormStore.getState().reloadNonce;
+    let cancelled = false;
+    const stillCurrent = () => {
+      const s = useLiveStormStore.getState();
+      return !cancelled && s.activeStormId === activeId && s.reloadNonce === nonce;
+    };
+    const refresh = nonce > 0;
+    const bundleOpts = {
       includeObs: true,
       includeAlerts: true,
       includeSst: true,
       includeLand: true,
       includeSurge: true,
       includeWindMap: true,
-    })
-      .then(store.setData)
-      .catch((e) => store.setError(String(e?.message ?? e)));
-    // Also eager-fetch model tracks on storm select so the ensemble chips
-    // (Model tracks / envelopes / Strike prob) can be greyed out immediately
-    // if the a-deck comes back empty. The tracks payload is small and cached.
-    const s = useLiveStormStore.getState();
-    s.setModelTracksStatus("loading");
-    fetchModelTracks(activeId)
-      .then((r) => {
-        s.setModelTracks(r);
-        s.setModelTracksStatus(r.tracks.length > 0 ? "ok" : "empty");
-      })
-      .catch(() => s.setModelTracksStatus("error"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId]);
+      refresh,
+    };
+
+    void (async () => {
+      try {
+        let bundle = await fetchLiveStormBundle(activeId, bundleOpts);
+        if (!stillCurrent()) return;
+        useLiveStormStore.getState().setData(bundle);
+      } catch (e) {
+        if (!stillCurrent()) return;
+        if (!refresh) {
+          try {
+            const bundle = await fetchLiveStormBundle(activeId, { ...bundleOpts, refresh: true });
+            if (!stillCurrent()) return;
+            useLiveStormStore.getState().setData(bundle);
+            return;
+          } catch (e2) {
+            if (!stillCurrent()) return;
+            const err = e2 as { message?: string };
+            useLiveStormStore.getState().setError(String(err?.message ?? e2));
+            return;
+          }
+        }
+        const err = e as { message?: string };
+        useLiveStormStore.getState().setError(String(err?.message ?? e));
+      }
+    })();
+
+    if (useLiveStormStore.getState().modelTracksStatus !== "loading") {
+      useLiveStormStore.getState().setModelTracksStatus("loading");
+    }
+    void (async () => {
+      const load = (useRefresh: boolean) =>
+        fetchModelTracks(activeId, { refresh: useRefresh });
+      try {
+        let tracks = await load(refresh);
+        if (!stillCurrent()) return;
+        if (tracks.tracks.length === 0 && !refresh) {
+          tracks = await load(true);
+          if (!stillCurrent()) return;
+        }
+        const st = useLiveStormStore.getState();
+        st.setModelTracks(tracks);
+        st.setModelTracksStatus(tracks.tracks.length > 0 ? "ok" : "empty");
+      } catch {
+        if (!stillCurrent()) return;
+        if (!refresh) {
+          try {
+            const tracks = await load(true);
+            if (!stillCurrent()) return;
+            const st = useLiveStormStore.getState();
+            st.setModelTracks(tracks);
+            st.setModelTracksStatus(tracks.tracks.length > 0 ? "ok" : "empty");
+            return;
+          } catch {
+            // fall through
+          }
+        }
+        if (!stillCurrent()) return;
+        useLiveStormStore.getState().setModelTracksStatus("error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, store.reloadNonce]);
 
   // (Model tracks are now eagerly fetched in the bundle effect above so
   // their availability drives chip greying-out on storm select. No lazy
@@ -219,17 +307,28 @@ export function LiveStormPanel() {
     if (!activeId) return;
     if (!store.showStrikeProbability) return;
     if (store.ensembleRisk || store.ensembleRiskStatus === "loading") return;
+    const nonce = store.reloadNonce;
+    const threshold = store.strikeThresholdNm;
+    // No cleanup flag: setting "loading" re-runs this effect, and a cleanup
+    // that dropped the in-flight request would leave strike probability stuck.
     const s = useLiveStormStore.getState();
     s.setEnsembleRiskStatus("loading");
-    fetchEnsembleRisk(activeId, { thresholdNm: store.strikeThresholdNm })
+    fetchEnsembleRisk(activeId, { thresholdNm: threshold, refresh: nonce > 0 })
       .then((r) => {
-        s.setEnsembleRisk(r);
-        s.setEnsembleRiskStatus(r.strikeByCounty.length > 0 ? "ok" : "empty");
+        const now = useLiveStormStore.getState();
+        if (now.activeStormId !== activeId || now.reloadNonce !== nonce) return;
+        if (now.strikeThresholdNm !== threshold) return;
+        now.setEnsembleRisk(r);
+        now.setEnsembleRiskStatus(r.strikeByCounty.length > 0 ? "ok" : "empty");
       })
-      .catch(() => s.setEnsembleRiskStatus("error"));
+      .catch(() => {
+        const now = useLiveStormStore.getState();
+        if (now.activeStormId !== activeId || now.reloadNonce !== nonce) return;
+        now.setEnsembleRiskStatus("error");
+      });
   }, [
     activeId, store.showStrikeProbability, store.strikeThresholdNm,
-    store.ensembleRisk, store.ensembleRiskStatus,
+    store.ensembleRisk, store.ensembleRiskStatus, store.reloadNonce,
   ]);
 
   // GTWO (Tropical Weather Outlook) — basin-wide, doesn't need a storm.
@@ -461,7 +560,7 @@ export function LiveStormPanel() {
             <ChipGroup label="Track & cone">
               <SmartChip store={store} status={chipStatus.showForecastCone} k="showForecastCone" label="NHC cone" hint="Cone of uncertainty" color="#475569" />
               <SmartChip store={store} status={chipStatus.showForecastHistory} k="showForecastHistory" label="Forecast evolution" hint="Prior NHC advisories" color="#475569" />
-              <SmartChip store={store} status={chipStatus.showWindField} k="showWindField" label="Wind field" hint="Rmax + R64 modelled" color="#b91c1c" />
+              <SmartChip store={store} status={chipStatus.showWindField} k="showWindField" label="Wind field" hint="NHC 34/50/64 kt swath, modelled R64 if NHC has no radii" color="#b91c1c" />
             </ChipGroup>
 
             <ChipGroup label="Model ensemble">
@@ -506,6 +605,35 @@ export function LiveStormPanel() {
           {store.isLoading && <div style={{ color: "var(--ink-500)" }}>Fetching live data…</div>}
           {store.error && (
             <div style={{ color: "var(--error-700)", fontSize: "0.7rem" }}>{store.error}</div>
+          )}
+          {store.activeStormId && (
+            store.error
+            || store.modelTracksStatus === "error"
+            || store.modelTracksStatus === "empty"
+            || (
+              !!store.data
+              && store.data.storm.classification !== "INVEST"
+              && !store.data.forecastCone
+            )
+          ) && (
+            <button
+              type="button"
+              onClick={() => useLiveStormStore.getState().retryLoads()}
+              style={{
+                all: "unset",
+                cursor: "pointer",
+                justifySelf: "start",
+                fontSize: "0.7rem",
+                fontWeight: 700,
+                color: "#7f1d1d",
+                border: "1px solid #b45309",
+                borderRadius: 3,
+                padding: "3px 8px",
+                background: "#fffbeb",
+              }}
+            >
+              Reload live data
+            </button>
           )}
           {store.data && (
             <>
@@ -1137,21 +1265,8 @@ function WindMapModeSelector({
             || store.ecmwfGridStatus === "empty" || store.ecmwfGridStatus === "error") && (
             <button
               type="button"
-              onClick={() => {
-                // Reset both grids so the panel's fetch effect re-runs and
-                // Open-Meteo gets a fresh chance. Cheap to redo — cached
-                // per-bbox on the backend when it succeeded.
-                const s = useLiveStormStore.getState();
-                if (s.gfsGridStatus !== "loading") {
-                  s.setGfsGrid(null);
-                  s.setGfsGridStatus("idle");
-                }
-                if (s.ecmwfGridStatus !== "loading") {
-                  s.setEcmwfGrid(null);
-                  s.setEcmwfGridStatus("idle");
-                }
-              }}
-              title="Retry model fetch"
+              onClick={() => useLiveStormStore.getState().retryLoads()}
+              title="Reload GFS, Euro, the cone, and model tracks"
               style={{
                 all: "unset",
                 cursor: "pointer",

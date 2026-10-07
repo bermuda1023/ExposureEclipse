@@ -76,6 +76,36 @@ def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]
     return lower[:-1] + upper[:-1]
 
 
+def _corridor_points(members: list[ModelTrack]) -> list[tuple[float, float]]:
+    """Points offset ~30 nm either side of each member track.
+
+    Used when the convex hull of the raw positions is degenerate (one
+    model, or several models on top of each other). 0.5° of longitude at
+    these latitudes is roughly 30 nm — enough to see, not a fake cone.
+    """
+    out: list[tuple[float, float]] = []
+    for track in members:
+        fixes = track.fixes
+        for i, fix in enumerate(fixes):
+            if i + 1 < len(fixes):
+                nxt = fixes[i + 1]
+                dlon = nxt.lon - fix.lon
+                dlat = nxt.lat - fix.lat
+            elif i > 0:
+                prv = fixes[i - 1]
+                dlon = fix.lon - prv.lon
+                dlat = fix.lat - prv.lat
+            else:
+                dlon, dlat = 1.0, 0.0
+            norm = (dlon * dlon + dlat * dlat) ** 0.5 or 1.0
+            # Perpendicular unit vector, scaled to ~0.45°.
+            ox = -dlat / norm * 0.45
+            oy = dlon / norm * 0.45
+            out.append((fix.lon + ox, fix.lat + oy))
+            out.append((fix.lon - ox, fix.lat - oy))
+    return out
+
+
 def _member_position_at(track: ModelTrack, hours: int) -> tuple[float, float] | None:
     """Return (lon, lat) at exactly ``hours`` if the member has that fix.
 
@@ -130,13 +160,18 @@ def build_envelope(
         union_pts.extend(hull)
 
     if not union_pts:
+        union_pts = _corridor_points(members)
+    if not union_pts:
         return None
 
     # The envelope is the convex hull of the union — a genuinely tight
     # polygon that contains every ensemble member at every anchor. Simpler
     # than sweeping-and-stitching per-lead hulls and reads cleanly as a
-    # "cone of model disagreement".
+    # "cone of model disagreement". A single nearly-straight track has no
+    # area; widen it into a corridor so an AI-only run still draws.
     ring = _convex_hull(union_pts)
+    if len(ring) < 3:
+        ring = _convex_hull(_corridor_points(members))
     if len(ring) < 3:
         return None
     # Close the ring.
