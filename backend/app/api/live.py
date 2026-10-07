@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -51,7 +52,13 @@ from ..services.marine_obs import buoys_in_bbox, land_stations_in_bbox
 from ..services.nhc_watch_warn import split_watches_warnings
 from ..services.sea_surface_temp import sst_field
 from ..services.weather_alerts import AlertFeedUnavailable, fetch_active_alerts
-from ..services.wind_field_map import WindObs, wind_field_grid
+from ..services.wind_field_map import (
+    WindObs,
+    advect_recon_obs,
+    interpolate_obs,
+    regrid_with_recon,
+    wind_field_grid,
+)
 from ..services.recon_obs import fetch_recon_bundle, recon_for_idw
 from ..services.wind_forecast import fetch_model_wind_grid, point_forecast
 from ..services import wildfire_exposure
@@ -483,6 +490,47 @@ def _gather(
                 out[name] = default
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
+    return out
+
+
+def _center_track(observed_storm, forecasts) -> list[tuple[str, float, float]]:
+    """Center positions the advection uses: recent fixes, then the forecast."""
+    pts: list[tuple[str, float, float]] = []
+    for p in observed_storm.track:
+        if p.datetime_utc:
+            pts.append((p.datetime_utc, p.lat, p.lon))
+    if forecasts:
+        latest = max(forecasts, key=lambda f: f.advisory_number)
+        for fp in latest.points:
+            if fp.valid_time:
+                pts.append((fp.valid_time, fp.lat, fp.lon))
+    return pts
+
+
+def _advect_recon_samples(fixes, observed_storm, forecasts) -> list[WindObs]:
+    samples = [
+        (
+            fx.lat, fx.lon, fx.surface_kt, fx.fl_dir_deg, fx.observed_at,
+            f"{fx.aircraft}-{fx.observed_at[11:16]} adv",
+        )
+        for fx in recon_for_idw(fixes)
+    ]
+    return advect_recon_obs(
+        samples, _center_track(observed_storm, forecasts),
+        datetime.now(timezone.utc),
+    )
+
+
+def _parse_centers(raw: str) -> list[tuple[str, float, float]]:
+    out: list[tuple[str, float, float]] = []
+    for part in (raw or "").split("|"):
+        bits = part.split(",")
+        if len(bits) != 3:
+            continue
+        try:
+            out.append((bits[0], float(bits[1]), float(bits[2])))
+        except ValueError:
+            continue
     return out
 
 
@@ -942,15 +990,9 @@ def live_storm_bundle(
                     aircraft=v.aircraft, storm_id=v.storm_id,
                     storm_name=v.storm_name, mission_id=v.mission_id,
                 )
-            for fx in recon_for_idw(recon_bundle.fixes):
-                recon_idw.append(
-                    WindObs(
-                        lat=fx.lat, lon=fx.lon, wind_kt=fx.surface_kt,
-                        wind_dir_deg=fx.fl_dir_deg, source="recon",
-                        station_id=f"{fx.aircraft}-{fx.observed_at[11:16]}",
-                        observed_at=fx.observed_at,
-                    )
-                )
+            recon_idw = _advect_recon_samples(
+                recon_bundle.fixes, observed_storm, forecasts,
+            )
 
     # Interpolated wind heatmap. Runs for any storm (live or replay) since it
     # is purely observation-driven; caller can turn it off if the extra land
@@ -963,6 +1005,14 @@ def live_storm_bundle(
             cells, wind_step, obs_pool = got.get("wind") or ([], 0.5, [])
         except Exception:  # noqa: BLE001
             cells, wind_step, obs_pool = [], 0.5, []
+        # Hunter samples are not in the buoy/land fetch. Slide the ones
+        # that were in the vortex forward with the center and re-grid.
+        # The flight track itself stays where the plane measured it.
+        if recon_idw:
+            base = [o for o in obs_pool if o.source != "recon"]
+            obs_pool = base + recon_idw
+            cells = interpolate_obs(bbox[0], bbox[1], bbox[2], bbox[3], obs_pool)
+            wind_step = 0.25
         wind_map_out = [
             WindGridPointOut(
                 lat=c.lat,
@@ -986,7 +1036,7 @@ def live_storm_bundle(
                 source=o.source, station_id=o.station_id,
                 observed_at=o.observed_at,
             )
-            for o in list(obs_pool) + list(recon_idw)
+            for o in obs_pool
         ]
 
     return LiveStormBundle(
@@ -1017,6 +1067,108 @@ def live_storm_bundle(
     )
 
 
+class ReconPollOut(CamelModel):
+    """Hunter points refreshed without rebuilding the whole live bundle.
+
+    ``wind_map`` / ``wind_obs`` are set only when the buoy/land field from
+    the last bundle is still cached. Null means "leave the heatmap as it
+    is" — a poll must not wipe buoys just because that cache expired.
+    """
+
+    recon: list[ReconObsOut]
+    vortex: VortexFixOut | None
+    wind_map: list[WindGridPointOut] | None = None
+    wind_obs: list[WindObsOut] | None = None
+    polled_at: str
+
+
+@router.get("/storms/{atcf_id}/recon", response_model=ReconPollOut)
+def recon_poll(
+    atcf_id: str,
+    west: float = Query(..., ge=-180.0, le=180.0),
+    south: float = Query(..., ge=-90.0, le=90.0),
+    east: float = Query(..., ge=-180.0, le=180.0),
+    north: float = Query(..., ge=-90.0, le=90.0),
+    name: str = Query(default=""),
+    centers: str = Query(
+        default="",
+        description="iso,lat,lon|iso,lat,lon center track used to slide hunter samples",
+    ),
+) -> ReconPollOut:
+    """Latest hurricane-hunter points for a storm the map already has open.
+
+    The panel calls this on a timer. Archive files are cached, so a poll
+    only downloads bulletins that were not on the previous pass. The
+    flight track is returned where the plane measured it. Samples that
+    were inside the vortex are also slid forward with the center track
+    and folded into the observed wind grid when that grid is still cached.
+    """
+    now = datetime.now(timezone.utc)
+    bbox = (west, south, east, north)
+    bundle = fetch_recon_bundle(
+        bbox, atcf_id=atcf_id, storm_name=name or "", now=now,
+    )
+    recon_out = [
+        ReconObsOut(
+            lat=fx.lat, lon=fx.lon, observed_at=fx.observed_at,
+            surface_kt=fx.surface_kt, surface_source=fx.surface_source,
+            fl_wind_kt=fx.fl_wind_kt, fl_dir_deg=fx.fl_dir_deg,
+            sfmr_kt=fx.sfmr_kt, rain_mm_hr=fx.rain_mm_hr,
+            aircraft=fx.aircraft, storm_name=fx.storm_name,
+            mission_id=fx.mission_id,
+        )
+        for fx in bundle.fixes
+    ]
+    vortex_out = None
+    if bundle.vortex is not None:
+        v = bundle.vortex
+        vortex_out = VortexFixOut(
+            lat=v.lat, lon=v.lon, observed_at=v.observed_at,
+            pressure_mb=v.pressure_mb, max_fl_wind_kt=v.max_fl_wind_kt,
+            aircraft=v.aircraft, storm_id=v.storm_id,
+            storm_name=v.storm_name, mission_id=v.mission_id,
+        )
+    samples = [
+        (
+            fx.lat, fx.lon, fx.surface_kt, fx.fl_dir_deg, fx.observed_at,
+            f"{fx.aircraft}-{fx.observed_at[11:16]} adv",
+        )
+        for fx in recon_for_idw(bundle.fixes)
+    ]
+    advected = advect_recon_obs(samples, _parse_centers(centers), now)
+    blended = regrid_with_recon(west, south, east, north, advected)
+    wind_map = None
+    wind_obs = None
+    if blended is not None:
+        cells, _step, obs = blended
+        wind_map = [
+            WindGridPointOut(
+                lat=c.lat, lon=c.lon, wind_kt=c.wind_kt,
+                wind_dir_deg=c.wind_dir_deg, sources=c.sources,
+                confidence=c.confidence, nearest_obs_km=c.nearest_obs_km,
+                dist_score=c.dist_score, count_score=c.count_score,
+                agreement_score=c.agreement_score,
+                contributor_spread_kt=c.contributor_spread_kt,
+            )
+            for c in cells
+        ]
+        wind_obs = [
+            WindObsOut(
+                lat=o.lat, lon=o.lon, wind_kt=o.wind_kt,
+                wind_dir_deg=o.wind_dir_deg, source=o.source,
+                station_id=o.station_id, observed_at=o.observed_at,
+            )
+            for o in obs
+        ]
+    return ReconPollOut(
+        recon=recon_out,
+        vortex=vortex_out,
+        wind_map=wind_map,
+        wind_obs=wind_obs,
+        polled_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
+
 @router.get("/wind-model-grid", response_model=WindModelGridOut)
 def wind_model_grid(
     west: float = Query(..., ge=-180.0, le=180.0),
@@ -1026,11 +1178,10 @@ def wind_model_grid(
     model: str = Query(..., pattern="^(gfs|ecmwf)$"),
     refresh: bool = Query(default=False, alias="refresh"),
 ) -> WindModelGridOut:
-    """GFS or ECMWF surface-wind grid over a bbox at 0.25° resolution, as
-    multiple forecast frames (0 → 120 h from now). Powers both the
-    mode-selector single-hour views and the time-slider evolution view.
-    Fetches from Open-Meteo — degrades to an empty grid on failure rather
-    than 5xx'ing the mode selector."""
+    """GFS or ECMWF surface-wind grid over a bbox, as forecast frames
+    (0 → 120 h). The step starts at 0.5° and coarsens when the cone is
+    large, so the request finishes instead of dying at the proxy.
+    Degrades to an empty grid on failure rather than 5xx'ing."""
     grid = fetch_model_wind_grid(
         west, south, east, north, model, refresh=refresh,
     )

@@ -15,6 +15,7 @@ import type {
   LiveStormBundle,
   ModelFamily,
   ModelTracksResponse,
+  ReconPoll,
   WindModelGrid,
   WindObs,
 } from "../api/live";
@@ -120,6 +121,9 @@ interface LiveStormState {
   setGfsAttemptNonce: (n: number) => void;
   setEcmwfAttemptNonce: (n: number) => void;
   retryLoads: () => void;
+  // Swap hunter points (and, when the server still has the buoy field,
+  // the observed wind grid) without blanking the rest of the bundle.
+  patchRecon: (patch: ReconPoll) => void;
   setHighlightObs: (obs: WindObs[] | null) => void;
   setWindMapFrameIndex: (i: number) => void;
   setModelTracks: (r: ModelTracksResponse | null) => void;
@@ -142,8 +146,10 @@ interface LiveStormState {
 /** A model grid the map can draw. Cells with no frames, or frames whose
  * winds are all zero, are a failed Open-Meteo response — not a calm Gulf. */
 export function windGridUsable(grid: WindModelGrid | null | undefined): boolean {
-  if (!grid || grid.cells.length === 0 || grid.frames.length === 0) return false;
-  return grid.frames.some((frame) => frame.windKt.some((kt) => kt > 0));
+  if (!grid || !grid.cells?.length || !grid.frames?.length) return false;
+  return grid.frames.some(
+    (frame) => Array.isArray(frame?.windKt) && frame.windKt.some((kt) => kt > 0),
+  );
 }
 
 export type ToggleKey =
@@ -300,6 +306,19 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       modelTracksStatus: "loading",
       ensembleRisk: null,
       ensembleRiskStatus: "idle",
+    });
+  },
+  patchRecon: (patch) => {
+    const cur = get();
+    if (!cur.data) return;
+    set({
+      data: {
+        ...cur.data,
+        recon: patch.recon,
+        vortex: patch.vortex,
+        ...(patch.windMap ? { windMap: patch.windMap } : {}),
+        ...(patch.windObs ? { windObs: patch.windObs } : {}),
+      },
     });
   },
   setHighlightObs: (obs) => set({ highlightObs: obs }),

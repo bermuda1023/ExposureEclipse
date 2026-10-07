@@ -76,6 +76,7 @@ interface Cell {
 function buildWindField(
   cells: Cell[],
   bbox: [number, number, number, number],
+  step = 0.25,
 ): {
   data: Uint8Array;
   width: number;
@@ -83,9 +84,11 @@ function buildWindField(
   uMin: number; uMax: number; vMin: number; vMax: number;
 } | null {
   const [west, south, east, north] = bbox;
-  const step = 0.25;
-  const width = Math.max(2, Math.round((east - west) / step) + 1);
-  const height = Math.max(2, Math.round((north - south) / step) + 1);
+  // Match the grid that produced the cells. A 0.25° texture under a 1°
+  // model leaves four out of five texels empty and the particles stop.
+  const cellStep = Math.max(step, 0.25);
+  const width = Math.max(2, Math.round((east - west) / cellStep) + 1);
+  const height = Math.max(2, Math.round((north - south) / cellStep) + 1);
 
   const uArr = new Float32Array(width * height);
   const vArr = new Float32Array(width * height);
@@ -95,8 +98,8 @@ function buildWindField(
 
   for (const c of cells) {
     if (c.windDirDeg == null) continue;
-    const i = Math.round((c.lon - west) / step);
-    const j = Math.round((c.lat - south) / step);
+    const i = Math.round((c.lon - west) / cellStep);
+    const j = Math.round((c.lat - south) / cellStep);
     if (i < 0 || i >= width || j < 0 || j >= height) continue;
 
     // Meteorological "wind from" convention → advection components:
@@ -280,34 +283,38 @@ function materializeModelCells(
 function selectActiveCells(): {
   cells: Cell[];
   bbox: [number, number, number, number] | null;
+  step: number;
 } | null {
   const s = useLiveStormStore.getState();
   if (!s.showWindMap || !s.showWindParticles) return null;
   const mode = s.windMapMode;
   const bbox = s.data?.bbox as [number, number, number, number] | undefined;
   if (!bbox) return null;
+  const obsStep = s.data?.windMapMeta?.stepDeg ?? 0.25;
   if (mode === "observed") {
     const cells = (s.data?.windMap ?? []).map((c) => ({
       lat: c.lat, lon: c.lon, windKt: c.windKt, windDirDeg: c.windDirDeg,
     }));
-    return { cells, bbox };
+    return { cells, bbox, step: obsStep };
   }
   if (mode === "gfs") {
     return {
       cells: materializeModelCells(s.gfsGrid, s.windMapFrameIndex),
       bbox,
+      step: s.gfsGrid?.stepDeg || 0.5,
     };
   }
   if (mode === "ecmwf") {
     return {
       cells: materializeModelCells(s.ecmwfGrid, s.windMapFrameIndex),
       bbox,
+      step: s.ecmwfGrid?.stepDeg || 0.5,
     };
   }
   // Diff modes: skip particles — the diverging color palette is what
   // conveys the story there, and animated particles on a diff field
   // would be confusing.
-  return { cells: [], bbox };
+  return { cells: [], bbox, step: obsStep };
 }
 
 export function WindParticleLayer({ map }: Props) {
@@ -384,7 +391,7 @@ export function WindParticleLayer({ map }: Props) {
           gl.bindBuffer(gl.ARRAY_BUFFER, particleIndexBuffer);
           gl.bufferData(gl.ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
-          const wf = buildWindField(active.cells, active.bbox!);
+          const wf = buildWindField(active.cells, active.bbox!, active.step);
           if (!wf) throw new Error("empty wind field");
           const windTexture = createTexture(
             gl, wf.width, wf.height, wf.data, gl.LINEAR,

@@ -304,10 +304,40 @@ export function Methodology() {
         <SubHead>Model ensemble &amp; strike probability</SubHead>
         <ul>
           <li>
-            ATCF a-deck spaghetti (GFS, ECMWF, GEFS, AI models, NHC
-            official) for the latest init cycle. Ensemble strike
-            probability is P(track within a nautical-mile threshold) by
-            county.
+            The spaghetti is every track in the public ATCF a-deck for
+            that storm: NHC official, the deterministic globals (GFS,
+            ECMWF when NHC publishes it), GEFS, regional models, and the
+            AI aids. Each model keeps its own latest cycle within 24 h of
+            the newest row, so a GEFS run one cycle behind is not dropped.
+          </li>
+          <li>
+            <b>Strike probability is not the NHC cone, and it is not one
+            model.</b> It is an unweighted vote of the <em>ensemble</em>{" "}
+            tracks only:
+            <ul>
+              <li>GEFS: control <code>AC00</code> and perturbed members <code>AP01</code>–<code>AP30</code></li>
+              <li>ECMWF ensemble: <code>EE01</code>–<code>EE50</code>, when those rows are in the public a-deck (often they are not)</li>
+              <li>AI tracks on the file: GraphCast (<code>GDMI</code>/<code>GDMN</code>), AIFS, FourCastNet, Pangu, GenCast, and the older GraphCast label</li>
+            </ul>
+            NHC official, the deterministic GFS/ECMWF runs, the ensemble
+            means (<code>AEMN</code>, <code>EEMN</code>), and the consensus
+            aids (TVCN, HCCA, …) are drawn on the map but <b>do not vote</b>.
+          </li>
+          <li>
+            For each coastal county centroid, a member "strikes" if any
+            segment of its track passes within the threshold (default{" "}
+            <b>60 nm</b>) . The percent is striking members ÷ members
+            considered. A member whose last fix is before 24 h is left
+            out — it cannot speak to a later landfall. The default sweep
+            is Atlantic and Gulf coastal states, not every US county.
+          </li>
+          <li>
+            The number moves when the a-deck does. A cycle that has 30
+            GEFS members and one GraphCast track is mostly a GEFS vote;
+            the AI track is one vote, not a separate product. If Euro
+            ensemble rows are absent, they are absent — we do not invent
+            them. This is a track-passage rate, not a calibrated
+            probability of damaging wind.
           </li>
         </ul>
         <SubHead>Formation outlook (TWO)</SubHead>
@@ -355,6 +385,23 @@ export function Methodology() {
             Live NHC text pages only hold the current bulletin, so we also
             pull the last 8 hours from the recon archive. Empty when no
             mission is flying (the layer chip greys out).
+          </li>
+          <li>
+            While a live storm is open the panel asks for new hunter
+            points about every <b>30 seconds</b>. Archive files are
+            cached, so a poll downloads only bulletins that were not
+            already fetched. The flight track updates without a page
+            reload.
+          </li>
+          <li>
+            Each point with a flight-level direction is an <b>arrow</b>{" "}
+            pointing downwind (the reported direction is where the wind
+            comes from; the arrow is turned 180°). Arrow size and color
+            follow the surface wind: pale blue when calm, green near 15 kt,
+            yellow near 25, orange at 34, red at 50, dark red at 64, purple
+            toward 96 kt. A point with no direction is a small dot in the
+            same colors. SFMR does not report direction, so the arrow uses
+            the flight-level direction at that fix.
           </li>
         </ul>
         <SubHead>Sea-surface temperature backdrop</SubHead>
@@ -409,8 +456,9 @@ export function Methodology() {
         <ol>
           <li>
             <b>Age</b>: drop buoy/land observations older than 4 hours.
-            Recon HDOB is kept for 8 hours (a typical mission is longer than
-            the buoy window).
+            Hunter samples older than 6 hours are dropped from the
+            heatmap. A sample we cannot place relative to the center is
+            kept only if it is under 1.5 hours old.
           </li>
           <li>
             <b>Absurdity</b>: drop wind_kt above 200 kt (world-record
@@ -432,8 +480,13 @@ export function Methodology() {
         <SubHead>Interpolation</SubHead>
         <ul>
           <li>
-            <b>Grid step</b>: fixed 0.5° (aligned with the GFS/ECMWF model
-            grids so obs-vs-model diffs are cell-to-cell).
+            <b>Grid step</b>: 0.25° for the observed field. GFS and ECMWF
+            start at 0.5° and coarsen (up to 2°) when the cone is large,
+            so the Open-Meteo request finishes instead of timing out.
+            Each model square is drawn at that model's own step — a 1°
+            cell is a 1° tile, not a 0.25° dot. Diff views match the
+            nearest model cell out to half of the coarser step. A chunk
+            that does not come back is left as a gap, not painted calm.
           </li>
           <li>
             <b>Method</b>: inverse-distance weighted (power = 2),
@@ -443,6 +496,30 @@ export function Methodology() {
             across the basin. Cells with zero obs in radius are omitted —
             the renderer paints "no data" as a gap rather than
             extrapolating nonsense.
+          </li>
+          <li>
+            <b>Hunter samples move with the storm.</b> A surface wind
+            measured in the vortex is not left where the plane was. We
+            slide it by the same displacement as the center, from the
+            observation time to now. The center track is the recent
+            observed fixes (the short tail on a live storm is NHC's
+            motion vector run backwards) plus the latest official
+            forecast, which is where the center is between advisories.
+            Only a sample within <b>200 nm</b> of the center at the time
+            it was taken is slid — that is the vortex. A ferry leg out
+            in the environment stays put, and if it is older than 1.5 h
+            it is dropped so a stale transit does not paint a ribbon.
+          </li>
+          <li>
+            The wind <em>speed and direction stay the measured values</em>.
+            We do not rotate the vector, and we do not replace it with
+            the forecast wind. Over a few hours the translation is the
+            correction that matters; a wrong rotation would be worse.
+            Weight is <code>exp(−age / 3 h)</code>, so a pass from three
+            hours ago counts about a third as much as a fresh buoy and
+            cannot dominate the field. The arrows on the flight track
+            stay where the plane actually was — only the interpolated
+            observed-wind layer uses the slid positions.
           </li>
           <li>
             <b>Direction</b>: interpolated using a parallel IDW on the u/v
@@ -497,9 +574,14 @@ export function Methodology() {
         <p>
           The panel exposes six modes: <b>Obs</b>, <b>GFS</b>, <b>ECMWF</b>,
           and three <b>diff</b> views (Obs−GFS, Obs−ECMWF, GFS−ECMWF). GFS
-          / ECMWF grids are fetched from Open-Meteo on demand and cached
-          per bbox. Diff view uses a diverging blue → white → red palette
-          centered on 0.
+          and ECMWF are the Open-Meteo hourly 10 m fields (
+          <code>gfs_seamless</code>, <code>ecmwf_ifs025</code>), sampled
+          every 6 h out to 120 h. A large cone is requested on a coarser
+          step and the server stops waiting at 18 s, returning the chunks
+          that arrived rather than failing the click. A grid that actually
+          contains wind is cached for a few minutes; an empty response is
+          not, so Retry asks again. Diff view uses a diverging blue → white
+          → red palette centered on 0.
         </p>
         <Sources>
           <li>

@@ -19,12 +19,13 @@ import json
 import urllib.parse
 import urllib.request
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 from ..brand import USER_AGENT
+from .ttl_cache import TtlCache
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 FETCH_TIMEOUT_S = 15
@@ -227,18 +228,44 @@ class ModelWindGrid:
 # of parallel requests (a Fausto-sized Pacific bbox went from 15 chunks to 4).
 # Sending too many parallel small requests caused visible "empty streaks"
 # on the wind heatmap when Open-Meteo rate-limited a handful of the chunks.
-_CHUNK_SIZE = 400
+# 80 locations is the size that returns promptly. A 400-location URL is
+# what made a basin-sized click die at the proxy.
+_CHUNK_SIZE = 80
 # Aggressive retry policy — the model-grid fetch is chunked in row-major
 # order, so a permanent failure on any single chunk drops a horizontal
 # band from the response. Better to hammer the retry for a few extra
 # seconds than serve a heatmap with gaps.
-_RETRY_ATTEMPTS = 4
-_RETRY_BACKOFF_S = 1.2
+_RETRY_ATTEMPTS = 2
+_RETRY_BACKOFF_S = 0.6
 
 # Forecast horizon for the timeline slider. NHC issues 5-day forecasts;
-# we sample every 6 hours through the same window. 13 frames at ~1770
-# cells each ≈ 250 KB per model gzipped — comfortable.
+# we sample every 6 hours through the same window.
 _FORECAST_HOURS: tuple[int, ...] = (0, 6, 12, 18, 24, 30, 36, 42, 48, 60, 72, 96, 120)
+# A 0.25° grid over a 5-day cone is several thousand points. Open-Meteo
+# then 429s or the whole request outlives the proxy, and the panel shows
+# "failed" on every retry. Cap the cell count and coarsen the step.
+_MAX_MODEL_CELLS = 1000
+# Stop waiting and return whatever chunks finished. Unfinished cells are
+# left as gaps, not painted as calm.
+_GRID_DEADLINE_S = 18.0
+_GRID_CACHE: TtlCache[tuple, "ModelWindGrid"] = TtlCache(ttl_s=180, maxsize=12)
+
+
+def choose_model_step(
+    west: float, south: float, east: float, north: float,
+    preferred: float = 0.5,
+) -> float:
+    """Step that keeps the Open-Meteo request inside ``_MAX_MODEL_CELLS``."""
+    span_lat = max(north - south, 0.5)
+    span_lon = max(east - west, 0.5)
+    step = max(preferred, 0.5)
+    while step < 2.0:
+        nlat = int(span_lat / step) + 1
+        nlon = int(span_lon / step) + 1
+        if nlat * nlon <= _MAX_MODEL_CELLS:
+            return round(step, 2)
+        step = round(step + 0.25, 2)
+    return 2.0
 
 
 def _extract_bulk_frames(
@@ -256,41 +283,32 @@ def _extract_bulk_frames(
     lat/lon — that would snap to the model's native grid and break cell
     -alignment with the observed grid on the frontend).
 
-    Build arrays incrementally alongside the coords list so they stay
-    parallel even when individual cells return no data (or the whole chunk
-    is empty from a rate-limit fail). Previous approach pre-allocated
-    len(requested_coords) zeros but only appended coords for items that
-    returned data — a failing chunk desynchronized arrays across chunk
-    boundaries and produced garbled cell values in the merged grid."""
+    A cell with no wind speed is omitted, not written as 0 kt. A missing
+    Open-Meteo item used to paint a calm stripe. Arrays stay parallel
+    because a coord and its winds are appended together. A real 0 m/s
+    is kept — that is calm wind, not a missing field."""
     coords: list[WindCoord] = []
     frame_kts: dict[int, list[float]] = {h: [] for h in _FORECAST_HOURS}
     frame_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
     frame_vt: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
 
-    # Pad `items` up to len(requested_coords) with empty dicts so a chunk
-    # that came back with fewer items than requested (or entirely empty
-    # because the fetch failed permanently) still emits coords for every
-    # cell — otherwise we'd drop that chunk's whole horizontal band from
-    # the returned grid and the frontend would render a white gap where
-    # the band was.
-    padded_items = list(items) + [{}] * max(
-        0, len(requested_coords) - len(items),
-    )
-    for req, item in zip(requested_coords, padded_items):
+    for i, req in enumerate(requested_coords):
+        item = items[i] if i < len(items) else {}
+        hourly = (item or {}).get("hourly") or {}
+        times = hourly.get("time") or []
+        speeds = hourly.get("wind_speed_10m") or []
+        dirs = hourly.get("wind_direction_10m") or []
+        if not any(s is not None for s in speeds):
+            continue
         req_lat, req_lon = req
         coords.append(WindCoord(
             lat=round(float(req_lat), 3),
             lon=round(float(req_lon), 3),
         ))
 
-        hourly = (item or {}).get("hourly") or {}
-        times = hourly.get("time") or []
-        speeds = hourly.get("wind_speed_10m") or []
-        dirs = hourly.get("wind_direction_10m") or []
         base_idx = _nearest_hour_index(times, now) if times else None
 
         for h in _FORECAST_HOURS:
-            # Default: no data for this frame at this cell.
             kt: float = 0.0
             dir_deg_out: float | None = None
             if base_idx is not None and times:
@@ -423,20 +441,32 @@ def _fetch_bulk_chunk(
 
 def fetch_model_wind_grid(
     west: float, south: float, east: float, north: float,
-    model_wire: str, *, step_deg: float = 0.25, refresh: bool = False,
+    model_wire: str, *, step_deg: float | None = None, refresh: bool = False,
 ) -> ModelWindGrid:
-    """GFS or ECMWF wind grid over the bbox, at ``step_deg`` resolution,
-    returned as multiple forecast frames (see ``_FORECAST_HOURS``).
+    """GFS or ECMWF wind grid over the bbox, returned as forecast frames.
 
-    Uses Open-Meteo's multi-location endpoint (a single URL holds ~400
-    coordinates for us) with parallel chunked requests. Grid step matches
-    the observed heatmap so the frontend can compute obs-vs-model diffs
-    cell-by-cell without resampling."""
+    The step coarsens on a large cone so the click finishes inside
+    ``_GRID_DEADLINE_S`` instead of dying at the proxy. A finished grid
+    with real wind is cached for a few minutes; an empty result is not,
+    so Retry can ask Open-Meteo again. ``refresh`` skips the cache read.
+    """
     model_key = next(
         (k for (k, wire) in MODELS if wire == model_wire), None,
     )
     if model_key is None:
         raise ValueError(f"unknown model wire name: {model_wire!r}")
+
+    step_deg = choose_model_step(
+        west, south, east, north, preferred=step_deg or 0.5,
+    )
+    cache_key = (
+        round(west, 2), round(south, 2), round(east, 2), round(north, 2),
+        model_wire, step_deg,
+    )
+    if not refresh:
+        hit = _GRID_CACHE.get(cache_key)
+        if hit is not None:
+            return hit
 
     # Build the full coord list.
     coords: list[tuple[float, float]] = []
@@ -459,39 +489,44 @@ def fetch_model_wind_grid(
         for i in range(0, len(coords), _CHUNK_SIZE)
     ]
 
-    # Collect chunk results in the same order as coords, so per-chunk
-    # coord-index slices concatenate back into a single global cell array.
+    # Chunks finish out of order. Each cell's wind is appended with its
+    # own coord, so the parallel arrays stay aligned without row-major order.
     all_coords: list[WindCoord] = []
     all_kts: dict[int, list[float]] = {h: [] for h in _FORECAST_HOURS}
     all_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
     frame_valid_times: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
 
-    with ThreadPoolExecutor(max_workers=min(6, len(chunks))) as pool:
-        futures: list[tuple[list[tuple[float, float]], object]] = []
+    pool = ThreadPoolExecutor(max_workers=min(4, len(chunks)))
+    fut_to_chunk: dict = {}
+    try:
         for ch in chunks:
             lat_str = ",".join(f"{c[0]:.3f}" for c in ch)
             lon_str = ",".join(f"{c[1]:.3f}" for c in ch)
-            futures.append(
-                (ch, pool.submit(
-                    _fetch_bulk_chunk, lat_str, lon_str, model_key,
-                    refresh=refresh,
-                ))
+            fut = pool.submit(
+                _fetch_bulk_chunk, lat_str, lon_str, model_key, refresh=refresh,
             )
-        for ch, fut in futures:
+            fut_to_chunk[fut] = ch
+        done, _pending = wait(set(fut_to_chunk), timeout=_GRID_DEADLINE_S)
+        for fut in done:
+            ch = fut_to_chunk[fut]
             try:
-                items = fut.result()  # type: ignore[attr-defined]
+                items = fut.result()
             except Exception:  # noqa: BLE001
                 items = ()
+            # A chunk that never came back is a gap, not a calm stripe.
+            if not items or not _chunk_has_real_wind(tuple(items)):
+                continue
             chunk_coords, chunk_frames = _extract_bulk_frames(ch, list(items), now)
             all_coords.extend(chunk_coords)
             for h in _FORECAST_HOURS:
                 kts, dirs, vt = chunk_frames.get(h, ([], [], ""))
-                # _extract_bulk_frames guarantees len(kts) == len(dirs)
-                # == len(chunk_coords) — no padding needed here.
                 all_kts[h].extend(kts)
                 all_dirs[h].extend(dirs)
                 if vt and not frame_valid_times[h]:
                     frame_valid_times[h] = vt
+    finally:
+        # Don't block the response on a chunk that is still inside urlopen.
+        pool.shutdown(wait=False, cancel_futures=True)
 
     frames: list[ModelWindFrame] = []
     for h in _FORECAST_HOURS:
@@ -506,10 +541,13 @@ def fetch_model_wind_grid(
             wind_dir_deg=all_dirs[h],
         ))
 
-    return ModelWindGrid(
+    grid = ModelWindGrid(
         model=model_wire, step_deg=step_deg,
         cells=all_coords, frames=frames,
     )
+    if any(any(kt > 0 for kt in f.wind_kt) for f in frames):
+        _GRID_CACHE.set(cache_key, grid)
+    return grid
 
 
 __all__ = [
@@ -518,6 +556,7 @@ __all__ = [
     "ModelWindGrid",
     "PointForecast",
     "WindCoord",
+    "choose_model_step",
     "fetch_model_wind_grid",
     "point_forecast",
 ]

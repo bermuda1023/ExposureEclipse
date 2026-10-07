@@ -44,7 +44,10 @@ MAX_VDM_FILES = 12
 # Aircraft often fix the center a degree or so outside the storm bbox
 # (the bbox is the track, not the flight). Dropping those hides the mission.
 BBOX_PAD_DEG = 1.5
-INDEX_TTL_S = 6 * 60
+# The panel polls every 30s. Keep the index younger than that so a poll
+# sees a file that landed after the bundle. Bodies are cached separately
+# (filenames are immutable). Empty indexes are still not cached.
+INDEX_TTL_S = 25
 RAIN_SFMR_SKIP_MM_HR = 20.0
 
 ARCHIVE_BASE = "https://www.nhc.noaa.gov/archive/recon"
@@ -120,6 +123,10 @@ class ReconBundle:
 
 
 _INDEX_CACHE: dict[str, tuple[float, list[tuple[str, datetime]]]] = {}
+# Archive text files are written once. Re-downloading the same mission
+# on every poll is what made "keep the flight current" too expensive.
+_ARCHIVE_BODY_CACHE: dict[str, str] = {}
+_ARCHIVE_BODY_MAX = 400
 
 
 def _get(url: str) -> str | None:
@@ -129,6 +136,20 @@ def _get(url: str) -> str | None:
             return r.read().decode("utf-8", errors="replace")
     except Exception:  # noqa: BLE001
         return None
+
+
+def _get_archive(url: str) -> str | None:
+    """Archive HDOB/VDM files do not change once posted."""
+    hit = _ARCHIVE_BODY_CACHE.get(url)
+    if hit is not None:
+        return hit
+    body = _get(url)
+    if not body:
+        return None
+    _ARCHIVE_BODY_CACHE[url] = body
+    while len(_ARCHIVE_BODY_CACHE) > _ARCHIVE_BODY_MAX:
+        _ARCHIVE_BODY_CACHE.pop(next(iter(_ARCHIVE_BODY_CACHE)))
+    return body
 
 
 def _strip_html(raw: str) -> str:
@@ -544,7 +565,7 @@ def fetch_recon_bundle(
     vdm_files = _list_recent_files(year, vdm_folder, now)[:MAX_VDM_FILES]
 
     def _fetch_file(folder_name: str, fname: str) -> str | None:
-        return _get(f"{ARCHIVE_BASE}/{year}/{folder_name}/{fname}")
+        return _get_archive(f"{ARCHIVE_BASE}/{year}/{folder_name}/{fname}")
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         futs = [

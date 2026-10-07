@@ -37,6 +37,7 @@ from .marine_obs import (
     _spatial_subsample,
     buoys_in_bbox,
 )
+from .ttl_cache import TtlCache
 
 
 @dataclass(slots=True, frozen=True)
@@ -70,6 +71,9 @@ class WindObs:
     source: str          # "buoy" | "land" | "recon"
     station_id: str
     observed_at: str     # ISO
+    # IDW multiplier. 1 for a fresh buoy. Recon samples decay with age
+    # because the vortex evolves even after we slide them with the center.
+    weight: float = 1.0
 
 
 MAX_AGE_HOURS = 4.0
@@ -100,6 +104,20 @@ FIXED_STEP_DEG = 0.25
 # Confidence thresholds (in output space) are set on the frontend. Below are
 # the raw-signal knobs the confidence composite uses.
 NEAR_OBS_DIST_DEG = 1.5           # nearest obs within this ⇒ full distance score
+
+# Storm-relative persistence for hunter samples. The plane measured a
+# wind in the vortex; the vortex has since moved. We slide the sample
+# with the center instead of leaving it in the wake. See advect_recon_obs.
+CORE_RADIUS_NM = 200.0             # inside this of the center at obs time → vortex
+ADVECT_MAX_AGE_H = 6.0             # older than this, the structure has changed
+FRESH_KEEP_H = 1.5                 # no motion estimate: keep only this fresh
+AGE_TAU_H = 3.0                    # weight = exp(-age / tau)
+EXTRAP_MAX_H = 3.0                 # don't run the motion vector past the forecast
+# Buoy/land pool from the last successful heatmap, so a recon poll can
+# re-grid without refetching every land station.
+_SURFACE_CACHE: TtlCache[tuple[float, float, float, float], list[WindObs]] = (
+    TtlCache(ttl_s=45 * 60, maxsize=8)
+)
 
 
 def _parse_iso(s: str) -> datetime | None:
@@ -394,6 +412,265 @@ def _cell_confidence(
     return round(dist_score * count_score * agreement_score, 3)
 
 
+def _bbox_key(
+    west: float, south: float, east: float, north: float,
+) -> tuple[float, float, float, float]:
+    return (round(west, 2), round(south, 2), round(east, 2), round(north, 2))
+
+
+def _nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    dlat = (lat2 - lat1) * 60.0
+    mean = math.radians((lat1 + lat2) / 2.0)
+    dlon = (lon2 - lon1) * 60.0 * max(math.cos(mean), 0.05)
+    return math.hypot(dlat, dlon)
+
+
+def _center_at(
+    centers: list[tuple[datetime, float, float]], when: datetime,
+) -> tuple[float, float] | None:
+    """Center lat/lon at ``when`` along a time-ordered track.
+
+    Between fixes, linear in lat/lon (the track step is a few hours).
+    After the last fix, continue the last segment for up to
+    ``EXTRAP_MAX_H`` — that segment is the official forecast when the
+    caller appended it, which is where the center is between advisories.
+    """
+    if not centers:
+        return None
+    if when <= centers[0][0]:
+        if (centers[0][0] - when).total_seconds() <= 1800:
+            return centers[0][1], centers[0][2]
+        return None
+    last_t, last_lat, last_lon = centers[-1]
+    if when >= last_t:
+        gap_h = (when - last_t).total_seconds() / 3600.0
+        if gap_h <= 0.5:
+            return last_lat, last_lon
+        if gap_h > EXTRAP_MAX_H or len(centers) < 2:
+            return None
+        prev_t, prev_lat, prev_lon = centers[-2]
+        dt_h = (last_t - prev_t).total_seconds() / 3600.0
+        if dt_h < 0.25:
+            return last_lat, last_lon
+        return (
+            last_lat + (last_lat - prev_lat) / dt_h * gap_h,
+            last_lon + (last_lon - prev_lon) / dt_h * gap_h,
+        )
+    for i in range(1, len(centers)):
+        t0, la0, lo0 = centers[i - 1]
+        t1, la1, lo1 = centers[i]
+        if t0 <= when <= t1:
+            span = (t1 - t0).total_seconds()
+            if span <= 0:
+                return la1, lo1
+            frac = (when - t0).total_seconds() / span
+            return la0 + frac * (la1 - la0), lo0 + frac * (lo1 - lo0)
+    return None
+
+
+def advect_recon_obs(
+    samples: list[tuple[float, float, float, float | None, str, str]],
+    centers: list[tuple[str, float, float]],
+    now: datetime,
+) -> list[WindObs]:
+    """Place hunter surface samples where that part of the vortex is now.
+
+    ``samples`` is ``(lat, lon, wind_kt, wind_dir_deg, observed_at,
+    station_id)`` at the aircraft's measured position. ``centers`` is
+    ``(iso_time, lat, lon)`` for the storm center: the recent observed
+    fixes (the live track's back-projection is NHC's motion vector) plus
+    the latest official forecast, which says where the center is after
+    the current fix.
+
+    What this is: storm-relative persistence. A sample taken in the
+    eyewall is slid by the same displacement as the center, so it stays
+    in the eyewall instead of being left in the wake. The wind vector is
+    not rotated — over a few hours the translation is the first-order
+    correction, and a bad rotation is worse than none.
+
+    What this is not: a forecast. Speeds stay the measured SFMR / 0.8×
+    flight-level values. Samples farther than ``CORE_RADIUS_NM`` from
+    the center at observation time are the environment (the ferry), not
+    the vortex, and are not slid. Anything older than
+    ``ADVECT_MAX_AGE_H`` is dropped. If the center can't be placed at
+    both times, only a sample younger than ``FRESH_KEEP_H`` is kept, and
+    it stays where it was measured.
+
+    Weight is ``exp(-age / AGE_TAU_H)`` so a hours-old pass cannot
+    outvote a buoy that just reported.
+    """
+    parsed: list[tuple[datetime, float, float]] = []
+    for iso, lat, lon in centers:
+        dt = _parse_iso(iso)
+        if dt is None:
+            continue
+        parsed.append((dt, lat, lon))
+    parsed.sort(key=lambda p: p[0])
+
+    out: list[WindObs] = []
+    for lat, lon, kt, dir_deg, iso, sid in samples:
+        dt = _parse_iso(iso)
+        if dt is None:
+            continue
+        age_h = (now - dt).total_seconds() / 3600.0
+        if age_h < -0.25 or age_h > ADVECT_MAX_AGE_H:
+            continue
+        if age_h < 0:
+            age_h = 0.0
+        weight = math.exp(-age_h / AGE_TAU_H)
+        c_then = _center_at(parsed, dt)
+        c_now = _center_at(parsed, now)
+        use_lat, use_lon = lat, lon
+        if c_then is not None and c_now is not None:
+            if _nm(lat, lon, c_then[0], c_then[1]) <= CORE_RADIUS_NM:
+                use_lat = lat + (c_now[0] - c_then[0])
+                use_lon = lon + (c_now[1] - c_then[1])
+            elif age_h > FRESH_KEEP_H:
+                continue
+        elif age_h > FRESH_KEEP_H:
+            continue
+        out.append(
+            WindObs(
+                lat=round(use_lat, 4),
+                lon=round(use_lon, 4),
+                wind_kt=round(kt, 1),
+                wind_dir_deg=dir_deg,
+                source="recon",
+                station_id=sid,
+                observed_at=iso,
+                weight=round(weight, 3),
+            )
+        )
+    return out
+
+
+def interpolate_obs(
+    west: float, south: float, east: float, north: float,
+    obs: list[WindObs],
+    step: float = FIXED_STEP_DEG,
+) -> list[WindGridCell]:
+    """IDW grid from an already-cleaned observation list.
+
+    ``WindObs.weight`` scales the sample (recon age decay). Cells with
+    nothing inside the source's radius are omitted.
+    """
+    if not obs:
+        return []
+    precomputed: list[tuple[float, float, float, float | None, float | None, float, float]] = []
+    for o in obs:
+        u: float | None = None
+        v: float | None = None
+        if o.wind_dir_deg is not None and o.wind_kt > 0:
+            r = math.radians(o.wind_dir_deg)
+            u = -o.wind_kt * math.sin(r)
+            v = -o.wind_kt * math.cos(r)
+        radius = IDW_RADIUS_RECON_DEG if o.source == "recon" else IDW_RADIUS_DEG
+        precomputed.append((
+            o.lat, o.lon, o.wind_kt, u, v, radius * radius, max(o.weight, 0.0),
+        ))
+
+    cells: list[WindGridCell] = []
+    lat = south
+    while lat <= north + 1e-9:
+        cos_lat = max(math.cos(math.radians(lat)), 0.05)
+        lon = west
+        while lon <= east + 1e-9:
+            weight_sum = 0.0
+            speed_sum = 0.0
+            u_sum = 0.0
+            v_sum = 0.0
+            uv_weight_sum = 0.0
+            count = 0
+            nearest_d2: float | None = None
+            contributor_speeds: list[float] = []
+            for la, lo, kt, u, v, obs_r_sq, ow in precomputed:
+                if ow <= 0:
+                    continue
+                dlat = la - lat
+                dlon = (lo - lon) * cos_lat
+                d2 = dlat * dlat + dlon * dlon
+                if d2 > obs_r_sq:
+                    continue
+                w = ow / ((d2 + 0.01) ** (IDW_POWER / 2))
+                weight_sum += w
+                speed_sum += w * kt
+                if u is not None and v is not None:
+                    u_sum += w * u
+                    v_sum += w * v
+                    uv_weight_sum += w
+                count += 1
+                contributor_speeds.append(kt)
+                if nearest_d2 is None or d2 < nearest_d2:
+                    nearest_d2 = d2
+            if count == 0 or weight_sum <= 0:
+                lon += step
+                continue
+            wind_kt = round(speed_sum / weight_sum, 1)
+            wind_dir_deg: float | None = None
+            if uv_weight_sum > 0:
+                u_mean = u_sum / uv_weight_sum
+                v_mean = v_sum / uv_weight_sum
+                to_deg = math.degrees(math.atan2(u_mean, v_mean))
+                wind_dir_deg = round((to_deg + 180.0) % 360.0, 1)
+            nearest_dist = (nearest_d2 ** 0.5) if nearest_d2 is not None else None
+            nearest_km = (
+                round(nearest_dist * 111.0, 0) if nearest_dist is not None else None
+            )
+            composite, dist_s, count_s, agree_s, std = _cell_confidence_parts(
+                nearest_dist, count, contributor_speeds,
+            )
+            cells.append(
+                WindGridCell(
+                    lat=round(lat, 3),
+                    lon=round(lon, 3),
+                    wind_kt=wind_kt,
+                    wind_dir_deg=wind_dir_deg,
+                    sources=count,
+                    confidence=composite,
+                    nearest_obs_km=nearest_km,
+                    dist_score=dist_s,
+                    count_score=count_s,
+                    agreement_score=agree_s,
+                    contributor_spread_kt=std,
+                )
+            )
+            lon += step
+        lat += step
+    return cells
+
+
+def remember_surface_obs(
+    west: float, south: float, east: float, north: float,
+    obs: list[WindObs],
+) -> None:
+    """Keep the buoy/land pool so a later recon poll can re-grid."""
+    _SURFACE_CACHE.set(
+        _bbox_key(west, south, east, north),
+        [o for o in obs if o.source != "recon"],
+    )
+
+
+def regrid_with_recon(
+    west: float, south: float, east: float, north: float,
+    recon_obs: list[WindObs],
+) -> tuple[list[WindGridCell], float, list[WindObs]] | None:
+    """Blend new hunter samples onto the cached buoy/land field.
+
+    Returns None when there is no cached surface field — the caller
+    should leave the heatmap it already drew rather than replace it
+    with a hunter-only grid. Rewrites the cache so an open storm does
+    not expire mid-session.
+    """
+    key = _bbox_key(west, south, east, north)
+    base = _SURFACE_CACHE.get(key)
+    if base is None:
+        return None
+    _SURFACE_CACHE.set(key, base)
+    merged = list(base) + list(recon_obs)
+    cells = interpolate_obs(west, south, east, north, merged)
+    return cells, FIXED_STEP_DEG, merged
+
+
 def wind_field_grid(
     west: float, south: float, east: float, north: float,
     *, now: datetime | None = None,
@@ -444,14 +721,19 @@ def wind_field_grid(
     step = FIXED_STEP_DEG
     cleaned = _clean_obs(obs, now)
     if not cleaned:
+        remember_surface_obs(west, south, east, north, [])
         return [], step, []
 
     # Attribute each cleaned tuple back to its source station. Cleaning
     # preserves (lat, lon, kt) — dir may be dropped/kept unchanged. Match on
     # (lat, lon, kt) which is unique enough for our purposes.
     meta_by_key: dict[tuple[float, float, float], tuple[str, str, str]] = {}
+    weight_by_key: dict[tuple[float, float, float], float] = {}
     for lat, lon, kt, _d, iso, source, sid in obs_with_meta:
         meta_by_key[(lat, lon, kt)] = (source, sid, iso)
+    if extra_obs:
+        for o in extra_obs:
+            weight_by_key[(o.lat, o.lon, float(o.wind_kt))] = o.weight
     obs_pool: list[WindObs] = []
     for lat, lon, kt, d, source in cleaned:
         meta = meta_by_key.get((lat, lon, kt))
@@ -465,95 +747,21 @@ def wind_field_grid(
                 source=src,
                 station_id=sid,
                 observed_at=iso,
+                weight=weight_by_key.get((lat, lon, kt), 1.0),
             )
         )
 
-    # Pre-compute vector components once — u = -kt·sin(dir), v = -kt·cos(dir)
-    # in meteorological "wind from" convention. Per-obs IDW radius so recon
-    # only fills the core instead of smearing along a 3° corridor.
-    precomputed: list[tuple[float, float, float, float | None, float | None, float]] = []
-    for lat, lon, kt, dir_deg, source in cleaned:
-        u: float | None = None
-        v: float | None = None
-        if dir_deg is not None and kt > 0:
-            r = math.radians(dir_deg)
-            u = -kt * math.sin(r)
-            v = -kt * math.cos(r)
-        radius = IDW_RADIUS_RECON_DEG if source == "recon" else IDW_RADIUS_DEG
-        precomputed.append((lat, lon, kt, u, v, radius * radius))
-
-    cells: list[WindGridCell] = []
-    lat = south
-    while lat <= north + 1e-9:
-        cos_lat = max(math.cos(math.radians(lat)), 0.05)
-        lon = west
-        while lon <= east + 1e-9:
-            weight_sum = 0.0
-            speed_sum = 0.0
-            u_sum = 0.0
-            v_sum = 0.0
-            uv_weight_sum = 0.0
-            count = 0
-            nearest_d2: float | None = None
-            contributor_speeds: list[float] = []
-            for (la, lo, kt, u, v, obs_r_sq) in precomputed:
-                dlat = la - lat
-                dlon = (lo - lon) * cos_lat
-                d2 = dlat * dlat + dlon * dlon
-                if d2 > obs_r_sq:
-                    continue
-                # +ε keeps the on-station weight finite.
-                w = 1.0 / ((d2 + 0.01) ** (IDW_POWER / 2))
-                weight_sum += w
-                speed_sum += w * kt
-                if u is not None and v is not None:
-                    u_sum += w * u
-                    v_sum += w * v
-                    uv_weight_sum += w
-                count += 1
-                contributor_speeds.append(kt)
-                if nearest_d2 is None or d2 < nearest_d2:
-                    nearest_d2 = d2
-            if count == 0:
-                lon += step
-                continue
-
-            wind_kt = round(speed_sum / weight_sum, 1)
-            wind_dir_deg: float | None = None
-            if uv_weight_sum > 0:
-                u_mean = u_sum / uv_weight_sum
-                v_mean = v_sum / uv_weight_sum
-                # atan2 returns the "wind blowing toward" direction; invert
-                # to recover meteorological FROM direction.
-                to_deg = math.degrees(math.atan2(u_mean, v_mean))
-                wind_dir_deg = round((to_deg + 180.0) % 360.0, 1)
-
-            nearest_dist = (nearest_d2 ** 0.5) if nearest_d2 is not None else None
-            # 1° latitude ≈ 111 km — good enough at typical mid-lat.
-            nearest_km = (
-                round(nearest_dist * 111.0, 0) if nearest_dist is not None else None
-            )
-            composite, dist_s, count_s, agree_s, std = _cell_confidence_parts(
-                nearest_dist, count, contributor_speeds,
-            )
-            cells.append(
-                WindGridCell(
-                    lat=round(lat, 3),
-                    lon=round(lon, 3),
-                    wind_kt=wind_kt,
-                    wind_dir_deg=wind_dir_deg,
-                    sources=count,
-                    confidence=composite,
-                    nearest_obs_km=nearest_km,
-                    dist_score=dist_s,
-                    count_score=count_s,
-                    agreement_score=agree_s,
-                    contributor_spread_kt=std,
-                )
-            )
-            lon += step
-        lat += step
+    remember_surface_obs(west, south, east, north, obs_pool)
+    cells = interpolate_obs(west, south, east, north, obs_pool, step)
     return cells, step, obs_pool
 
 
-__all__ = ["WindGridCell", "wind_field_grid"]
+__all__ = [
+    "WindGridCell",
+    "WindObs",
+    "advect_recon_obs",
+    "interpolate_obs",
+    "regrid_with_recon",
+    "remember_surface_obs",
+    "wind_field_grid",
+]

@@ -437,6 +437,32 @@ export const fetchLiveStormList = () =>
 export const fetchWindPointForecast = (lat: number, lon: number) =>
   apiGet<PointForecast>("/live/wind-forecast", { lat, lon });
 
+export interface ReconPoll {
+  recon: ReconObs[];
+  vortex: VortexFix | null;
+  /** Null when the buoy/land field is no longer cached — leave the heatmap. */
+  windMap: WindGridPoint[] | null;
+  windObs: WindObs[] | null;
+  polledAt: string;
+}
+
+/** Hunter points only. The panel polls this so the flight updates without
+ * a full page reload. `centers` is `iso,lat,lon|...` for the storm center. */
+export const fetchReconPoll = (
+  stormId: string,
+  bbox: [number, number, number, number],
+  name: string,
+  centers: string,
+) =>
+  apiGet<ReconPoll>(`/live/storms/${encodeURIComponent(stormId)}/recon`, {
+    west: bbox[0],
+    south: bbox[1],
+    east: bbox[2],
+    north: bbox[3],
+    name,
+    centers,
+  });
+
 export const fetchWindModelGrid = (
   bbox: [number, number, number, number],
   model: "gfs" | "ecmwf",

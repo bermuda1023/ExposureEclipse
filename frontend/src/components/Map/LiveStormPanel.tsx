@@ -15,6 +15,7 @@ import {
   fetchLiveStormBundle,
   fetchLiveStormList,
   fetchModelTracks,
+  fetchReconPoll,
   fetchWindModelGrid,
   postWatchWarnExposure,
   type LiveStormBundle,
@@ -121,6 +122,11 @@ export function LiveStormPanel() {
       .catch((e) => impactStore.setError(String(e?.message ?? e)));
   }
 
+  // Bbox only — a hunter poll replaces `data` every half minute and must
+  // not cancel a GFS/ECMWF request that is already in flight.
+  const bboxKey = store.data?.bbox?.join(",") ?? "";
+  const stormIsLive = store.data?.storm.isLive === true;
+
   // Lazy-fetch model grids whenever the mode requires them. Retry bumps
   // reloadNonce; a finished attempt for that nonce is not repeated, and an
   // all-zero / frameless grid is stored as empty so the next Retry can run.
@@ -207,7 +213,47 @@ export function LiveStormPanel() {
     return () => {
       cancelled = true;
     };
-  }, [store.windMapMode, store.data, store.reloadNonce]);
+  }, [store.windMapMode, bboxKey, store.reloadNonce]);
+
+  // Hunter points keep arriving while a plane is in the storm. Poll the
+  // recon feed alone — the full bundle is too slow to repeat, and a page
+  // reload should not be required to see the next pass.
+  useEffect(() => {
+    if (!activeId || !stormIsLive) return;
+    let cancelled = false;
+    let inflight = false;
+    const tick = async () => {
+      if (inflight || cancelled) return;
+      const s = useLiveStormStore.getState();
+      if (s.activeStormId !== activeId || !s.data?.bbox) return;
+      const latest = s.data.forecasts.reduce<
+        (typeof s.data.forecasts)[number] | null
+      >((best, adv) => (!best || adv.advisoryNumber >= best.advisoryNumber ? adv : best), null);
+      const centers = [
+        ...s.data.observedTrack.map((p) => `${p.datetime},${p.lat},${p.lon}`),
+        ...(latest?.points ?? []).map((p) => `${p.validTime},${p.lat},${p.lon}`),
+      ].join("|");
+      inflight = true;
+      try {
+        const polled = await fetchReconPoll(
+          activeId, s.data.bbox, s.data.storm.name, centers,
+        );
+        if (cancelled) return;
+        const now = useLiveStormStore.getState();
+        if (now.activeStormId !== activeId) return;
+        now.patchRecon(polled);
+      } catch {
+        // Keep the points already on the map. The next tick tries again.
+      } finally {
+        inflight = false;
+      }
+    };
+    const id = window.setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [activeId, stormIsLive]);
 
   // Full bundle + model tracks. activeId selects the storm (the picker
   // already called start()). reloadNonce is Retry: same storm, do not call
@@ -568,7 +614,7 @@ export function LiveStormPanel() {
               <SmartChip store={store} status={chipStatus.showModelTracks} k="showModelTracks" label="Model tracks" hint="GEFS + ECMWF-ENS + AI spaghetti" color="#a855f7" />
               <SmartChip store={store} status={chipStatus.showEnsembleEnvelope} k="showEnsembleEnvelope" label="Consensus envelope" hint="Convex hull of every ensemble member" color="#7f1d1d" />
               <SmartChip store={store} status={chipStatus.showAiEnvelope} k="showAiEnvelope" label="AI-only envelope" hint="GraphCast + GenCast + AIFS + FourCastNet + Pangu" color="#a855f7" />
-              <SmartChip store={store} status={chipStatus.showStrikeProbability} k="showStrikeProbability" label="Strike probability" hint="Ensemble P(track within threshold nm) by county" color="#dc2626" />
+              <SmartChip store={store} status={chipStatus.showStrikeProbability} k="showStrikeProbability" label="Strike probability" hint="Not the NHC cone. Share of GEFS + ECMWF-ENS + AI a-deck tracks that pass within the threshold of a county" color="#dc2626" />
             </ChipGroup>
 
             <ChipGroup label="Threat products">
@@ -581,7 +627,7 @@ export function LiveStormPanel() {
               <SmartChip store={store} status={chipStatus.showWindMap} k="showWindMap" label="Wind speed map" hint="Interpolated obs (IDW)" color="#dc2626" />
               <SmartChip store={store} status={chipStatus.showWindParticles} k="showWindParticles" label="Wind particles" hint="Animated windy.com-style flow" color="#0891b2" />
               <SmartChip store={store} status={chipStatus.showBuoys} k="showBuoys" label="NDBC buoys" hint="Marine obs" color="#0ea5e9" />
-              <SmartChip store={store} status={chipStatus.showRecon} k="showRecon" label="Hurricane hunters" hint="Flight track colored by surface wind — SFMR, or 0.8× flight level" color="#c026d3" />
+              <SmartChip store={store} status={chipStatus.showRecon} k="showRecon" label="Hurricane hunters" hint="Updates about every 30s. Arrows point downwind, colored by surface wind — SFMR, or 0.8× flight level" color="#c026d3" />
               <SmartChip store={store} status={chipStatus.showLand} k="showLand" label="NWS land stations" hint="Discrete markers" color="#10b981" />
               <SmartChip store={store} status={chipStatus.showSst} k="showSst" label="Sea-surface temp" hint="MUR 0.01°" color="#facc15" />
               <WindMapModeSelector store={store} />
@@ -1836,6 +1882,15 @@ function EnsembleRiskSection() {
       <div style={{ fontWeight: 700, color: "#9f1239", fontSize: "0.7rem" }}>
         Ensemble strike probability + intensity spread
       </div>
+      <div style={{ fontSize: "0.6rem", color: "var(--ink-600)", lineHeight: 1.35 }}>
+        Not the NHC cone and not a single model. One vote each for the
+        ensemble tracks in the NHC a-deck: GEFS members (control AC00 and
+        AP01–AP30), ECMWF ensemble members (EE01–EE50) when NHC publishes
+        them, and AI tracks (GraphCast, AIFS, and the others on the file).
+        Official, deterministic, and ensemble-mean tracks are not votes.
+        A county's percent is how many of those tracks pass within the
+        threshold of its centroid, at a lead of at least 24 h.
+      </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ color: "var(--ink-500)", fontSize: "0.62rem", textTransform: "uppercase" }}>
@@ -2016,7 +2071,7 @@ function SurfaceWindScale({ maxKt }: { maxKt: number }) {
     <div style={{ display: "grid", gap: 2, marginTop: 2 }}>
       <div style={{ fontSize: "0.62rem", color: "var(--ink-600)" }}>
         Hunter surface wind · peak {Math.round(maxKt)} kt
-        <span style={{ color: "var(--ink-500)" }}> · SFMR, else 0.8× flight level</span>
+        <span style={{ color: "var(--ink-500)" }}> · SFMR, else 0.8× flight level · arrow points downwind</span>
       </div>
       <div
         title="Surface wind, knots"

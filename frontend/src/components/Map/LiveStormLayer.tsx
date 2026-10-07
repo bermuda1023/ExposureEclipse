@@ -60,7 +60,9 @@ const LAYER_ALERTS_LINE = "live-alerts-line";
 const LAYER_WW_FILL = "live-watches-warnings-fill";
 const LAYER_WW_LINE = "live-watches-warnings-line";
 const LAYER_BUOYS = "live-buoys-circle";
-const LAYER_RECON = "live-recon-circle";
+const LAYER_RECON = "live-recon-arrow";
+const LAYER_RECON_NODIR = "live-recon-nodir";
+const LAYER_RECON_LEGACY = "live-recon-circle";
 const LAYER_RECON_TRACK = "live-recon-track";
 const LAYER_RECON_TEXT = "live-recon-text";
 const LAYER_VORTEX = "live-vortex-circle";
@@ -266,6 +268,10 @@ function buildReconFC(points: import("../../api/live").ReconObs[]) {
         surfaceKt: p.surfaceKt,
         surfaceSource: p.surfaceSource,
         flWindKt: p.flWindKt,
+        flDirDeg: p.flDirDeg,
+        // 1 when flight-level direction exists. The arrow points downwind
+        // (meteorological "from" + 180). No direction → a small dot.
+        hasDir: p.flDirDeg == null ? 0 : 1,
         sfmrKt: p.sfmrKt,
         aircraft: p.aircraft,
         missionId: p.missionId,
@@ -292,6 +298,28 @@ function surfaceWindPaint(prop: string): unknown[] {
     "interpolate", ["linear"], ["get", prop],
     ...SURFACE_WIND_STOPS.flatMap(([kt, color]) => [kt, color]),
   ];
+}
+
+/** White arrow pointing north. SDF so Mapbox can tint it by wind speed. */
+function ensureWindArrow(map: MbMap): void {
+  if (map.hasImage("hunter-wind-arrow")) return;
+  const size = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext("2d");
+  if (!g) return;
+  g.clearRect(0, 0, size, size);
+  g.fillStyle = "#ffffff";
+  g.beginPath();
+  g.moveTo(16, 2);
+  g.lineTo(28, 30);
+  g.lineTo(16, 22);
+  g.lineTo(4, 30);
+  g.closePath();
+  g.fill();
+  const image = g.getImageData(0, 0, size, size);
+  map.addImage("hunter-wind-arrow", image, { sdf: true });
 }
 
 function hoursBetween(a: string, b: string): number {
@@ -542,19 +570,21 @@ function materializeFrame(
   }));
 }
 
-/** Diff two grids. Both back-ends emit at a fixed 0.5° step aligned to the
- *  bbox origin, so exact-key matching works in the common case; a
- *  nearest-neighbor fallback (within one grid step) handles any residual
- *  rounding drift between the observed grid and model-provider grid
- *  snap-to-native behaviour. Returns one output cell per A cell that has a
- *  B match — cells with no counterpart are dropped (empty gap on the map). */
+/** Half a cell of the coarser grid, diagonally, plus a little slack.
+ *  A 2° model cell is more than 0.75° from the obs cells it should cover. */
+function modelMatchDeg(stepA: number, stepB: number): number {
+  return (Math.max(stepA, stepB) / 2) * Math.SQRT2 + 0.05;
+}
+
+/** Diff two grids. Returns one output cell per A cell that has a B match
+ *  within ``matchDeg``. Cells with no counterpart are dropped. */
 function computeDiffGrid(
   a: Array<{ lat: number; lon: number; windKt: number }>,
   b: Array<{ lat: number; lon: number; windKt: number }>,
+  matchDeg = 0.75,
 ): Array<{ lat: number; lon: number; windKt: number; diff: number }> {
   const STEP = 0.5;
-  const TOL = STEP * 0.51; // just over half a step, so nearest cell wins
-  // Bucket B into 0.5° bins for O(1) neighborhood lookup.
+  const reach = Math.max(2, Math.ceil(matchDeg / STEP) + 1);
   const binKey = (lat: number, lon: number) =>
     `${Math.round(lat / STEP)}|${Math.round(lon / STEP)}`;
   const bBins = new Map<
@@ -573,11 +603,10 @@ function computeDiffGrid(
   for (const ca of a) {
     const bi = Math.round(ca.lat / STEP);
     const bj = Math.round(ca.lon / STEP);
-    // Check the target bin and eight neighbors to survive off-by-one snaps.
     let best: { lat: number; lon: number; windKt: number } | null = null;
     let bestD2 = Infinity;
-    for (let di = -1; di <= 1; di++) {
-      for (let dj = -1; dj <= 1; dj++) {
+    for (let di = -reach; di <= reach; di++) {
+      for (let dj = -reach; dj <= reach; dj++) {
         const list = bBins.get(`${bi + di}|${bj + dj}`);
         if (!list) continue;
         for (const cb of list) {
@@ -591,7 +620,7 @@ function computeDiffGrid(
         }
       }
     }
-    if (!best || Math.sqrt(bestD2) > TOL) continue;
+    if (!best || Math.sqrt(bestD2) > matchDeg) continue;
     const diff = ca.windKt - best.windKt;
     out.push({ lat: ca.lat, lon: ca.lon, windKt: diff, diff });
   }
@@ -656,7 +685,9 @@ export function LiveStormLayer({ map }: Props) {
       setSource(map, SRC_SURGE, buildSurgeFC(data?.peakSurge));
       // Compute the current wind-map view data based on mode. Observed grid
       // is always the baseline; model + diff modes replace or subtract it.
-      const stepDeg = data?.windMapMeta?.stepDeg ?? 0.5;
+      const obsStep = data?.windMapMeta?.stepDeg ?? 0.25;
+      const gfsStep = gfsGrid?.stepDeg || obsStep;
+      const ecmwfStep = ecmwfGrid?.stepDeg || obsStep;
       const obsCells = data?.windMap ?? [];
 
       // Materialize model cells at the active frame index. Model grids ship
@@ -666,23 +697,35 @@ export function LiveStormLayer({ map }: Props) {
       const gfsCellsAtFrame = materializeFrame(gfsGrid, frameIndex);
       const ecmwfCellsAtFrame = materializeFrame(ecmwfGrid, frameIndex);
 
+      // Squares are sized to the grid they came from. A 1° GFS cell drawn
+      // at the 0.25° obs step is a dot with a hole around it.
       let cellsForView: WindMapCellProps[] = obsCells;
+      let viewStep = obsStep;
       let isDiffView = false;
       if (windMapMode === "gfs" && gfsCellsAtFrame) {
         cellsForView = gfsCellsAtFrame;
+        viewStep = gfsStep;
       } else if (windMapMode === "ecmwf" && ecmwfCellsAtFrame) {
         cellsForView = ecmwfCellsAtFrame;
+        viewStep = ecmwfStep;
       } else if (windMapMode === "diff-obs-vs-gfs" && gfsCellsAtFrame) {
-        cellsForView = computeDiffGrid(obsCells, gfsCellsAtFrame);
+        cellsForView = computeDiffGrid(
+          obsCells, gfsCellsAtFrame, modelMatchDeg(obsStep, gfsStep),
+        );
         isDiffView = true;
       } else if (windMapMode === "diff-obs-vs-ecmwf" && ecmwfCellsAtFrame) {
-        cellsForView = computeDiffGrid(obsCells, ecmwfCellsAtFrame);
+        cellsForView = computeDiffGrid(
+          obsCells, ecmwfCellsAtFrame, modelMatchDeg(obsStep, ecmwfStep),
+        );
         isDiffView = true;
       } else if (windMapMode === "diff-gfs-vs-ecmwf" && gfsCellsAtFrame && ecmwfCellsAtFrame) {
-        cellsForView = computeDiffGrid(gfsCellsAtFrame, ecmwfCellsAtFrame);
+        cellsForView = computeDiffGrid(
+          gfsCellsAtFrame, ecmwfCellsAtFrame, modelMatchDeg(gfsStep, ecmwfStep),
+        );
+        viewStep = gfsStep;
         isDiffView = true;
       }
-      setSource(map, SRC_WIND_MAP, buildWindMapFC(cellsForView, stepDeg));
+      setSource(map, SRC_WIND_MAP, buildWindMapFC(cellsForView, viewStep));
 
       // Contributor obs — always populated so the click-drill-down can
       // highlight them. When no highlight is active the obs are dimmed at
@@ -1000,20 +1043,45 @@ export function LiveStormLayer({ map }: Props) {
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
+      ensureWindArrow(map);
+      // A session that already added the old circle layer will not pick up
+      // a type change — ensureLayer returns when the id exists.
+      if (map.getLayer(LAYER_RECON_LEGACY)) map.removeLayer(LAYER_RECON_LEGACY);
+      const reconLayer = map.getLayer(LAYER_RECON) as { type?: string } | undefined;
+      if (reconLayer && reconLayer.type !== "symbol") map.removeLayer(LAYER_RECON);
       ensureLayer(map, LAYER_RECON, {
-        id: LAYER_RECON, type: "circle", source: SRC_RECON,
-        paint: {
-          "circle-radius": [
+        id: LAYER_RECON, type: "symbol", source: SRC_RECON,
+        filter: ["==", ["get", "hasDir"], 1] as unknown as never,
+        layout: {
+          "icon-image": "hunter-wind-arrow",
+          "icon-size": [
             "interpolate", ["linear"], ["get", "surfaceKt"],
-            0, 3.5,
-            34, 5.5,
-            64, 7.5,
-            96, 9,
+            0, 0.42,
+            34, 0.62,
+            64, 0.86,
+            96, 1.05,
           ] as unknown as never,
+          // Glyph points north. Wind direction is where it comes FROM,
+          // so +180 points the arrow where the air is going.
+          "icon-rotate": ["%", ["+", ["get", "flDirDeg"], 180], 360] as unknown as never,
+          "icon-rotation-alignment": "map",
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
+        },
+        paint: {
+          "icon-color": surfaceWindPaint("surfaceKt") as unknown as never,
+          "icon-opacity": 0.95,
+        },
+      });
+      ensureLayer(map, LAYER_RECON_NODIR, {
+        id: LAYER_RECON_NODIR, type: "circle", source: SRC_RECON,
+        filter: ["==", ["get", "hasDir"], 0] as unknown as never,
+        paint: {
+          "circle-radius": 4,
           "circle-color": surfaceWindPaint("surfaceKt") as unknown as never,
           "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 1.1,
-          "circle-opacity": 0.95,
+          "circle-stroke-width": 1,
+          "circle-opacity": 0.9,
         },
       });
       ensureLayer(map, LAYER_RECON_TEXT, {
@@ -1144,6 +1212,7 @@ export function LiveStormLayer({ map }: Props) {
       moveToTop(map, LAYER_FORECAST_LATEST);
       moveToTop(map, LAYER_OBSERVED);
       moveToTop(map, LAYER_RECON_TRACK);
+      moveToTop(map, LAYER_RECON_NODIR);
       moveToTop(map, LAYER_RECON);
       moveToTop(map, LAYER_RECON_TEXT);
       moveToTop(map, LAYER_VORTEX);
@@ -1162,6 +1231,7 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_BUOYS, showBuoys);
       setVis(map, LAYER_BUOYS_TEXT, showBuoys);
       setVis(map, LAYER_RECON, showRecon);
+      setVis(map, LAYER_RECON_NODIR, showRecon);
       setVis(map, LAYER_RECON_TRACK, showRecon);
       setVis(map, LAYER_RECON_TEXT, showRecon);
       setVis(map, LAYER_VORTEX, showRecon);
@@ -1232,6 +1302,7 @@ export function LiveStormLayer({ map }: Props) {
         surfaceKt: number;
         surfaceSource: string;
         flWindKt: number | null;
+        flDirDeg: number | null;
         sfmrKt: number | null;
         observedAt: string;
       };
@@ -1239,6 +1310,7 @@ export function LiveStormLayer({ map }: Props) {
       popup?.remove();
       const src = p.surfaceSource === "sfmr" ? "SFMR surface" : "0.8 × flight-level";
       const when = p.observedAt ? p.observedAt.replace("T", " ").replace("Z", " UTC") : "";
+      const dir = p.flDirDeg == null ? "direction n/a" : `from ${Math.round(Number(p.flDirDeg))}° · arrow downwind`;
       popup = new mb.default.Popup({ closeButton: false, closeOnClick: false })
         .setLngLat(e.lngLat)
         .setHTML(
@@ -1246,6 +1318,7 @@ export function LiveStormLayer({ map }: Props) {
             <div><strong>${p.aircraft || "Hunter"}</strong> · ${p.missionId || "recon"}</div>
             <div>Surface ${fmt(p.surfaceKt, " kt")} · ${src}</div>
             <div>SFMR ${fmt(p.sfmrKt, " kt")} · FL ${fmt(p.flWindKt, " kt")}</div>
+            <div>${dir}</div>
             <div style="color:#64748b">${when}</div>
           </div>`,
         )
@@ -1356,6 +1429,10 @@ export function LiveStormLayer({ map }: Props) {
         map.on("mouseenter", LAYER_RECON, onEnterRecon as never);
         map.on("mouseleave", LAYER_RECON, onLeave);
       }
+      if (map.getLayer(LAYER_RECON_NODIR)) {
+        map.on("mouseenter", LAYER_RECON_NODIR, onEnterRecon as never);
+        map.on("mouseleave", LAYER_RECON_NODIR, onLeave);
+      }
       if (map.getLayer(LAYER_VORTEX)) {
         map.on("mouseenter", LAYER_VORTEX, onEnterVortex as never);
         map.on("mouseleave", LAYER_VORTEX, onLeave);
@@ -1377,6 +1454,8 @@ export function LiveStormLayer({ map }: Props) {
         map.off("mouseleave", LAYER_BUOYS, onLeave);
         map.off("mouseenter", LAYER_RECON, onEnterRecon as never);
         map.off("mouseleave", LAYER_RECON, onLeave);
+        map.off("mouseenter", LAYER_RECON_NODIR, onEnterRecon as never);
+        map.off("mouseleave", LAYER_RECON_NODIR, onLeave);
         map.off("mouseenter", LAYER_VORTEX, onEnterVortex as never);
         map.off("mouseleave", LAYER_VORTEX, onLeave);
         map.off("mouseenter", LAYER_LAND, onEnterLand as never);
