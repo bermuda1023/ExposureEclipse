@@ -230,7 +230,7 @@ export interface WindGridCoord {
 export interface WindModelFrame {
   hour: number;                  // forecast hours from "now" (0, 6, 12, ...)
   validTimeUtc: string;
-  windKt: number[];              // parallel to grid.cells
+  windKt: (number | null)[];    // parallel to grid.cells; null is a gap
   windDirDeg: (number | null)[];
 }
 
@@ -461,6 +461,18 @@ export const fetchReconPoll = (
     north: bbox[3],
     name,
     centers,
+  });
+
+/** 850–200 hPa shear for one model, same hours and cell layout as the
+ * surface grid. `windKt` is the magnitude; `windDirDeg` is where it comes from. */
+export const fetchWindShearGrid = (
+  bbox: [number, number, number, number],
+  model: "gfs" | "ecmwf",
+  options: { refresh?: boolean } = {},
+) =>
+  apiGet<WindModelGrid>("/live/wind-shear-grid", {
+    west: bbox[0], south: bbox[1], east: bbox[2], north: bbox[3], model,
+    refresh: options.refresh ? true : undefined,
   });
 
 export const fetchWindModelGrid = (

@@ -6,6 +6,7 @@
  * -map layer is on. Shows the palette for the current mode:
  *
  *   * observed / gfs / ecmwf → SSHWS-anchored speed ramp with kt labels
+ *   * gfs / ecmwf with shear on → 850–200 hPa magnitude ramp (not SSHWS)
  *   * diff-obs-vs-gfs        → diverging ramp with "Obs weaker" / "Obs stronger"
  *   * diff-obs-vs-ecmwf      → same, obs vs ECMWF
  *   * diff-gfs-vs-ecmwf      → same, GFS vs ECMWF
@@ -15,7 +16,7 @@
  */
 
 import { useHazardOverlayStore } from "../../state/hazardOverlay";
-import { useLiveStormStore, type WindMapMode } from "../../state/liveStorm";
+import { shearViewActive, useLiveStormStore, type WindMapMode } from "../../state/liveStorm";
 
 interface RampStop {
   color: string;
@@ -45,6 +46,15 @@ const DIFF_STOPS: RampStop[] = [
   { color: "#7f1d1d", label: "" },
 ];
 
+// Matches SHEAR_COLOR in LiveStormLayer. 20 kt of shear is already hostile.
+const SHEAR_STOPS: RampStop[] = [
+  { color: "#dcfce7", label: "0" },
+  { color: "#facc15", label: "10" },
+  { color: "#f97316", label: "20" },
+  { color: "#dc2626", label: "30" },
+  { color: "#581c87", label: "45+" },
+];
+
 const MODE_TITLES: Record<WindMapMode, string> = {
   "observed": "Observed wind speed (kt)",
   "gfs": "GFS wind speed (kt)",
@@ -65,14 +75,17 @@ export function WindMapLegend() {
   const data = useLiveStormStore((s) => s.data);
   const showWindMap = useLiveStormStore((s) => s.showWindMap);
   const mode = useLiveStormStore((s) => s.windMapMode);
+  const shearOn = useLiveStormStore(shearViewActive);
   const hazardActive = useHazardOverlayStore((s) => s.active);
 
   if (!data || !showWindMap) return null;
 
   const isDiff = mode.startsWith("diff-");
-  const stops = isDiff ? DIFF_STOPS : SPEED_STOPS;
-  const title = MODE_TITLES[mode];
-  const ends = isDiff ? DIFF_ENDS[mode] : null;
+  const stops = shearOn ? SHEAR_STOPS : isDiff ? DIFF_STOPS : SPEED_STOPS;
+  const title = shearOn
+    ? `${mode === "ecmwf" ? "ECMWF" : "GFS"} 850–200 hPa shear (kt)`
+    : MODE_TITLES[mode];
+  const ends = !shearOn && isDiff ? DIFF_ENDS[mode] : null;
 
   // Sit above the hazard legend if that one is showing, so both are readable.
   const bottom = hazardActive ? 84 : 14;
@@ -162,6 +175,11 @@ export function WindMapLegend() {
                 {label}
               </span>
             ))}
+        </div>
+      )}
+      {shearOn && (
+        <div style={{ marginTop: 4, fontSize: "0.63rem", color: "var(--ink-500)" }}>
+          Arrow points downshear. Under 10 favorable, over 20 hostile.
         </div>
       )}
     </div>

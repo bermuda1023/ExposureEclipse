@@ -17,6 +17,7 @@ import {
   fetchModelTracks,
   fetchReconPoll,
   fetchWindModelGrid,
+  fetchWindShearGrid,
   postWatchWarnExposure,
   type LiveStormBundle,
   type LiveStormRow,
@@ -214,6 +215,81 @@ export function LiveStormPanel() {
       cancelled = true;
     };
   }, [store.windMapMode, bboxKey, store.reloadNonce]);
+
+  // Deep-layer shear uses the same slider hours. Fetched only when the
+  // toggle is on and the visible model is GFS or ECMWF — not for obs or diffs.
+  useEffect(() => {
+    const mode = useLiveStormStore.getState().windMapMode;
+    const model = mode === "gfs" ? "gfs" : mode === "ecmwf" ? "ecmwf" : null;
+    const snap = useLiveStormStore.getState();
+    if (!snap.showWindShear || !model || !bboxKey) return;
+    const nonce = snap.reloadNonce;
+    const stormId = snap.activeStormId;
+    const bbox = snap.data?.bbox;
+    if (!stormId || !bbox) return;
+    let cancelled = false;
+    const stillCurrent = () => {
+      const s = useLiveStormStore.getState();
+      return !cancelled && s.activeStormId === stormId && s.reloadNonce === nonce
+        && s.showWindShear && s.windMapMode === mode;
+    };
+    const status = model === "gfs" ? snap.gfsShearStatus : snap.ecmwfShearStatus;
+    const attempted = model === "gfs" ? snap.gfsShearAttemptNonce : snap.ecmwfShearAttemptNonce;
+    if (
+      attempted === nonce
+      && (status === "ok" || status === "empty" || status === "error")
+    ) {
+      return;
+    }
+    const setStatus = model === "gfs" ? snap.setGfsShearStatus : snap.setEcmwfShearStatus;
+    const setGrid = model === "gfs" ? snap.setGfsShear : snap.setEcmwfShear;
+    const setAttempt = model === "gfs"
+      ? snap.setGfsShearAttemptNonce
+      : snap.setEcmwfShearAttemptNonce;
+    setAttempt(nonce);
+    setStatus("loading");
+    const refresh = nonce > 0;
+    const apply = (g: WindModelGrid) => {
+      if (!stillCurrent()) return;
+      if (windGridUsable(g)) {
+        setGrid(g);
+        setStatus("ok");
+      } else {
+        setGrid(null);
+        setStatus("empty");
+      }
+    };
+    void (async () => {
+      try {
+        let g = await fetchWindShearGrid(bbox, model, { refresh });
+        if (!stillCurrent()) return;
+        if (!windGridUsable(g) && !refresh) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (!stillCurrent()) return;
+          g = await fetchWindShearGrid(bbox, model, { refresh: true });
+        }
+        apply(g);
+      } catch {
+        if (!stillCurrent()) return;
+        if (!refresh) {
+          try {
+            await new Promise((r) => setTimeout(r, 1500));
+            if (!stillCurrent()) return;
+            apply(await fetchWindShearGrid(bbox, model, { refresh: true }));
+            return;
+          } catch {
+            // fall through
+          }
+        }
+        if (!stillCurrent()) return;
+        setGrid(null);
+        setStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [store.showWindShear, store.windMapMode, bboxKey, store.reloadNonce]);
 
   // Hunter points keep arriving while a plane is in the storm. Poll the
   // recon feed alone — the full bundle is too slow to repeat, and a page
@@ -1218,7 +1294,20 @@ function WindMapModeSelector({
     return "";
   };
 
-  const activeStatus = statusForMode(store.windMapMode);
+  const shearMode = store.windMapMode === "gfs" || store.windMapMode === "ecmwf";
+  const shearStatus = store.windMapMode === "gfs"
+    ? store.gfsShearStatus
+    : store.ecmwfShearStatus;
+  const shearStatusLine = !store.showWindShear || !shearMode
+    ? null
+    : shearStatus === "loading"
+      ? "850–200 hPa shear loading…"
+      : shearStatus === "empty"
+        ? "Shear returned no data."
+        : shearStatus === "error"
+          ? "Shear request failed."
+          : null;
+  const activeStatus = statusForMode(store.windMapMode) ?? shearStatusLine;
 
   return (
     <div
@@ -1290,6 +1379,28 @@ function WindMapModeSelector({
           </button>
         );
       })}
+      {shearMode && (
+        <button
+          type="button"
+          title="Vector difference of the 200 hPa and 850 hPa winds at the slider hour. Arrow points downshear. Under 10 kt is generally favorable; over 20 kt is hostile."
+          onClick={() => useLiveStormStore.getState().setShowWindShear(!store.showWindShear)}
+          style={{
+            all: "unset",
+            cursor: "pointer",
+            gridColumn: "span 3",
+            padding: "3px 5px",
+            borderRadius: 3,
+            fontSize: "0.66rem",
+            textAlign: "center",
+            border: `1px solid ${store.showWindShear ? "#7c3aed" : "var(--ink-200)"}`,
+            background: store.showWindShear ? "#f5f3ff" : "transparent",
+            color: store.showWindShear ? "#5b21b6" : "var(--ink-600)",
+            fontWeight: store.showWindShear ? 700 : 400,
+          }}
+        >
+          850–200 hPa shear{shearStatus === "loading" ? " …" : ""}
+        </button>
+      )}
       {activeStatus && (
         <div
           style={{
@@ -1309,7 +1420,8 @@ function WindMapModeSelector({
         >
           <span>{activeStatus}</span>
           {(store.gfsGridStatus === "empty" || store.gfsGridStatus === "error"
-            || store.ecmwfGridStatus === "empty" || store.ecmwfGridStatus === "error") && (
+            || store.ecmwfGridStatus === "empty" || store.ecmwfGridStatus === "error"
+            || (store.showWindShear && (shearStatus === "empty" || shearStatus === "error"))) && (
             <button
               type="button"
               onClick={() => useLiveStormStore.getState().retryLoads()}
@@ -1446,6 +1558,9 @@ function WindMapTimeSlider({
         }}
       >
         {validLabel}
+        {store.showWindShear && (store.windMapMode === "gfs" || store.windMapMode === "ecmwf")
+          ? " · 850–200 hPa shear"
+          : ""}
       </div>
     </div>
   );

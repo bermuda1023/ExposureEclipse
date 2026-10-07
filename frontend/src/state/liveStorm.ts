@@ -69,6 +69,15 @@ interface LiveStormState {
   // Retry bumps `reloadNonce` so the panel fetches again.
   gfsAttemptNonce: number;
   ecmwfAttemptNonce: number;
+  // 850–200 hPa shear for the GFS / ECMWF slider. Off until the user asks.
+  // Stored per model so flipping GFS ↔ ECMWF does not throw the field away.
+  showWindShear: boolean;
+  gfsShear: WindModelGrid | null;
+  ecmwfShear: WindModelGrid | null;
+  gfsShearStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  ecmwfShearStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  gfsShearAttemptNonce: number;
+  ecmwfShearAttemptNonce: number;
   // Bumped by Retry. The bundle effect refetches without changing
   // activeStormId and without blanking data already on the map.
   reloadNonce: number;
@@ -120,6 +129,13 @@ interface LiveStormState {
   setEcmwfGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
   setGfsAttemptNonce: (n: number) => void;
   setEcmwfAttemptNonce: (n: number) => void;
+  setShowWindShear: (v: boolean) => void;
+  setGfsShear: (g: WindModelGrid | null) => void;
+  setEcmwfShear: (g: WindModelGrid | null) => void;
+  setGfsShearStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
+  setEcmwfShearStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
+  setGfsShearAttemptNonce: (n: number) => void;
+  setEcmwfShearAttemptNonce: (n: number) => void;
   retryLoads: () => void;
   // Swap hunter points (and, when the server still has the buoy field,
   // the observed wind grid) without blanking the rest of the bundle.
@@ -148,8 +164,44 @@ interface LiveStormState {
 export function windGridUsable(grid: WindModelGrid | null | undefined): boolean {
   if (!grid || !grid.cells?.length || !grid.frames?.length) return false;
   return grid.frames.some(
-    (frame) => Array.isArray(frame?.windKt) && frame.windKt.some((kt) => kt > 0),
+    (frame) => Array.isArray(frame?.windKt)
+      && frame.windKt.some((kt) => typeof kt === "number" && kt > 0),
   );
+}
+
+type ShearViewState = Pick<
+  LiveStormState,
+  | "showWindShear"
+  | "windMapMode"
+  | "windMapFrameIndex"
+  | "gfsGrid"
+  | "ecmwfGrid"
+  | "gfsShear"
+  | "ecmwfShear"
+  | "gfsShearStatus"
+  | "ecmwfShearStatus"
+>;
+
+/** True when the painted field is 850–200 hPa shear, not 10 m wind.
+ *  Loading, failed, and empty frames keep the surface field. */
+export function shearViewActive(s: ShearViewState): boolean {
+  if (!s.showWindShear) return false;
+  if (s.windMapMode !== "gfs" && s.windMapMode !== "ecmwf") return false;
+  const status = s.windMapMode === "gfs" ? s.gfsShearStatus : s.ecmwfShearStatus;
+  const shear = s.windMapMode === "gfs" ? s.gfsShear : s.ecmwfShear;
+  const surface = s.windMapMode === "gfs" ? s.gfsGrid : s.ecmwfGrid;
+  if (status !== "ok" || !shear?.frames.length || !surface?.frames.length) return false;
+  const clamped = Math.min(
+    Math.max(0, s.windMapFrameIndex),
+    surface.frames.length - 1,
+  );
+  const hour = surface.frames[clamped]?.hour;
+  if (hour == null) return false;
+  const frame = shear.frames.find((f) => f.hour === hour)
+    ?? shear.frames.reduce((best, f) =>
+      Math.abs(f.hour - hour) < Math.abs(best.hour - hour) ? f : best,
+    );
+  return frame.windKt.some((kt) => typeof kt === "number");
 }
 
 export type ToggleKey =
@@ -205,6 +257,13 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   ecmwfGridStatus: "idle" as const,
   gfsAttemptNonce: -1,
   ecmwfAttemptNonce: -1,
+  showWindShear: false,
+  gfsShear: null,
+  ecmwfShear: null,
+  gfsShearStatus: "idle" as const,
+  ecmwfShearStatus: "idle" as const,
+  gfsShearAttemptNonce: -1,
+  ecmwfShearAttemptNonce: -1,
   reloadNonce: 0,
   windMapFrameIndex: 0,
   highlightObs: null,
@@ -247,6 +306,12 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       ecmwfGridStatus: "idle",
       gfsAttemptNonce: -1,
       ecmwfAttemptNonce: -1,
+      gfsShear: null,
+      ecmwfShear: null,
+      gfsShearStatus: "idle",
+      ecmwfShearStatus: "idle",
+      gfsShearAttemptNonce: -1,
+      ecmwfShearAttemptNonce: -1,
       reloadNonce: 0,
       windMapFrameIndex: 0,
       highlightObs: null,
@@ -269,6 +334,10 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     gfsGrid: null, ecmwfGrid: null,
     gfsGridStatus: "idle", ecmwfGridStatus: "idle",
     gfsAttemptNonce: -1, ecmwfAttemptNonce: -1,
+    showWindShear: false,
+    gfsShear: null, ecmwfShear: null,
+    gfsShearStatus: "idle", ecmwfShearStatus: "idle",
+    gfsShearAttemptNonce: -1, ecmwfShearAttemptNonce: -1,
     reloadNonce: 0,
     windMapFrameIndex: 0,
     highlightObs: null,
@@ -290,6 +359,13 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   setEcmwfGridStatus: (s) => set({ ecmwfGridStatus: s }),
   setGfsAttemptNonce: (n) => set({ gfsAttemptNonce: n }),
   setEcmwfAttemptNonce: (n) => set({ ecmwfAttemptNonce: n }),
+  setShowWindShear: (v) => set({ showWindShear: v }),
+  setGfsShear: (g) => set({ gfsShear: g }),
+  setEcmwfShear: (g) => set({ ecmwfShear: g }),
+  setGfsShearStatus: (s) => set({ gfsShearStatus: s }),
+  setEcmwfShearStatus: (s) => set({ ecmwfShearStatus: s }),
+  setGfsShearAttemptNonce: (n) => set({ gfsShearAttemptNonce: n }),
+  setEcmwfShearAttemptNonce: (n) => set({ ecmwfShearAttemptNonce: n }),
   retryLoads: () => {
     const cur = get();
     if (!cur.activeStormId) return;
@@ -303,6 +379,10 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       ecmwfGridStatus: "idle",
       gfsAttemptNonce: -1,
       ecmwfAttemptNonce: -1,
+      gfsShearStatus: "idle",
+      ecmwfShearStatus: "idle",
+      gfsShearAttemptNonce: -1,
+      ecmwfShearAttemptNonce: -1,
       modelTracksStatus: "loading",
       ensembleRisk: null,
       ensembleRiskStatus: "idle",

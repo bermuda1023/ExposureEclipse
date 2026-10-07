@@ -16,7 +16,7 @@
 
 import type { GeoJSONSource, Map as MbMap } from "mapbox-gl";
 import { useEffect, useRef } from "react";
-import { useLiveStormStore } from "../../state/liveStorm";
+import { shearViewActive, useLiveStormStore } from "../../state/liveStorm";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
 
 // SSHWS-palette `step` expression for wind speed (kt) → category color.
@@ -82,6 +82,7 @@ const LAYER_NHC_CONE_LINE = "live-nhc-cone-line";
 const LAYER_SURGE_FILL = "live-surge-fill";
 const LAYER_SURGE_LINE = "live-surge-line";
 const LAYER_WIND_MAP_FILL = "live-wind-map-fill";
+const LAYER_WIND_SHEAR_ARROW = "live-wind-shear-arrow";
 const SRC_WIND_OBS = "live-wind-obs";
 const LAYER_WIND_OBS = "live-wind-obs-circle";
 
@@ -97,6 +98,17 @@ const WIND_MAP_COLOR: unknown[] = [
   50,  "#dc2626",   // strong TS
   64,  "#7f1d1d",   // Cat 1
   96,  "#581c87",   // Cat 3+
+];
+
+// Deep-layer shear. Not the SSHWS ramp — 20 kt of shear is already hostile
+// for a tropical cyclone, while 20 kt of surface wind is a breeze.
+const SHEAR_COLOR: unknown[] = [
+  "interpolate", ["linear"], ["get", "windKt"],
+  0,  "#dcfce7",
+  10, "#facc15",
+  20, "#f97316",
+  30, "#dc2626",
+  45, "#581c87",
 ];
 
 // Diverging palette for diff modes — obs minus model (or model minus model).
@@ -486,6 +498,9 @@ interface WindMapCellProps {
   countScore?: number;
   agreementScore?: number;
   contributorSpreadKt?: number | null;
+  hasArrow?: boolean;
+  /** Set on shear cells so a click does not read them as 10 m wind. */
+  field?: "shear";
 }
 
 function buildWindMapFC(cells: WindMapCellProps[] | undefined, stepDeg: number) {
@@ -520,6 +535,8 @@ function buildWindMapFC(cells: WindMapCellProps[] | undefined, stepDeg: number) 
         contributorSpreadKt: c.contributorSpreadKt ?? null,
         lat: c.lat,
         lon: c.lon,
+        hasArrow: c.hasArrow ? 1 : 0,
+        field: c.field ?? "",
       },
     })),
   };
@@ -568,6 +585,33 @@ function materializeFrame(
     windKt: frame.windKt[i] ?? 0,
     windDirDeg: frame.windDirDeg[i] ?? null,
   }));
+}
+
+/** Shear frame for the slider hour. Null wind is a gap, not calm shear. */
+function materializeShearFrame(
+  grid: import("../../api/live").WindModelGrid | null,
+  hour: number,
+): WindMapCellProps[] | null {
+  if (!grid || grid.frames.length === 0) return null;
+  const frame = grid.frames.find((f) => f.hour === hour)
+    ?? grid.frames.reduce((best, f) =>
+      Math.abs(f.hour - hour) < Math.abs(best.hour - hour) ? f : best,
+    );
+  const cells: WindMapCellProps[] = [];
+  grid.cells.forEach((c, i) => {
+    const kt = frame.windKt[i];
+    if (typeof kt !== "number") return;
+    const dir = frame.windDirDeg[i] ?? null;
+    cells.push({
+      lat: c.lat,
+      lon: c.lon,
+      windKt: kt,
+      windDirDeg: dir,
+      hasArrow: dir != null,
+      field: "shear",
+    });
+  });
+  return cells.length > 0 ? cells : null;
 }
 
 /** Half a cell of the coarser grid, diagonally, plus a little slack.
@@ -643,6 +687,11 @@ export function LiveStormLayer({ map }: Props) {
   const windMapMode = useLiveStormStore((s) => s.windMapMode);
   const gfsGrid = useLiveStormStore((s) => s.gfsGrid);
   const ecmwfGrid = useLiveStormStore((s) => s.ecmwfGrid);
+  const showWindShear = useLiveStormStore((s) => s.showWindShear);
+  const gfsShear = useLiveStormStore((s) => s.gfsShear);
+  const ecmwfShear = useLiveStormStore((s) => s.ecmwfShear);
+  const gfsShearStatus = useLiveStormStore((s) => s.gfsShearStatus);
+  const ecmwfShearStatus = useLiveStormStore((s) => s.ecmwfShearStatus);
   const highlightObs = useLiveStormStore((s) => s.highlightObs);
   const frameIndex = useLiveStormStore((s) => s.windMapFrameIndex);
   const dataRef = useRef(data);
@@ -702,6 +751,7 @@ export function LiveStormLayer({ map }: Props) {
       let cellsForView: WindMapCellProps[] = obsCells;
       let viewStep = obsStep;
       let isDiffView = false;
+      let isShearView = false;
       if (windMapMode === "gfs" && gfsCellsAtFrame) {
         cellsForView = gfsCellsAtFrame;
         viewStep = gfsStep;
@@ -724,6 +774,34 @@ export function LiveStormLayer({ map }: Props) {
         );
         viewStep = gfsStep;
         isDiffView = true;
+      }
+      // Shear replaces the surface fill only once that model's shear grid
+      // is in hand for this slider hour. While it loads, the surface field stays up.
+      if (shearViewActive({
+        showWindShear,
+        windMapMode,
+        windMapFrameIndex: frameIndex,
+        gfsGrid,
+        ecmwfGrid,
+        gfsShear,
+        ecmwfShear,
+        gfsShearStatus,
+        ecmwfShearStatus,
+      })) {
+        const shearGrid = windMapMode === "gfs" ? gfsShear : ecmwfShear;
+        const surface = windMapMode === "gfs" ? gfsGrid : ecmwfGrid;
+        const nFrames = surface?.frames.length ?? 0;
+        const surfaceFrame = nFrames
+          ? surface!.frames[Math.min(Math.max(0, frameIndex), nFrames - 1)]
+          : undefined;
+        if (shearGrid && surfaceFrame) {
+          const shearCells = materializeShearFrame(shearGrid, surfaceFrame.hour);
+          if (shearCells) {
+            cellsForView = shearCells;
+            viewStep = shearGrid.stepDeg || viewStep;
+            isShearView = true;
+          }
+        }
       }
       setSource(map, SRC_WIND_MAP, buildWindMapFC(cellsForView, viewStep));
 
@@ -878,7 +956,9 @@ export function LiveStormLayer({ map }: Props) {
       // diff palette (obs-vs-model, model-vs-model). Paint is re-set on
       // every apply so switching mode updates the colors without
       // recreating the layer.
-      const paintExpr = (isDiffView ? WIND_DIFF_COLOR : WIND_MAP_COLOR) as unknown as never;
+      const paintExpr = (
+        isShearView ? SHEAR_COLOR : isDiffView ? WIND_DIFF_COLOR : WIND_MAP_COLOR
+      ) as unknown as never;
       ensureLayer(map, LAYER_WIND_MAP_FILL, {
         id: LAYER_WIND_MAP_FILL, type: "fill", source: SRC_WIND_MAP,
         paint: {
@@ -890,6 +970,27 @@ export function LiveStormLayer({ map }: Props) {
       if (map.getLayer(LAYER_WIND_MAP_FILL)) {
         map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-color", paintExpr);
       }
+      // Same north-pointing glyph as the hunter arrows. Direction is
+      // meteorological FROM, so +180 points downshear.
+      ensureWindArrow(map);
+      ensureLayer(map, LAYER_WIND_SHEAR_ARROW, {
+        id: LAYER_WIND_SHEAR_ARROW, type: "symbol", source: SRC_WIND_MAP,
+        filter: ["==", ["get", "hasArrow"], 1] as unknown as never,
+        layout: {
+          "icon-image": "hunter-wind-arrow",
+          "icon-size": 0.55,
+          "icon-rotate": ["%", ["+", ["get", "windDirDeg"], 180], 360] as unknown as never,
+          "icon-rotation-alignment": "map",
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
+        },
+        paint: {
+          "icon-color": "#0f172a",
+          "icon-halo-color": "#ffffff",
+          "icon-halo-width": 1,
+          "icon-opacity": 0.9,
+        },
+      });
 
       // Contributor observation points. Completely invisible unless the
       // user has drilled into a cell via the "N sources" link — then only
@@ -1201,6 +1302,7 @@ export function LiveStormLayer({ map }: Props) {
       //    deterministic stack, bottom → top: wind heatmap → NHC cone →
       //    surge polygons → forecast + observed track lines. ──
       moveToTop(map, LAYER_WIND_MAP_FILL);
+      moveToTop(map, LAYER_WIND_SHEAR_ARROW);
       moveToTop(map, LAYER_WIND_OBS);
       moveToTop(map, LAYER_NHC_CONE_FILL);
       moveToTop(map, LAYER_NHC_CONE_LINE);
@@ -1249,6 +1351,7 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_SURGE_FILL, showSurge);
       setVis(map, LAYER_SURGE_LINE, showSurge);
       setVis(map, LAYER_WIND_MAP_FILL, showWindMap);
+      setVis(map, LAYER_WIND_SHEAR_ARROW, showWindMap);
       setVis(map, LAYER_WIND_OBS, showWindMap);
     };
 
@@ -1260,6 +1363,7 @@ export function LiveStormLayer({ map }: Props) {
     showBuoys, showRecon, showLand, showSst,
     showWindField, showForecastCone, showSurge, showWindMap,
     windMapMode, gfsGrid, ecmwfGrid, highlightObs, frameIndex,
+    showWindShear, gfsShear, ecmwfShear, gfsShearStatus, ecmwfShearStatus,
   ]);
 
   // Hover popups for buoys and land stations.
@@ -1551,7 +1655,13 @@ export function LiveStormLayer({ map }: Props) {
       return wSum > 0 ? vSum / wSum : null;
     };
 
+    // Fill and arrow are the same cell. Both layers report the click;
+    // keep the first so we don't open two popups.
+    let clickBusy = false;
     const onClick = async (e: mapboxgl.MapMouseEvent) => {
+      if (clickBusy) return;
+      clickBusy = true;
+      queueMicrotask(() => { clickBusy = false; });
       const f = (e as any).features?.[0];
       if (!f) return;
       const p = f.properties as {
@@ -1567,18 +1677,26 @@ export function LiveStormLayer({ map }: Props) {
         contributorSpreadKt: number | null;
         lat: number;
         lon: number;
+        field?: string;
       };
       const mode = useLiveStormStore.getState().windMapMode;
       const bundleData = useLiveStormStore.getState().data;
+      popup?.remove();
+      const container = document.createElement("div");
+      container.style.cssText =
+        "font-size:11px;line-height:1.5;min-width:260px;max-width:300px";
+      // Shear cells are not 10 m wind. Skip the point-forecast fetch.
+      if (p.field === "shear") {
+        container.innerHTML = renderShearPopup(p, mode);
+        popup = new DraggablePopup(map, e.lngLat).setContent(container);
+        wireClosePopupClearsHighlight(popup);
+        return;
+      }
       // Obs value at the exact click point — used when the mode's Δ needs
       // an observed value (obs-vs-model diffs).
       const obsAtClick = bundleData
         ? obsIdwAt(e.lngLat.lat, e.lngLat.lng, bundleData.windObs)
         : null;
-      popup?.remove();
-      const container = document.createElement("div");
-      container.style.cssText =
-        "font-size:11px;line-height:1.5;min-width:260px;max-width:300px";
       container.innerHTML = renderPopupBody(p, null, false, mode, obsAtClick);
       popup = new DraggablePopup(map, e.lngLat).setContent(container);
       wireSourcesDrilldown(container, p, bundleData);
@@ -1598,6 +1716,29 @@ export function LiveStormLayer({ map }: Props) {
         }
       }
     };
+
+    function renderShearPopup(
+      cell: { windKt: number; windDirDeg: number | null },
+      mode: import("../../state/liveStorm").WindMapMode,
+    ): string {
+      const modelName = mode === "ecmwf" ? "ECMWF" : "GFS";
+      const kt = cell.windKt;
+      const favor = kt < 10
+        ? { color: "#166534", text: "Generally favorable for a tropical cyclone (under 10 kt)." }
+        : kt < 20
+        ? { color: "#a16207", text: "Moderate shear (10-20 kt)." }
+        : { color: "#991b1b", text: "Generally hostile for a tropical cyclone (over 20 kt)." };
+      const dirLine = cell.windDirDeg == null
+        ? `<div>The two levels agree, so there is no downshear direction.</div>`
+        : `<div>From ${compass(cell.windDirDeg)} <span style="color:#64748b">· arrow points downshear</span></div>`;
+      return [
+        `<div style="font-weight:700;color:#0f172a;margin-bottom:4px">850–200 hPa shear <span style="color:#64748b;font-weight:400">· ${modelName}</span></div>`,
+        `<div><b>Magnitude:</b> ${speedTriple(kt)}</div>`,
+        dirLine,
+        `<div style="color:${favor.color};margin-top:4px">${favor.text}</div>`,
+        `<div style="color:#64748b;font-size:10px;margin-top:6px">200 hPa wind minus 850 hPa wind at this forecast hour. Not the 200 hPa wind by itself, and not a landfall or intensity forecast.</div>`,
+      ].join("");
+    }
 
     function wireSourcesDrilldown(
       container: HTMLElement,
@@ -1792,25 +1933,33 @@ export function LiveStormLayer({ map }: Props) {
       return rows.join("");
     }
 
+    const onEnter = () => {
+      map.getCanvas().style.cursor = "pointer";
+    };
+    const onLeave = () => {
+      map.getCanvas().style.cursor = "";
+    };
+    const clickLayers = [LAYER_WIND_MAP_FILL, LAYER_WIND_SHEAR_ARROW];
     const reg = () => {
-      if (map.getLayer(LAYER_WIND_MAP_FILL)) {
-        map.on("click", LAYER_WIND_MAP_FILL, onClick as never);
-        map.on("mouseenter", LAYER_WIND_MAP_FILL, () => {
-          map.getCanvas().style.cursor = "pointer";
-        });
-        map.on("mouseleave", LAYER_WIND_MAP_FILL, () => {
-          map.getCanvas().style.cursor = "";
-        });
+      for (const id of clickLayers) {
+        if (!map.getLayer(id)) continue;
+        map.on("click", id, onClick as never);
+        map.on("mouseenter", id, onEnter);
+        map.on("mouseleave", id, onLeave);
       }
     };
     if (map.isStyleLoaded()) reg();
     else map.once("idle", reg);
 
     return () => {
-      try {
-        map.off("click", LAYER_WIND_MAP_FILL, onClick as never);
-      } catch {
-        /* layer torn down */
+      for (const id of clickLayers) {
+        try {
+          map.off("click", id, onClick as never);
+          map.off("mouseenter", id, onEnter);
+          map.off("mouseleave", id, onLeave);
+        } catch {
+          /* layer torn down */
+        }
       }
       popup?.remove();
     };

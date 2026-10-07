@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { LiveStormBundle, ModelTracksResponse, ReconPoll } from "../../api/live";
-import { useLiveStormStore, windGridUsable } from "../liveStorm";
+import { shearViewActive, useLiveStormStore, windGridUsable } from "../liveStorm";
+import type { WindModelGrid } from "../../api/live";
 
 describe("live storm reload", () => {
   beforeEach(() => {
@@ -44,6 +45,48 @@ describe("live storm reload", () => {
         windDirDeg: [180],
       }],
     })).toBe(true);
+  });
+
+  it("treats shear as the painted field only after that hour has a magnitude", () => {
+    const surface: WindModelGrid = {
+      model: "gfs",
+      stepDeg: 1,
+      cells: [{ lat: 22, lon: -90 }],
+      frames: [
+        { hour: 0, validTimeUtc: "2026-10-07T12:00Z", windKt: [10], windDirDeg: [0] },
+        { hour: 6, validTimeUtc: "2026-10-07T18:00Z", windKt: [12], windDirDeg: [0] },
+      ],
+    };
+    const shear: WindModelGrid = {
+      model: "gfs",
+      stepDeg: 1,
+      cells: [{ lat: 22, lon: -90 }],
+      frames: [
+        { hour: 6, validTimeUtc: "2026-10-07T18:00Z", windKt: [22], windDirDeg: [270] },
+      ],
+    };
+    const view = {
+      showWindShear: true,
+      windMapMode: "gfs" as const,
+      windMapFrameIndex: 1,
+      gfsGrid: surface,
+      ecmwfGrid: null,
+      gfsShear: shear,
+      ecmwfShear: null,
+      gfsShearStatus: "ok" as const,
+      ecmwfShearStatus: "idle" as const,
+    };
+    expect(shearViewActive(view)).toBe(true);
+    expect(shearViewActive({ ...view, showWindShear: false })).toBe(false);
+    expect(shearViewActive({ ...view, windMapMode: "observed" })).toBe(false);
+    expect(shearViewActive({ ...view, gfsShearStatus: "loading" })).toBe(false);
+    expect(shearViewActive({
+      ...view,
+      gfsShear: {
+        ...shear,
+        frames: [{ hour: 6, validTimeUtc: "2026-10-07T18:00Z", windKt: [null], windDirDeg: [null] }],
+      },
+    })).toBe(false);
   });
 
   it("retry refetches without blanking the storm already on the map", () => {

@@ -17,7 +17,7 @@
 
 import type { Map as MbMap } from "mapbox-gl";
 import { useEffect } from "react";
-import { useLiveStormStore } from "../../state/liveStorm";
+import { shearViewActive, useLiveStormStore } from "../../state/liveStorm";
 import {
   UPDATE_FRAG,
   DRAW_VERT,
@@ -287,6 +287,8 @@ function selectActiveCells(): {
 } | null {
   const s = useLiveStormStore.getState();
   if (!s.showWindMap || !s.showWindParticles) return null;
+  // Shear is a difference, not a flow. Leave particles on observed and diff.
+  if (shearViewActive(s)) return null;
   const mode = s.windMapMode;
   const bbox = s.data?.bbox as [number, number, number, number] | undefined;
   if (!bbox) return null;
@@ -325,10 +327,11 @@ export function WindParticleLayer({ map }: Props) {
   const gfsGrid = useLiveStormStore((s) => s.gfsGrid);
   const ecmwfGrid = useLiveStormStore((s) => s.ecmwfGrid);
   const frameIndex = useLiveStormStore((s) => s.windMapFrameIndex);
+  const shearOnMap = useLiveStormStore(shearViewActive);
 
   useEffect(() => {
     if (!map) return;
-    if (!showWindMap || !showWindParticles) {
+    if (!showWindMap || !showWindParticles || shearOnMap) {
       // Ensure layer is removed if it exists.
       try {
         if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
@@ -608,7 +611,7 @@ export function WindParticleLayer({ map }: Props) {
         if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
       } catch { /* torn down */ }
     };
-  }, [map, showWindMap, showWindParticles, data, mode, gfsGrid, ecmwfGrid, frameIndex]);
+  }, [map, showWindMap, showWindParticles, shearOnMap, data, mode, gfsGrid, ecmwfGrid, frameIndex]);
 
   return null;
 }

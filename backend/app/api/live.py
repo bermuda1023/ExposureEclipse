@@ -60,7 +60,11 @@ from ..services.wind_field_map import (
     wind_field_grid,
 )
 from ..services.recon_obs import fetch_recon_bundle, recon_for_idw
-from ..services.wind_forecast import fetch_model_wind_grid, point_forecast
+from ..services.wind_forecast import (
+    fetch_model_shear_grid,
+    fetch_model_wind_grid,
+    point_forecast,
+)
 from ..services import wildfire_exposure
 from .geometry_input import ExposureRequest, PolygonExposureOut, exposure_out
 
@@ -317,7 +321,7 @@ class WindModelFrameOut(CamelModel):
 
     hour: int              # forecast hours from "now" (0, 6, 12, …)
     valid_time_utc: str
-    wind_kt: list[float]
+    wind_kt: list[float | None]
     wind_dir_deg: list[float | None]
 
 
@@ -1183,6 +1187,42 @@ def wind_model_grid(
     large, so the request finishes instead of dying at the proxy.
     Degrades to an empty grid on failure rather than 5xx'ing."""
     grid = fetch_model_wind_grid(
+        west, south, east, north, model, refresh=refresh,
+    )
+    return WindModelGridOut(
+        model=grid.model,
+        step_deg=grid.step_deg,
+        cells=[
+            WindGridCoordOut(lat=c.lat, lon=c.lon) for c in grid.cells
+        ],
+        frames=[
+            WindModelFrameOut(
+                hour=f.hour,
+                valid_time_utc=f.valid_time_utc,
+                wind_kt=f.wind_kt,
+                wind_dir_deg=f.wind_dir_deg,
+            )
+            for f in grid.frames
+        ],
+    )
+
+
+@router.get("/wind-shear-grid", response_model=WindModelGridOut)
+def wind_shear_grid(
+    west: float = Query(..., ge=-180.0, le=180.0),
+    south: float = Query(..., ge=-90.0, le=90.0),
+    east: float = Query(..., ge=-180.0, le=180.0),
+    north: float = Query(..., ge=-90.0, le=90.0),
+    model: str = Query(..., pattern="^(gfs|ecmwf)$"),
+    refresh: bool = Query(default=False, alias="refresh"),
+) -> WindModelGridOut:
+    """850–200 hPa deep-layer shear for the same hours as the surface grid.
+
+    Magnitude is in knots. Direction is where the shear comes from, so the
+    map arrow points downshear. Not the 200 hPa wind by itself. Empty on
+    failure rather than 5xx, same as the surface grid.
+    """
+    grid = fetch_model_shear_grid(
         west, south, east, north, model, refresh=refresh,
     )
     return WindModelGridOut(

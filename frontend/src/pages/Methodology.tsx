@@ -569,6 +569,11 @@ export function Methodology() {
             "Δ vs model mean" line flags obs-vs-model disagreement: green
             if within 5 kt, orange 5–15, red &gt; 15 (worth flagging).
           </li>
+          <li>
+            When 850–200 hPa shear is the field on the map, the popup
+            reports shear magnitude and the from-direction instead, and
+            it does not fetch the 10 m point forecast.
+          </li>
         </ul>
         <SubHead>Source mode selector</SubHead>
         <p>
@@ -583,6 +588,36 @@ export function Methodology() {
           not, so Retry asks again. Diff view uses a diverging blue → white
           → red palette centered on 0.
         </p>
+        <SubHead>Deep-layer wind shear (GFS / ECMWF)</SubHead>
+        <p>
+          On GFS and ECMWF the time slider can show <b>850–200 hPa shear</b>
+          instead of the 10 m wind. That is the 200 hPa wind minus the
+          850 hPa wind (about 12 km minus about 1.5 km), the deep-layer
+          shear used by CIMSS, SHIPS, and NHC. It is not the 200 hPa wind
+          by itself, and it is not a forecast of landfall or intensity.
+        </p>
+        <ul>
+          <li>
+            The control is only offered in GFS and ECMWF mode, and it
+            stays off until turned on. It uses the same forecast hours as
+            the surface slider. The fill is shear magnitude in knots. The
+            arrow points <b>downshear</b>: the direction stored is the
+            meteorological from-direction, and the map rotates it 180°.
+          </li>
+          <li>
+            Under 10 kt is generally favorable for a tropical cyclone,
+            10–20 kt is moderate, and over 20 kt is generally hostile.
+            Those bands are context for the field, not a verdict on the
+            storm.
+          </li>
+          <li>
+            An hour missing either level is a gap. Zero knots means the
+            two levels agree, not that a level failed to load. While the
+            shear request is still loading or has failed, the 10 m wind
+            stays up. Wind particles hide once shear is the painted field,
+            because shear is not a flow.
+          </li>
+        </ul>
         <Sources>
           <li>
             <a href="https://www.ndbc.noaa.gov/" target="_blank" rel="noreferrer">
@@ -611,7 +646,8 @@ export function Methodology() {
               Open-Meteo
             </a>{" "}
             — free proxy for GFS (<code>gfs_seamless</code>) and ECMWF (
-            <code>ecmwf_ifs025</code>) hourly wind at 10 m. CC-BY-4.0.
+            <code>ecmwf_ifs025</code>) hourly wind at 10 m, and the 850 hPa
+            and 200 hPa winds used for deep-layer shear. CC-BY-4.0.
           </li>
           <li>
             <a

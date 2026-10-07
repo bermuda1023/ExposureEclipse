@@ -16,6 +16,7 @@ interpolation from the model grid to the requested lat/lon.
 from __future__ import annotations
 
 import json
+import math
 import urllib.parse
 import urllib.request
 from collections import OrderedDict
@@ -205,7 +206,9 @@ class ModelWindFrame:
     list so the wire payload doesn't repeat lat/lon at every frame."""
     hour: int              # forecast hours from "now" (0, 6, 12, …)
     valid_time_utc: str
-    wind_kt: list[float]
+    # ``None`` is a gap at that cell for that hour (a level was missing).
+    # A real 0 is calm, not a gap.
+    wind_kt: list[float | None]
     wind_dir_deg: list[float | None]
 
 
@@ -344,34 +347,76 @@ def _extract_bulk_frames(
 # container returned "no data available" until the process recycled. Users
 # saw ECMWF flip from "working" to permanently "unavailable" mid-session.
 _BULK_CACHE_MAX = 64
-_bulk_cache: OrderedDict[tuple[str, str, str], tuple[dict, ...]] = OrderedDict()
+_bulk_cache: OrderedDict[tuple[str, str, str, str], tuple[dict, ...]] = OrderedDict()
+
+_SURFACE_HOURLY = "wind_speed_10m,wind_direction_10m"
+_SHEAR_HOURLY = (
+    "wind_speed_850hPa,wind_direction_850hPa,"
+    "wind_speed_200hPa,wind_direction_200hPa"
+)
+_SURFACE_FIELDS = ("wind_speed_10m",)
+_SHEAR_FIELDS = ("wind_speed_850hPa", "wind_speed_200hPa")
+_SHEAR_CACHE: TtlCache[tuple, "ModelWindGrid"] = TtlCache(ttl_s=180, maxsize=12)
 
 
-def _chunk_has_real_wind(items: tuple[dict, ...]) -> bool:
+def deep_layer_shear(
+    kt_850: float, dir_850: float, kt_200: float, dir_200: float,
+) -> tuple[float, float | None]:
+    """850–200 hPa shear as (magnitude kt, meteorological FROM degrees).
+
+    The vector is the 200 hPa wind minus the 850 hPa wind — the deep-layer
+    shear tropical forecasters use, not the 200 hPa wind by itself. FROM
+    matches the surface-wind convention, so an arrow rotated +180° points
+    downshear (where the upper wind is headed relative to the lower wind).
+    Direction is omitted below half a knot; the magnitude stays.
+    """
+    def uv(kt: float, deg: float) -> tuple[float, float]:
+        r = math.radians(deg)
+        return -kt * math.sin(r), -kt * math.cos(r)
+
+    u850, v850 = uv(kt_850, dir_850)
+    u200, v200 = uv(kt_200, dir_200)
+    us, vs = u200 - u850, v200 - v850
+    mag = math.hypot(us, vs)
+    if mag < 0.5:
+        return round(mag, 1), None
+    to_deg = math.degrees(math.atan2(us, vs))
+    return round(mag, 1), round((to_deg + 180.0) % 360.0, 1)
+
+
+def _chunk_has_real_wind(
+    items: tuple[dict, ...],
+    fields: tuple[str, ...] = _SURFACE_FIELDS,
+) -> bool:
     """True when Open-Meteo actually returned a wind speed.
 
-    A HTTP 200 whose ``wind_speed_10m`` values are all null is an empty
-    model (mid-Pacific ECMWF, or a blip), not a calm grid. Caching it
-    made GFS/Euro look permanently unavailable until the process restarted.
-    A real 0 m/s is kept — that is calm wind, not a missing field.
+    A HTTP 200 whose speeds are all null is an empty model, not a calm
+    grid. Caching it made GFS/Euro look permanently unavailable until the
+    process restarted. A real 0 m/s is kept — that is calm wind, not a
+    missing field. Shear requires both the 850 and the 200 hPa speed.
     """
     for item in items:
         hourly = (item or {}).get("hourly") or {}
-        for speed in hourly.get("wind_speed_10m") or []:
-            if speed is not None:
-                return True
+        if all(
+            any(speed is not None for speed in (hourly.get(field) or []))
+            for field in fields
+        ):
+            return True
     return False
 
 
 def _fetch_bulk_chunk(
-    lat_str: str, lon_str: str, model_key: str, *, refresh: bool = False,
+    lat_str: str, lon_str: str, model_key: str, *,
+    refresh: bool = False,
+    hourly: str = _SURFACE_HOURLY,
+    fields: tuple[str, ...] = _SURFACE_FIELDS,
 ) -> tuple[dict, ...]:
     """Fetch one multi-location Open-Meteo chunk with retries on 429.
     Successful responses that contain at least one real wind value are
     cached; failures, empty bodies, and all-null winds are not (so a
     transient rate-limit doesn't permanently poison the bbox).
     ``refresh`` bypasses the cache read."""
-    key = (lat_str, lon_str, model_key)
+    key = (lat_str, lon_str, model_key, hourly)
     if not refresh:
         hit = _bulk_cache.get(key)
         if hit is not None:
@@ -382,7 +427,7 @@ def _fetch_bulk_chunk(
     params = {
         "latitude": lat_str,
         "longitude": lon_str,
-        "hourly": "wind_speed_10m,wind_direction_10m",
+        "hourly": hourly,
         "wind_speed_unit": "ms",
         "timezone": "UTC",
         # 6 days covers the full 0..120h forecast horizon we sample for
@@ -432,24 +477,92 @@ def _fetch_bulk_chunk(
         except Exception:  # noqa: BLE001
             break
 
-    if items and _chunk_has_real_wind(items):
+    if items and _chunk_has_real_wind(items, fields):
         _bulk_cache[key] = items
         while len(_bulk_cache) > _BULK_CACHE_MAX:
             _bulk_cache.popitem(last=False)
     return items
 
 
-def fetch_model_wind_grid(
-    west: float, south: float, east: float, north: float,
-    model_wire: str, *, step_deg: float | None = None, refresh: bool = False,
-) -> ModelWindGrid:
-    """GFS or ECMWF wind grid over the bbox, returned as forecast frames.
+def _extract_shear_frames(
+    requested_coords: list[tuple[float, float]],
+    items: list[dict],
+    now: datetime,
+) -> tuple[list[WindCoord], dict[int, tuple[list[float | None], list[float | None], str]]]:
+    """850–200 hPa shear at each forecast hour. A cell with neither level
+    is omitted. An hour missing one level is a null, not 0 kt of shear."""
+    coords: list[WindCoord] = []
+    frame_kts: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
+    frame_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
+    frame_vt: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
 
-    The step coarsens on a large cone so the click finishes inside
-    ``_GRID_DEADLINE_S`` instead of dying at the proxy. A finished grid
-    with real wind is cached for a few minutes; an empty result is not,
-    so Retry can ask Open-Meteo again. ``refresh`` skips the cache read.
-    """
+    for i, req in enumerate(requested_coords):
+        item = items[i] if i < len(items) else {}
+        hourly = (item or {}).get("hourly") or {}
+        times = hourly.get("time") or []
+        s850 = hourly.get("wind_speed_850hPa") or []
+        d850 = hourly.get("wind_direction_850hPa") or []
+        s200 = hourly.get("wind_speed_200hPa") or []
+        d200 = hourly.get("wind_direction_200hPa") or []
+        base_idx = _nearest_hour_index(times, now) if times else None
+        if base_idx is None:
+            continue
+        samples: list[tuple[int, tuple[float, float | None] | None, str]] = []
+        any_real = False
+        for h in _FORECAST_HOURS:
+            idx = base_idx + h
+            shear: tuple[float, float | None] | None = None
+            vt = ""
+            if idx < len(times):
+                sp850 = s850[idx] if idx < len(s850) else None
+                sp200 = s200[idx] if idx < len(s200) else None
+                di850 = d850[idx] if idx < len(d850) else None
+                di200 = d200[idx] if idx < len(d200) else None
+                if (
+                    sp850 is not None and sp200 is not None
+                    and di850 is not None and di200 is not None
+                ):
+                    shear = deep_layer_shear(
+                        float(_mps_to_kt(float(sp850)) or 0.0),
+                        float(di850),
+                        float(_mps_to_kt(float(sp200)) or 0.0),
+                        float(di200),
+                    )
+                    t = times[idx]
+                    vt = t if str(t).endswith("Z") else (str(t) + "Z")
+                    any_real = True
+            samples.append((h, shear, vt))
+        if not any_real:
+            continue
+        coords.append(WindCoord(
+            lat=round(float(req[0]), 3),
+            lon=round(float(req[1]), 3),
+        ))
+        for h, shear, vt in samples:
+            if shear is None:
+                frame_kts[h].append(None)
+                frame_dirs[h].append(None)
+            else:
+                frame_kts[h].append(shear[0])
+                frame_dirs[h].append(shear[1])
+            if vt and not frame_vt[h]:
+                frame_vt[h] = vt
+    return coords, {
+        h: (frame_kts[h], frame_dirs[h], frame_vt[h]) for h in _FORECAST_HOURS
+    }
+
+
+def _assemble_model_grid(
+    west: float, south: float, east: float, north: float,
+    model_wire: str, *,
+    hourly: str,
+    fields: tuple[str, ...],
+    extract,
+    cache: TtlCache[tuple, ModelWindGrid],
+    step_deg: float | None = None,
+    refresh: bool = False,
+) -> ModelWindGrid:
+    """Shared chunked fetch for surface wind and deep-layer shear."""
     model_key = next(
         (k for (k, wire) in MODELS if wire == model_wire), None,
     )
@@ -464,11 +577,10 @@ def fetch_model_wind_grid(
         model_wire, step_deg,
     )
     if not refresh:
-        hit = _GRID_CACHE.get(cache_key)
+        hit = cache.get(cache_key)
         if hit is not None:
             return hit
 
-    # Build the full coord list.
     coords: list[tuple[float, float]] = []
     lat = south
     while lat <= north + 1e-9:
@@ -489,10 +601,10 @@ def fetch_model_wind_grid(
         for i in range(0, len(coords), _CHUNK_SIZE)
     ]
 
-    # Chunks finish out of order. Each cell's wind is appended with its
+    # Chunks finish out of order. Each cell's value is appended with its
     # own coord, so the parallel arrays stay aligned without row-major order.
     all_coords: list[WindCoord] = []
-    all_kts: dict[int, list[float]] = {h: [] for h in _FORECAST_HOURS}
+    all_kts: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
     all_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
     frame_valid_times: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
 
@@ -503,7 +615,8 @@ def fetch_model_wind_grid(
             lat_str = ",".join(f"{c[0]:.3f}" for c in ch)
             lon_str = ",".join(f"{c[1]:.3f}" for c in ch)
             fut = pool.submit(
-                _fetch_bulk_chunk, lat_str, lon_str, model_key, refresh=refresh,
+                _fetch_bulk_chunk, lat_str, lon_str, model_key,
+                refresh=refresh, hourly=hourly, fields=fields,
             )
             fut_to_chunk[fut] = ch
         done, _pending = wait(set(fut_to_chunk), timeout=_GRID_DEADLINE_S)
@@ -513,10 +626,9 @@ def fetch_model_wind_grid(
                 items = fut.result()
             except Exception:  # noqa: BLE001
                 items = ()
-            # A chunk that never came back is a gap, not a calm stripe.
-            if not items or not _chunk_has_real_wind(tuple(items)):
+            if not items or not _chunk_has_real_wind(tuple(items), fields):
                 continue
-            chunk_coords, chunk_frames = _extract_bulk_frames(ch, list(items), now)
+            chunk_coords, chunk_frames = extract(ch, list(items), now)
             all_coords.extend(chunk_coords)
             for h in _FORECAST_HOURS:
                 kts, dirs, vt = chunk_frames.get(h, ([], [], ""))
@@ -525,14 +637,12 @@ def fetch_model_wind_grid(
                 if vt and not frame_valid_times[h]:
                     frame_valid_times[h] = vt
     finally:
-        # Don't block the response on a chunk that is still inside urlopen.
         pool.shutdown(wait=False, cancel_futures=True)
 
     frames: list[ModelWindFrame] = []
     for h in _FORECAST_HOURS:
         vt = frame_valid_times[h]
         if not vt:
-            # Frame has no data (past the model's forecast horizon).
             continue
         frames.append(ModelWindFrame(
             hour=h,
@@ -545,9 +655,50 @@ def fetch_model_wind_grid(
         model=model_wire, step_deg=step_deg,
         cells=all_coords, frames=frames,
     )
-    if any(any(kt > 0 for kt in f.wind_kt) for f in frames):
-        _GRID_CACHE.set(cache_key, grid)
+    if any(
+        kt is not None and kt > 0
+        for frame in frames
+        for kt in frame.wind_kt
+    ):
+        cache.set(cache_key, grid)
     return grid
+
+
+def fetch_model_wind_grid(
+    west: float, south: float, east: float, north: float,
+    model_wire: str, *, step_deg: float | None = None, refresh: bool = False,
+) -> ModelWindGrid:
+    """GFS or ECMWF 10 m wind grid over the bbox, as forecast frames.
+
+    The step coarsens on a large cone so the click finishes inside
+    ``_GRID_DEADLINE_S`` instead of dying at the proxy. A finished grid
+    with real wind is cached for a few minutes; an empty result is not,
+    so Retry can ask Open-Meteo again. ``refresh`` skips the cache read.
+    """
+    return _assemble_model_grid(
+        west, south, east, north, model_wire,
+        hourly=_SURFACE_HOURLY, fields=_SURFACE_FIELDS,
+        extract=_extract_bulk_frames, cache=_GRID_CACHE,
+        step_deg=step_deg, refresh=refresh,
+    )
+
+
+def fetch_model_shear_grid(
+    west: float, south: float, east: float, north: float,
+    model_wire: str, *, step_deg: float | None = None, refresh: bool = False,
+) -> ModelWindGrid:
+    """GFS or ECMWF 850–200 hPa shear on the same hours as the surface grid.
+
+    ``wind_kt`` is the shear magnitude. ``wind_dir_deg`` is where it comes
+    from, so the map arrow (direction + 180°) points downshear. Same step
+    cap and deadline as the surface grid. Cached apart from that grid.
+    """
+    return _assemble_model_grid(
+        west, south, east, north, model_wire,
+        hourly=_SHEAR_HOURLY, fields=_SHEAR_FIELDS,
+        extract=_extract_shear_frames, cache=_SHEAR_CACHE,
+        step_deg=step_deg, refresh=refresh,
+    )
 
 
 __all__ = [
@@ -557,6 +708,8 @@ __all__ = [
     "PointForecast",
     "WindCoord",
     "choose_model_step",
+    "deep_layer_shear",
+    "fetch_model_shear_grid",
     "fetch_model_wind_grid",
     "point_forecast",
 ]
