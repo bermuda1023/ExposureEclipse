@@ -359,6 +359,7 @@ export function Methodology() {
             NHC official, the deterministic GFS/ECMWF runs, the ensemble
             means (<code>AEMN</code>, <code>EEMN</code>), and the consensus
             aids (TVCN, HCCA, …) are drawn on the map but <b>do not vote</b>.
+            The map does not draw a consensus hull or an AI-only hull.
           </li>
           <li>
             For each coastal county centroid, a member "strikes" if any
@@ -651,9 +652,11 @@ export function Methodology() {
           <li>
             The control is only offered in GFS and ECMWF mode, and it
             stays off until turned on. It uses the same forecast hours as
-            the surface slider. The fill is shear magnitude in knots. The
-            arrow points <b>downshear</b>: the direction stored is the
-            meteorological from-direction, and the map rotates it 180°.
+            the surface slider. The fill is shear magnitude in knots,
+            drawn lighter than the 10 m wind so the official track shows
+            through. The arrows are small and point <b>downshear</b>: the
+            direction stored is the meteorological from-direction, and the
+            map rotates it 180°.
           </li>
           <li>
             Under 10 kt is generally favorable for a tropical cyclone,
@@ -752,28 +755,31 @@ export function Methodology() {
         <SubHead>Satellite</SubHead>
         <ul>
           <li>
-            Latest geostationary image from{" "}
+            Latest geostationary image, chosen by the active storm
+            longitude, or by the map center when no storm is selected.
+            GOES-East and GOES-West are NASA GIBS GeoColor: true color by
+            day, multispectral at night. Himawari, including Japan, is
+            NASA GIBS clean infrared (10.4 µm), not true color. Europe and
+            Africa use Meteosat-11 enhanced infrared from{" "}
             <a href="https://realearth.ssec.wisc.edu/" target="_blank" rel="noreferrer">
               SSEC RealEarth
             </a>
-            , chosen by the active storm longitude, or by the map center
-            when no storm is selected. GOES-East and GOES-West are true
-            color. Himawari (Japan and the western Pacific) is true color.
-            Europe and Africa use Meteosat-11 enhanced infrared, because
-            that feed has no true-color tile. The picture is the latest
-            scan, refreshed about every 10 minutes, not a forecast.
+            , because that feed has no true-color tile. The picture is the
+            latest scan, refreshed about every 10 minutes, not a forecast.
           </li>
           <li>
-            Tiles stop at zoom 7 and are stretched past that. They sit
-            under the track and the wind grid. Heavy use can pick up a
-            RealEarth watermark; the layer is off unless the chip is on.
+            Tiles stop at zoom 7, or zoom 6 for Himawari, and are stretched
+            past that. They sit under the track and the wind grid.
           </li>
         </ul>
         <SubHead>Lightning</SubHead>
         <ul>
           <li>
-            GOES-East GLM group density, same tile service. These are
-            optical flashes from the satellite (in-cloud and
+            GOES-East GLM group density from{" "}
+            <a href="https://realearth.ssec.wisc.edu/" target="_blank" rel="noreferrer">
+              SSEC RealEarth
+            </a>
+            . These are optical flashes from the satellite (in-cloud and
             cloud-to-ground). They are not confirmed ground strikes and
             they are not a commercial lightning network.
           </li>
@@ -782,6 +788,13 @@ export function Methodology() {
             Japan, or in Europe, is outside it, and the map draws nothing
             rather than inventing flashes. GOES-West lightning is not on
             this feed.
+          </li>
+          <li>
+            RealEarth replaces some tiles with a notice that the size
+            limit was exceeded. Those tiles are left blank, so the notice
+            is not drawn on the map. Flashes that were on a refused tile
+            are missing until a later refresh. The same blanking applies
+            to a Meteosat tile.
           </li>
         </ul>
       </Section>

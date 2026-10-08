@@ -1,25 +1,16 @@
 /**
- * Model ensemble spaghetti tracks (GEFS / ECMWF-ENS / AI models) + optional
- * consensus envelopes rendered on the active live storm.
+ * Model ensemble spaghetti tracks (GEFS / ECMWF-ENS / AI models) on the
+ * active live storm. No consensus hull and no AI-only hull.
  *
  * One LineString feature per ModelTrack, with the family + tech id on the
  * properties so a single fill/line paint can key colour per family. Family
  * toggles hide entire buckets without dropping their features from the
  * source (setLayoutProperty by family value).
- *
- * Envelopes render as two translucent polygons: the full ensemble consensus
- * (all NWP-ensemble + AI members combined) and the AI-only consensus. Both
- * are optional toggles — enabled explicitly so they don't clutter the
- * default view.
  */
 
 import type { GeoJSONSource, Map as MbMap } from "mapbox-gl";
 import { useEffect } from "react";
-import type {
-  EnsembleEnvelope,
-  ModelFamily,
-  ModelTrack,
-} from "../../api/live";
+import type { ModelFamily, ModelTrack } from "../../api/live";
 import { useLiveStormStore } from "../../state/liveStorm";
 
 // Family colour palette. Chosen so ensembles and their means read as related
@@ -65,14 +56,16 @@ const FAMILY_WIDTH: Record<ModelFamily, number> = {
 };
 
 const SRC_TRACKS = "model-tracks";
-const SRC_ENVELOPE = "model-tracks-envelope";
-const SRC_AI_ENVELOPE = "model-tracks-ai-envelope";
 const LAYER_TRACKS = "model-tracks-line";
 const LAYER_TRACK_END_LABELS = "model-tracks-end-labels";
-const LAYER_ENVELOPE = "model-tracks-envelope-fill";
-const LAYER_ENVELOPE_LINE = "model-tracks-envelope-line";
-const LAYER_AI_ENVELOPE = "model-tracks-ai-envelope-fill";
-const LAYER_AI_ENVELOPE_LINE = "model-tracks-ai-envelope-line";
+/** Left on maps that loaded before the hulls were removed. */
+const RETIRED_LAYERS = [
+  "model-tracks-envelope-fill",
+  "model-tracks-envelope-line",
+  "model-tracks-ai-envelope-fill",
+  "model-tracks-ai-envelope-line",
+];
+const RETIRED_SOURCES = ["model-tracks-envelope", "model-tracks-ai-envelope"];
 
 interface Props {
   map: MbMap | null;
@@ -133,24 +126,6 @@ function buildEndPointsFC(
   return { type: "FeatureCollection", features };
 }
 
-function buildEnvelopeFC(
-  env: EnsembleEnvelope | null,
-): GeoJSON.FeatureCollection {
-  if (!env || env.ring.length < 3) {
-    return { type: "FeatureCollection", features: [] };
-  }
-  return {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        geometry: { type: "Polygon", coordinates: [env.ring] },
-        properties: { membersUsed: env.membersUsed },
-      },
-    ],
-  };
-}
-
 const FAMILY_MATCH_COLOR: unknown[] = [
   "match", ["get", "family"],
   ...Object.entries(FAMILY_COLOR).flatMap(([f, c]) => [f, c]),
@@ -165,8 +140,6 @@ const FAMILY_MATCH_WIDTH: unknown[] = [
 
 export function ModelTrackLayer({ map }: Props) {
   const showTracks = useLiveStormStore((s) => s.showModelTracks);
-  const showEnv = useLiveStormStore((s) => s.showEnsembleEnvelope);
-  const showAiEnv = useLiveStormStore((s) => s.showAiEnvelope);
   const modelTracks = useLiveStormStore((s) => s.modelTracks);
   const visibleFamilies = useLiveStormStore((s) => s.visibleFamilies);
   const showStrike = useLiveStormStore((s) => s.showStrikeProbability);
@@ -184,57 +157,14 @@ export function ModelTrackLayer({ map }: Props) {
         drawn.add("ecmwf_ens");
         drawn.add("ai");
       }
+      dropRetiredEnvelopes(map);
       setSource(map, SRC_TRACKS, buildTracksFC(tracks, drawn));
-      setSource(
-        map,
-        SRC_ENVELOPE,
-        buildEnvelopeFC(modelTracks?.ensembleEnvelope ?? null),
-      );
-      setSource(
-        map,
-        SRC_AI_ENVELOPE,
-        buildEnvelopeFC(modelTracks?.aiEnvelope ?? null),
-      );
       setSource(
         map,
         `${SRC_TRACKS}-endpoints`,
         buildEndPointsFC(tracks, drawn),
       );
 
-      ensureLayer(map, LAYER_ENVELOPE, {
-        id: LAYER_ENVELOPE, type: "fill", source: SRC_ENVELOPE,
-        paint: {
-          "fill-color": "#7f1d1d",
-          "fill-opacity": 0.08,
-          "fill-outline-color": "rgba(0,0,0,0)",
-        },
-      }, "county-line");
-      ensureLayer(map, LAYER_ENVELOPE_LINE, {
-        id: LAYER_ENVELOPE_LINE, type: "line", source: SRC_ENVELOPE,
-        paint: {
-          "line-color": "#7f1d1d",
-          "line-width": 1.5,
-          "line-opacity": 0.5,
-          "line-dasharray": [6, 3] as unknown as never,
-        },
-      });
-      ensureLayer(map, LAYER_AI_ENVELOPE, {
-        id: LAYER_AI_ENVELOPE, type: "fill", source: SRC_AI_ENVELOPE,
-        paint: {
-          "fill-color": "#a855f7",
-          "fill-opacity": 0.10,
-          "fill-outline-color": "rgba(0,0,0,0)",
-        },
-      }, "county-line");
-      ensureLayer(map, LAYER_AI_ENVELOPE_LINE, {
-        id: LAYER_AI_ENVELOPE_LINE, type: "line", source: SRC_AI_ENVELOPE,
-        paint: {
-          "line-color": "#a855f7",
-          "line-width": 1.5,
-          "line-opacity": 0.65,
-          "line-dasharray": [2, 2] as unknown as never,
-        },
-      });
       ensureLayer(map, LAYER_TRACKS, {
         id: LAYER_TRACKS, type: "line", source: SRC_TRACKS,
         paint: {
@@ -274,26 +204,16 @@ export function ModelTrackLayer({ map }: Props) {
 
       // Track lines paint above county tiles but below cone / observed
       // trace lines. The reorder is idempotent.
-      moveToTop(map, LAYER_ENVELOPE);
-      moveToTop(map, LAYER_ENVELOPE_LINE);
-      moveToTop(map, LAYER_AI_ENVELOPE);
-      moveToTop(map, LAYER_AI_ENVELOPE_LINE);
       moveToTop(map, LAYER_TRACKS);
       moveToTop(map, LAYER_TRACK_END_LABELS);
 
       setVis(map, LAYER_TRACKS, showTracks || showStrike);
       setVis(map, LAYER_TRACK_END_LABELS, showTracks);
-      // Envelope chips are independent of the spaghetti toggle. Requiring
-      // model tracks left the consensus polygon off even when its chip was on.
-      setVis(map, LAYER_ENVELOPE, showEnv);
-      setVis(map, LAYER_ENVELOPE_LINE, showEnv);
-      setVis(map, LAYER_AI_ENVELOPE, showAiEnv);
-      setVis(map, LAYER_AI_ENVELOPE_LINE, showAiEnv);
     };
 
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, modelTracks, visibleFamilies, showTracks, showStrike, showEnv, showAiEnv]);
+  }, [map, modelTracks, visibleFamilies, showTracks, showStrike]);
 
   // Hover popup — read "this line is X" without clicking.
   useEffect(() => {
@@ -355,6 +275,15 @@ export function ModelTrackLayer({ map }: Props) {
 
 // Helpers duplicated from LiveStormLayer — small enough that a shared module
 // isn't worth the churn; if a third layer copies these, extract.
+function dropRetiredEnvelopes(map: MbMap): void {
+  for (const id of RETIRED_LAYERS) {
+    if (map.getLayer(id)) map.removeLayer(id);
+  }
+  for (const id of RETIRED_SOURCES) {
+    if (map.getSource(id)) map.removeSource(id);
+  }
+}
+
 function setSource(map: MbMap, id: string, data: GeoJSON.FeatureCollection): void {
   const existing = map.getSource(id) as GeoJSONSource | undefined;
   if (existing) { existing.setData(data as never); return; }

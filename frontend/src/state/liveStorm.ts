@@ -99,8 +99,6 @@ interface LiveStormState {
   modelTracksStatus: "idle" | "loading" | "ok" | "empty" | "error";
   visibleFamilies: Set<ModelFamily>;
   showModelTracks: boolean;
-  showEnsembleEnvelope: boolean;
-  showAiEnvelope: boolean;
   // Ensemble strike-probability grid (Phase 3). Same lazy-fetch pattern
   // as the model tracks — one endpoint call per storm per threshold.
   ensembleRisk: EnsembleRiskResponse | null;
@@ -265,8 +263,6 @@ export type ToggleKey =
   | "showWindMap"
   | "showWindParticles"
   | "showModelTracks"
-  | "showEnsembleEnvelope"
-  | "showAiEnvelope"
   | "showStrikeProbability"
   | "showGTWO"
   | "showSatellite"
@@ -292,9 +288,8 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   showRecon: true,
   showLand: false,
   showSst: false,
-  // Wind swath and the consensus envelope are the products underwriters
-  // open a live storm to see. They used to default off, so a successful
-  // load still looked like "nothing drew".
+  // The wind swath is what underwriters open a live storm to see. It
+  // used to default off, so a successful load still looked like "nothing drew".
   showWindField: true,
   showForecastCone: true,
   showSurge: false,
@@ -334,8 +329,6 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     "ecmwf_mean",
   ]),
   showModelTracks: false,
-  showEnsembleEnvelope: true,
-  showAiEnvelope: false,
   ensembleRisk: null,
   ensembleRiskStatus: "idle" as const,
   showStrikeProbability: false,

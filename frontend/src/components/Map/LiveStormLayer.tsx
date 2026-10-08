@@ -1032,25 +1032,31 @@ export function LiveStormLayer({ map }: Props) {
       const paintExpr = (
         isShearView ? SHEAR_COLOR : isDiffView ? WIND_DIFF_COLOR : WIND_MAP_COLOR
       ) as unknown as never;
+      // Shear is a context field. Keep it lighter than the 10 m wind so
+      // the official track and the coast stay readable through it.
+      const fillOpacity = isShearView ? 0.28 : 0.5;
       ensureLayer(map, LAYER_WIND_MAP_FILL, {
         id: LAYER_WIND_MAP_FILL, type: "fill", source: SRC_WIND_MAP,
         paint: {
           "fill-color": paintExpr,
-          "fill-opacity": 0.5,
+          "fill-opacity": fillOpacity,
           "fill-outline-color": "rgba(0,0,0,0)",
         },
       }, "county-line");
       if (map.getLayer(LAYER_WIND_MAP_FILL)) {
         map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-color", paintExpr);
+        map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-opacity", fillOpacity);
       }
-      // Same north-pointing glyph as the hunter arrows. Direction is
-      // meteorological FROM, so +180 points downshear.
+      // Same north-pointing glyph as the hunter arrows, drawn small.
+      // A cell-sized arrow hides the track. Direction is meteorological
+      // FROM, so +180 points downshear.
       ensureWindArrow(map);
       const shearArrowSize = [
         "interpolate", ["linear"], ["zoom"],
-        4, 0.85,
-        6, 1.15,
-        8, 1.45,
+        3, 0.26,
+        5, 0.38,
+        7, 0.55,
+        9, 0.75,
       ] as unknown as never;
       ensureLayer(map, LAYER_WIND_SHEAR_ARROW, {
         id: LAYER_WIND_SHEAR_ARROW, type: "symbol", source: SRC_WIND_MAP,
@@ -1064,18 +1070,18 @@ export function LiveStormLayer({ map }: Props) {
           "icon-ignore-placement": true,
         },
         paint: {
-          "icon-color": "#020617",
+          "icon-color": "#0f172a",
           "icon-halo-color": "#ffffff",
-          "icon-halo-width": 1.8,
-          "icon-opacity": 1,
+          "icon-halo-width": 0.6,
+          "icon-opacity": 0.8,
         },
       });
       if (map.getLayer(LAYER_WIND_SHEAR_ARROW)) {
         map.setLayoutProperty(LAYER_WIND_SHEAR_ARROW, "icon-size", shearArrowSize);
-        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-color", "#020617");
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-color", "#0f172a");
         map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-halo-color", "#ffffff");
-        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-halo-width", 1.8);
-        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-opacity", 1);
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-halo-width", 0.6);
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-opacity", 0.8);
       }
 
       // Contributor observation points. Completely invisible unless the

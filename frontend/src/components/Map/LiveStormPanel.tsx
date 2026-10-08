@@ -772,8 +772,6 @@ export function LiveStormPanel() {
 
             <ChipGroup label="Model ensemble">
               <SmartChip store={store} status={chipStatus.showModelTracks} k="showModelTracks" label="Model tracks" hint="GEFS + ECMWF-ENS + AI spaghetti" color="#a855f7" />
-              <SmartChip store={store} status={chipStatus.showEnsembleEnvelope} k="showEnsembleEnvelope" label="Consensus envelope" hint="Convex hull of every ensemble member" color="#7f1d1d" />
-              <SmartChip store={store} status={chipStatus.showAiEnvelope} k="showAiEnvelope" label="AI-only envelope" hint="GraphCast + GenCast + AIFS + FourCastNet + Pangu" color="#a855f7" />
               <SmartChip store={store} status={chipStatus.showStrikeProbability} k="showStrikeProbability" label="Strike probability" hint="Not the NHC cone. Share of GEFS + ECMWF-ENS + AI a-deck tracks that pass within the threshold of a county" color="#dc2626" />
             </ChipGroup>
 
@@ -795,8 +793,8 @@ export function LiveStormPanel() {
             </ChipGroup>
 
             <ChipGroup label="Imagery">
-              <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image for this storm. GOES, Himawari, or Meteosat. Off until turned on." color="#0369a1" />
-              <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes. Does not cover Japan or Europe. Off until turned on." color="#ca8a04" />
+              <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image. GOES is true color. Himawari and Meteosat are infrared. Off until turned on." color="#0369a1" />
+              <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes. Does not cover Japan or Europe. A size-limit tile is left blank. Off until turned on." color="#ca8a04" />
               <ImageryStatusLine />
             </ChipGroup>
           </div>
@@ -964,34 +962,23 @@ function useChipAvailability(
         };
   }
 
-  // Model ensemble (all four chips key off the same a-deck fetch)
+  // Model tracks and strike probability share the a-deck fetch.
+  // The hull on that response is only a "enough members" signal. It is
+  // not drawn.
   if (tracksLoaded && modelTracks) {
     const hasTracks = modelTracks.tracks.length > 0;
-    const hasEnvelope = modelTracks.ensembleEnvelope !== null;
-    const hasAiEnvelope = modelTracks.aiEnvelope !== null;
+    const hasMembers = modelTracks.ensembleEnvelope !== null;
     out.showModelTracks = hasTracks
       ? { available: true }
       : {
           available: false,
           reason: "No a-deck rows for this system yet. Try again after the next NHC init cycle.",
         };
-    out.showEnsembleEnvelope = hasEnvelope
-      ? { available: true }
-      : {
-          available: false,
-          reason: "Not enough ensemble members (GEFS + ECMWF-ENS + AI) returned tracks to build a consensus envelope.",
-        };
-    out.showAiEnvelope = hasAiEnvelope
-      ? { available: true }
-      : {
-          available: false,
-          reason: "No AI models (GraphCast, GenCast, AIFS, FourCastNet, Pangu) present in this cycle's a-deck.",
-        };
     // Strike probability requires ensemble members. We don't know for
     // certain whether any coastal counties will be within threshold until
     // /ensemble-risk runs, but if there's no ensemble at all, that's a
     // definite no.
-    out.showStrikeProbability = hasEnvelope
+    out.showStrikeProbability = hasMembers
       ? { available: true }
       : {
           available: false,
@@ -1000,8 +987,6 @@ function useChipAvailability(
   } else if (store.modelTracksStatus === "error") {
     const reason = "Model a-deck feed unreachable.";
     out.showModelTracks = { available: false, reason };
-    out.showEnsembleEnvelope = { available: false, reason };
-    out.showAiEnvelope = { available: false, reason };
     out.showStrikeProbability = { available: false, reason };
   }
 
@@ -1092,14 +1077,6 @@ function useChipAvailability(
     out.showModelTracks = {
       available: false,
       reason: "No public western Pacific a-deck, so there is no ensemble spaghetti.",
-    };
-    out.showEnsembleEnvelope = {
-      available: false,
-      reason: "No ensemble members for a JMA typhoon.",
-    };
-    out.showAiEnvelope = {
-      available: false,
-      reason: "No ensemble members for a JMA typhoon.",
     };
     out.showStrikeProbability = {
       available: false,
@@ -2092,10 +2069,7 @@ function ModelTracksSection() {
       {tracks && tracks.tracks.length > 0 && (
         <>
           <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>
-            Init cycle {tracks.initCycle} · {tracks.tracks.length} tracks ·{" "}
-            {tracks.ensembleEnvelope
-              ? `${tracks.ensembleEnvelope.membersUsed}-member envelope`
-              : "envelope: n/a"}
+            Init cycle {tracks.initCycle} · {tracks.tracks.length} tracks
           </div>
           <div style={{ display: "grid", gap: 2 }}>
             {tracks.families.map((f) => {

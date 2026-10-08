@@ -13,11 +13,12 @@ describe("live storm reload", () => {
     useLiveStormStore.getState().clear();
   });
 
-  it("shows the wind field and consensus envelope by default", () => {
+  it("shows the wind field and cone by default", () => {
     const s = useLiveStormStore.getState();
     expect(s.showWindField).toBe(true);
     expect(s.showForecastCone).toBe(true);
-    expect(s.showEnsembleEnvelope).toBe(true);
+    expect(s.showModelTracks).toBe(false);
+    expect(s.showStrikeProbability).toBe(false);
     expect(s.showSatellite).toBe(false);
     expect(s.showLightning).toBe(false);
     expect(s.showMyLocation).toBe(false);
