@@ -648,10 +648,11 @@ export function Methodology() {
             The control is only offered in GFS and ECMWF mode, and it
             stays off until turned on. It uses the same forecast hours as
             the surface slider. The fill is shear magnitude in knots,
-            drawn lighter than the 10 m wind so the official track shows
-            through. The arrows are small and point <b>downshear</b>: the
-            direction stored is the meteorological from-direction, and the
-            map rotates it 180°.
+            drawn lighter than the 10 m wind so the official track and the
+            10 m wind particles show through. The arrows point <b>downshear</b>{" "}
+            and are spaced about 2 degrees apart, so they do not cover the
+            circulation. The direction stored is the meteorological
+            from-direction, and the map rotates it 180°.
           </li>
           <li>
             Under 10 kt is generally favorable for a tropical cyclone,
@@ -663,8 +664,8 @@ export function Methodology() {
             An hour missing either level is a gap. Zero knots means the
             two levels agree, not that a level failed to load. While the
             shear request is still loading or has failed, the 10 m wind
-            stays up. Wind particles hide once shear is the painted field,
-            because shear is not a flow.
+            stays up. The 10 m wind particles stay on for that same hour,
+            so the circulation still marks the storm center under the shear.
           </li>
         </ul>
         <Sources>

@@ -17,6 +17,7 @@
 import type { GeoJSONSource, Map as MbMap } from "mapbox-gl";
 import { useEffect, useRef } from "react";
 import { shearViewActive, useLiveStormStore } from "../../state/liveStorm";
+import { placeWindParticlesUnderTrack } from "./WindParticleLayer";
 import type { JmaOverlay } from "../../api/live";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
 import { segmentsAvoidingAntimeridian } from "./trackSplit";
@@ -656,6 +657,19 @@ function materializeFrame(
   }));
 }
 
+/** One shear arrow about every this many degrees. A glyph on every 0.5°
+ *  cell carpets the 10 m circulation, so the storm center disappears. */
+const SHEAR_ARROW_SPACING_DEG = 2;
+
+function keepShearArrow(lat: number, lon: number, stepDeg: number): boolean {
+  const step = stepDeg > 0 ? stepDeg : 0.5;
+  const stride = Math.max(1, Math.round(SHEAR_ARROW_SPACING_DEG / step));
+  const mod = (n: number, m: number) => ((n % m) + m) % m;
+  const i = Math.round(lat / step);
+  const j = Math.round(lon / step);
+  return mod(i, stride) === 0 && mod(j, stride) === 0;
+}
+
 /** Shear frame for the slider hour. Null wind is a gap, not calm shear. */
 function materializeShearFrame(
   grid: import("../../api/live").WindModelGrid | null,
@@ -666,6 +680,7 @@ function materializeShearFrame(
     ?? grid.frames.reduce((best, f) =>
       Math.abs(f.hour - hour) < Math.abs(best.hour - hour) ? f : best,
     );
+  const step = grid.stepDeg || 0.5;
   const cells: WindMapCellProps[] = [];
   grid.cells.forEach((c, i) => {
     const kt = frame.windKt[i];
@@ -676,7 +691,7 @@ function materializeShearFrame(
       lon: c.lon,
       windKt: kt,
       windDirDeg: dir,
-      hasArrow: dir != null,
+      hasArrow: dir != null && keepShearArrow(c.lat, c.lon, step),
       field: "shear",
     });
   });
@@ -1033,8 +1048,8 @@ export function LiveStormLayer({ map }: Props) {
         isShearView ? SHEAR_COLOR : isDiffView ? WIND_DIFF_COLOR : WIND_MAP_COLOR
       ) as unknown as never;
       // Shear is a context field. Keep it lighter than the 10 m wind so
-      // the official track and the coast stay readable through it.
-      const fillOpacity = isShearView ? 0.28 : 0.5;
+      // the official track, the coast, and the 10 m particles stay readable.
+      const fillOpacity = isShearView ? 0.18 : 0.5;
       ensureLayer(map, LAYER_WIND_MAP_FILL, {
         id: LAYER_WIND_MAP_FILL, type: "fill", source: SRC_WIND_MAP,
         paint: {
@@ -1073,7 +1088,7 @@ export function LiveStormLayer({ map }: Props) {
           "icon-color": "#0f172a",
           "icon-halo-color": "#ffffff",
           "icon-halo-width": 0.6,
-          "icon-opacity": 0.8,
+          "icon-opacity": 0.55,
         },
       });
       if (map.getLayer(LAYER_WIND_SHEAR_ARROW)) {
@@ -1081,7 +1096,7 @@ export function LiveStormLayer({ map }: Props) {
         map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-color", "#0f172a");
         map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-halo-color", "#ffffff");
         map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-halo-width", 0.6);
-        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-opacity", 0.8);
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-opacity", 0.55);
       }
 
       // Contributor observation points. Completely invisible unless the
@@ -1476,6 +1491,9 @@ export function LiveStormLayer({ map }: Props) {
       moveToTop(map, LAYER_RECON_TEXT);
       moveToTop(map, LAYER_VORTEX);
       moveToTop(map, LAYER_VORTEX_TEXT);
+      // Arrows were just moved above the particle layer. Put the 10 m
+      // particles back on top of the shear, under the official track.
+      if (isShearView) placeWindParticlesUnderTrack(map);
 
       // ── Visibility — driven purely by the panel toggles. ──
       setVis(map, LAYER_SST, showSst);

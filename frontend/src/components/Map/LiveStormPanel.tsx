@@ -1503,7 +1503,7 @@ function WindMapModeSelector({
       {shearMode && (
         <button
           type="button"
-          title="Vector difference of the 200 hPa and 850 hPa winds at the slider hour. Arrow points downshear. Under 10 kt is generally favorable; over 20 kt is hostile."
+          title="Vector difference of the 200 hPa and 850 hPa winds at the slider hour. Arrow points downshear. 10 m wind particles stay on so the storm center stays visible. Under 10 kt is generally favorable; over 20 kt is hostile."
           onClick={() => useLiveStormStore.getState().setShowWindShear(!store.showWindShear)}
           style={{
             all: "unset",
