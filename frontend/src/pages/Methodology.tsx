@@ -722,9 +722,9 @@ export function Methodology() {
         </Sources>
       </Section>
 
-      <Section id="place-forecast" title="Location, satellite, and lightning">
+      <Section id="place-forecast" title="Location, satellite, lightning, and radar">
         <p>
-          Three optional layers on the live-storm panel. All of them stay
+          Four optional layers on the live-storm panel. All of them stay
           off until asked. None of them is a landfall probability.
         </p>
         <SubHead>My location</SubHead>
@@ -811,6 +811,35 @@ export function Methodology() {
             is not drawn on the map. Flashes that were on a refused tile
             are missing until a later refresh. The same blanking applies
             to a Meteosat tile.
+          </li>
+        </ul>
+        <SubHead>Doppler radar</SubHead>
+        <ul>
+          <li>
+            Composite base reflectivity from the{" "}
+            <a href="https://mesonet.agron.iastate.edu/docs/nexrad_composites/" target="_blank" rel="noreferrer">
+              Iowa Environmental Mesonet
+            </a>
+            . The mosaic is NWS NEXRAD N0Q, the lowest tilt of WSR-88D
+            Doppler radar, with the baked color ramp for reflectivity in
+            dBZ. It is not a rainfall total and it is not a forecast.
+          </li>
+          <li>
+            Off until the chip is turned on. The mosaic updates about
+            every 5 minutes. The map asks again about every 10 minutes.
+            Loop last hour fades forward on the same clock as the
+            satellite and lightning, then jumps back to the start. It
+            does not step backward. Radar alone uses 10 minute steps
+            back to 50 minutes, which is as far as that stride stays
+            inside the live mosaic.
+          </li>
+          <li>
+            The picture sits above the satellite and under the lightning.
+            Clear air is transparent, so the satellite still shows
+            through. The mosaic covers the continental US, the Gulf, and
+            nearby Atlantic waters, including Puerto Rico. Japan, Hawaii,
+            Alaska, and Europe are outside it, and the map draws nothing
+            rather than inventing echoes.
           </li>
         </ul>
       </Section>
@@ -975,7 +1004,7 @@ function TOC() {
     ["hurricane-impact", "Hurricane impact engine"],
     ["live-storms", "Live-storm overlay"],
     ["wind-heatmap", "Interpolated wind heatmap"],
-    ["place-forecast", "Location, satellite, and lightning"],
+    ["place-forecast", "Location, satellite, lightning, and radar"],
     ["hazard-grids", "Hazard climatology grids"],
     ["layers-engine", "Layer / XOL engine"],
     ["observability", "Observability & edge behaviour"],

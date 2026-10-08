@@ -1,6 +1,6 @@
 /**
- * Geostationary satellite and GOES-East lightning for the live-storm map.
- * Both stay off until the panel chips are turned on.
+ * Geostationary satellite, NEXRAD composite, and GOES-East lightning.
+ * All three stay off until the panel chips are turned on.
  *
  * GOES and Himawari tiles are NASA GIBS. Meteosat and GLM stay on SSEC
  * RealEarth, and a tile that is the "Size limit exceeded" notice is
@@ -29,6 +29,7 @@ import {
   gibsTilesAt,
   glmCovers,
   imageryFrameKey,
+  loopFrameMs,
   loopHasMotion,
   loopRestarts,
   productTimes,
@@ -38,15 +39,22 @@ import {
   type ImageryLoopFrame,
   type SatChoice,
 } from "./satelliteChoice";
+import { radarAgeBetween, radarCovers, radarLoopAges, radarTileUrl } from "./radarChoice";
 
 const SAT_SRC = "live-satellite";
 const SAT_LAYER = "live-satellite";
 const GLM_SRC = "live-lightning";
 const GLM_LAYER = "live-lightning";
+const RADAR_SRC = "live-radar";
+const RADAR_LAYER = "live-radar";
 /** Two buffers so the visible scan stays up while the next one loads. */
 const SAT_LOOP = [
   { src: "live-satellite-a", layer: "live-satellite-a" },
   { src: "live-satellite-b", layer: "live-satellite-b" },
+] as const;
+const RADAR_LOOP = [
+  { src: "live-radar-a", layer: "live-radar-a" },
+  { src: "live-radar-b", layer: "live-radar-b" },
 ] as const;
 const GLM_LOOP = [
   { src: "live-lightning-a", layer: "live-lightning-a" },
@@ -237,6 +245,7 @@ function retile(map: MbMap, src: string, layer: string, spec: RasterSpec, opacit
 
 function dropLoop(map: MbMap): void {
   for (const slot of SAT_LOOP) drop(map, slot.src, slot.layer);
+  for (const slot of RADAR_LOOP) drop(map, slot.src, slot.layer);
   for (const slot of GLM_LOOP) drop(map, slot.src, slot.layer);
 }
 
@@ -254,9 +263,9 @@ function orderBottomToTop(map: MbMap, ids: readonly string[]): void {
   }
 }
 
-/** Satellite under lightning, both under the first live-storm layer. */
+/** Satellite under radar under lightning, all under the first live-storm layer. */
 function orderImagery(map: MbMap): void {
-  orderBottomToTop(map, [SAT_LAYER, GLM_LAYER]);
+  orderBottomToTop(map, [SAT_LAYER, RADAR_LAYER, GLM_LAYER]);
 }
 
 /** Fixed stack. The top slot fades; the bottom slot stays put, so nothing is reordered mid-loop. */
@@ -264,15 +273,19 @@ function loopLayerOrder(): string[] {
   return [
     SAT_LOOP[0]?.layer ?? "",
     SAT_LOOP[1]?.layer ?? "",
+    RADAR_LOOP[0]?.layer ?? "",
+    RADAR_LOOP[1]?.layer ?? "",
     GLM_LOOP[0]?.layer ?? "",
     GLM_LOOP[1]?.layer ?? "",
   ];
 }
 
 interface PlayStep {
-  frame: ImageryLoopFrame;
+  frame: ImageryLoopFrame | null;
   satTiles: string | null;
   glmTiles: string | null;
+  radarTiles: string | null;
+  radarAgeMin: number | null;
 }
 
 function waitForSources(
@@ -366,6 +379,7 @@ function loopSatelliteTiles(sat: SatChoice, frame: ImageryLoopFrame): string | n
 export function LiveImageryLayer({ map }: { map: MbMap | null }) {
   const showSat = useLiveStormStore((s) => s.showSatellite);
   const showLight = useLiveStormStore((s) => s.showLightning);
+  const showRadar = useLiveStormStore((s) => s.showRadar);
   const imageryLoop = useLiveStormStore((s) => s.imageryLoop);
   const data = useLiveStormStore((s) => s.data);
   const [stampSat, setStampSat] = useState<string | null>(null);
@@ -375,13 +389,14 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
   const [glmTimes, setGlmTimes] = useState<string[]>([]);
   const [tick, setTick] = useState(0);
   const [frameIdx, setFrameIdx] = useState(0);
+  const [radarAge, setRadarAge] = useState<number | null>(null);
   const [view, setView] = useState<{ lat: number; lon: number } | null>(null);
 
   useEffect(() => {
-    if (!showSat && !showLight) return;
+    if (!showSat && !showLight && !showRadar) return;
     const id = window.setInterval(() => setTick((n) => n + 1), 10 * 60 * 1000);
     return () => window.clearInterval(id);
-  }, [showSat, showLight]);
+  }, [showSat, showLight, showRadar]);
 
   useEffect(() => {
     if (!map) return;
@@ -390,18 +405,19 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       setView({ lat: c.lat, lon: c.lng });
     };
     read();
-    if (data || (!showSat && !showLight)) return;
+    if (data || (!showSat && !showLight && !showRadar)) return;
     map.on("moveend", read);
     return () => {
       map.off("moveend", read);
     };
-  }, [map, data, showSat, showLight]);
+  }, [map, data, showSat, showLight, showRadar]);
 
   const storm = anchorOf(data);
   const lat = storm?.lat ?? view?.lat ?? 25;
   const lon = storm?.lon ?? view?.lon ?? -75;
   const sat = satelliteFor(lon);
   const covered = glmCovers(lat, lon);
+  const radarHere = radarCovers(lat, lon);
 
   useEffect(() => {
     if (!showSat || sat.host !== "realearth" || !sat.product) {
@@ -485,7 +501,8 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       glmStamps: showLight && covered ? glmTimes : [],
     });
   }, [imageryLoop, showSat, showLight, covered, sat.host, gibsTime, satTimes, glmTimes]);
-  const playing = imageryLoop && loopHasMotion(frames);
+  const radarOn = showRadar && radarHere;
+  const playing = imageryLoop && (loopHasMotion(frames) || (radarOn && !showSat && !showLight));
   const frame = playing ? (frames[frameIdx] ?? frames[0] ?? null) : null;
   const framesRef = useRef(frames);
   framesRef.current = frames;
@@ -497,6 +514,7 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
   const filterSatNotices = sat.host === "realearth";
   const stillSatTiles = satelliteTiles(sat, stampSat, tick);
   const stillGlmTiles = tileTemplate(GLM_PRODUCT, stampGlm);
+  const stillRadarTiles = radarTileUrl(0, tick);
   const playSteps = useMemo(() => {
     if (!playing) return [];
     const choice: SatChoice = {
@@ -509,15 +527,38 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       label: "",
       note: "",
     };
-    return collapseRepeatFrames(frames).map((step) => ({
-      frame: step,
-      satTiles: showSat ? loopSatelliteTiles(choice, step) : null,
-      glmTiles: showLight && covered && step.glmStamp
-        ? tileTemplate(GLM_PRODUCT, step.glmStamp)
-        : null,
+    if (loopHasMotion(frames)) {
+      const collapsed = collapseRepeatFrames(frames);
+      const times = collapsed.map((step) => loopFrameMs(step));
+      const newest = times.reduce<number>(
+        (max, ms) => (ms != null && ms > max ? ms : max),
+        Number.NEGATIVE_INFINITY,
+      );
+      return collapsed.map((step, i) => {
+        const when = times[i];
+        const age = radarOn && when != null && Number.isFinite(newest)
+          ? radarAgeBetween(newest, when)
+          : 0;
+        return {
+          frame: step,
+          satTiles: showSat ? loopSatelliteTiles(choice, step) : null,
+          glmTiles: showLight && covered && step.glmStamp
+            ? tileTemplate(GLM_PRODUCT, step.glmStamp)
+            : null,
+          radarTiles: radarOn ? radarTileUrl(age, tick) : null,
+          radarAgeMin: radarOn ? age : null,
+        };
+      });
+    }
+    return radarLoopAges().map((age) => ({
+      frame: null,
+      satTiles: null,
+      glmTiles: null,
+      radarTiles: radarTileUrl(age, tick),
+      radarAgeMin: age,
     }));
   }, [
-    playing, frames, showSat, showLight, covered,
+    playing, frames, showSat, showLight, covered, radarOn, tick,
     satHost, satTemplate, satProduct, satMaxzoom, satAttribution,
   ]);
 
@@ -534,6 +575,16 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
         });
       } else {
         drop(map, SAT_SRC, SAT_LAYER);
+      }
+      if (showRadar && radarHere) {
+        upsert(map, RADAR_SRC, RADAR_LAYER, {
+          tiles: stillRadarTiles,
+          maxzoom: 7,
+          attribution: "Iowa Environmental Mesonet",
+          filterNotices: false,
+        });
+      } else {
+        drop(map, RADAR_SRC, RADAR_LAYER);
       }
       if (showLight && covered) {
         upsert(map, GLM_SRC, GLM_LAYER, {
@@ -560,6 +611,9 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
     covered,
     stillSatTiles,
     stillGlmTiles,
+    stillRadarTiles,
+    showRadar,
+    radarHere,
     satMaxzoom,
     satAttribution,
     filterSatNotices,
@@ -587,6 +641,17 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       } else if (satSlot) {
         drop(map, satSlot.src, satSlot.layer);
       }
+      const radarSlot = RADAR_LOOP[slot];
+      if (radarSlot && step.radarTiles) {
+        created = retile(map, radarSlot.src, radarSlot.layer, {
+          tiles: step.radarTiles,
+          maxzoom: 7,
+          attribution: "Iowa Environmental Mesonet",
+          filterNotices: false,
+        }, opacity) || created;
+      } else if (radarSlot) {
+        drop(map, radarSlot.src, radarSlot.layer);
+      }
       if (glmSlot && step.glmTiles) {
         created = retile(map, glmSlot.src, glmSlot.layer, {
           tiles: step.glmTiles,
@@ -602,10 +667,9 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
 
     const topLayers = (): string[] => {
       const out: string[] = [];
-      const sat = SAT_LOOP[TOP]?.layer;
-      const glm = GLM_LOOP[TOP]?.layer;
-      if (sat && map.getLayer(sat)) out.push(sat);
-      if (glm && map.getLayer(glm)) out.push(glm);
+      for (const layer of [SAT_LOOP[TOP]?.layer, RADAR_LOOP[TOP]?.layer, GLM_LOOP[TOP]?.layer]) {
+        if (layer && map.getLayer(layer)) out.push(layer);
+      }
       return out;
     };
 
@@ -629,6 +693,8 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
     });
 
     const publish = (step: PlayStep) => {
+      setRadarAge((cur) => (cur === step.radarAgeMin ? cur : step.radarAgeMin));
+      if (!step.frame) return;
       const key = imageryFrameKey(step.frame);
       const idx = framesRef.current.findIndex((item) => imageryFrameKey(item) === key);
       if (idx >= 0) setFrameIdx((cur) => (cur === idx ? cur : idx));
@@ -654,6 +720,7 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
           if (!step) return;
           const incoming: string[] = [];
           if (step.satTiles && SAT_LOOP[slot]) incoming.push(SAT_LOOP[slot].src);
+          if (step.radarTiles && RADAR_LOOP[slot]) incoming.push(RADAR_LOOP[slot].src);
           if (step.glmTiles && GLM_LOOP[slot]) incoming.push(GLM_LOOP[slot].src);
           await waitForSources(map, incoming, LOOP_PRELOAD_MS, cancelled, () => {
             // The top slot is invisible. The bottom slot is covered while the top is opaque.
@@ -692,15 +759,16 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
   }, [map, playing, playSteps, satMaxzoom, satAttribution, filterSatNotices]);
 
   useEffect(() => {
-    if (!showSat && !showLight) {
+    if (!showSat && !showLight && !showRadar) {
       if (useLiveStormStore.getState().imageryStatus) {
         useLiveStormStore.getState().setImageryStatus(null);
       }
       return;
     }
+    const sharedLoop = playing && loopHasMotion(frames);
     const loopNote = !imageryLoop
       ? ""
-      : playing
+      : sharedLoop
         ? " Looping forward through the last hour."
         : frames.length > 0
           ? " One scan in the last hour."
@@ -719,12 +787,27 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       : covered
         ? `GOES-East GLM · ${glmWhen}.${loopNote} Optical flashes, not confirmed ground strikes.`
         : "GOES-East GLM does not cover this location. No lightning is drawn.";
+    const radarPlaying = playing && radarOn && radarAge != null;
+    const radarNote = radarPlaying
+      ? (sharedLoop
+        ? " Looping forward through the last hour."
+        : " Looping forward, then jumping back about 50 minutes.")
+      : "";
+    const radarWhen = radarPlaying
+      ? (radarAge === 0 ? "latest" : `${radarAge} min ago`)
+      : "latest";
+    const radar = !showRadar
+      ? null
+      : !radarHere
+        ? "NEXRAD does not cover this location. No radar is drawn."
+        : `NEXRAD · ${radarWhen}.${radarNote} Composite base reflectivity from the Iowa Environmental Mesonet.`;
     const cur = useLiveStormStore.getState().imageryStatus;
-    if (cur?.satellite === satellite && cur?.lightning === lightning) return;
-    useLiveStormStore.getState().setImageryStatus({ satellite, lightning });
+    if (cur?.satellite === satellite && cur?.lightning === lightning && cur?.radar === radar) return;
+    useLiveStormStore.getState().setImageryStatus({ satellite, lightning, radar });
   }, [
-    showSat, showLight, imageryLoop, playing, frames.length, frame,
+    showSat, showLight, showRadar, imageryLoop, playing, frames, frame,
     sat.host, sat.label, sat.note, stampSat, stampGlm, gibsTime, covered,
+    radarHere, radarOn, radarAge,
   ]);
 
   useEffect(() => {
@@ -732,6 +815,7 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       useLiveStormStore.getState().setImageryStatus(null);
       if (!map) return;
       drop(map, SAT_SRC, SAT_LAYER);
+      drop(map, RADAR_SRC, RADAR_LAYER);
       drop(map, GLM_SRC, GLM_LAYER);
       dropLoop(map);
     };

@@ -21,6 +21,7 @@ describe("live storm reload", () => {
     expect(s.showStrikeProbability).toBe(false);
     expect(s.showSatellite).toBe(false);
     expect(s.showLightning).toBe(false);
+    expect(s.showRadar).toBe(false);
     expect(s.imageryLoop).toBe(false);
     expect(s.showMyLocation).toBe(false);
     expect(s.hideExposures).toBe(false);

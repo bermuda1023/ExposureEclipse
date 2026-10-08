@@ -263,6 +263,15 @@ export function buildImageryLoop(input: {
   }));
 }
 
+/** Epoch ms of one loop picture. Null when the frame has no scan time. */
+export function loopFrameMs(frame: ImageryLoopFrame): number | null {
+  if (frame.gibsIso) {
+    const ms = Date.parse(frame.gibsIso);
+    if (Number.isFinite(ms)) return ms;
+  }
+  return stampToMs(frame.satStamp) ?? stampToMs(frame.glmStamp);
+}
+
 /** Identity of one loop picture. Repeated scans share a key. */
 export function imageryFrameKey(frame: ImageryLoopFrame): string {
   return `${frame.gibsIso ?? ""}|${frame.satStamp ?? ""}|${frame.glmStamp ?? ""}`;

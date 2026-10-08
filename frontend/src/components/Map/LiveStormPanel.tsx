@@ -786,6 +786,7 @@ export function LiveStormPanel() {
             <ChipGroup label="Imagery">
               <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image, refreshed about every 10 minutes. Loop last hour plays forward, then jumps back to the start. GOES is true color. Himawari and Meteosat are infrared. Off until turned on." color="#0369a1" />
               <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes, refreshed about every 10 minutes. Loop last hour dissolves on the same clock as the satellite. Does not cover Japan or Europe. A size-limit tile is left blank. Off until turned on." color="#ca8a04" />
+              <SmartChip store={store} status={chipStatus.showRadar} k="showRadar" label="Radar" hint="NEXRAD composite base reflectivity for the continental US and nearby waters, about every 5 minutes. Loop last hour plays forward, then jumps back. Radar alone reaches about 50 minutes. Does not cover Japan, Hawaii, Alaska, or Europe. Off until turned on." color="#15803d" />
               <ImageryLoopButton />
               <ImageryStatusLine />
             </ChipGroup>
@@ -1075,12 +1076,13 @@ function useChipAvailability(
 function ImageryLoopButton() {
   const showSat = useLiveStormStore((s) => s.showSatellite);
   const showLight = useLiveStormStore((s) => s.showLightning);
+  const showRadar = useLiveStormStore((s) => s.showRadar);
   const on = useLiveStormStore((s) => s.imageryLoop);
-  if (!showSat && !showLight) return null;
+  if (!showSat && !showLight && !showRadar) return null;
   return (
     <button
       type="button"
-      title="Plays the last hour forward. At the latest scan it jumps back to an hour ago and starts again. GOES and Himawari only photograph about every 10 minutes, so the loop does not invent pictures in between. Off keeps the latest scan."
+      title="Plays the last hour forward. At the latest scan it jumps back to an hour ago and starts again. GOES and Himawari only photograph about every 10 minutes, so the loop does not invent pictures in between. Radar follows that clock when satellite or lightning is also on. Radar alone steps about every 10 minutes back to 50 minutes, then jumps back. Off keeps the latest scan."
       onClick={() => useLiveStormStore.getState().setImageryLoop(!on)}
       style={{
         all: "unset",
@@ -1104,8 +1106,9 @@ function ImageryLoopButton() {
 function ImageryStatusLine() {
   const showSat = useLiveStormStore((s) => s.showSatellite);
   const showLight = useLiveStormStore((s) => s.showLightning);
+  const showRadar = useLiveStormStore((s) => s.showRadar);
   const status = useLiveStormStore((s) => s.imageryStatus);
-  if (!showSat && !showLight) return null;
+  if (!showSat && !showLight && !showRadar) return null;
   return (
     <div
       style={{
@@ -1118,6 +1121,7 @@ function ImageryStatusLine() {
       }}
     >
       {showSat && <div>{status?.satellite ?? "Loading satellite…"}</div>}
+      {showRadar && <div>{status?.radar ?? "Loading radar…"}</div>}
       {showLight && <div>{status?.lightning ?? "Checking lightning coverage…"}</div>}
     </div>
   );

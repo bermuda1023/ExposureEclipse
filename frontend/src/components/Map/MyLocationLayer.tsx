@@ -18,6 +18,7 @@ export function MyLocationLayer({ map }: { map: MbMap | null }) {
   const stormId = useLiveStormStore((s) => s.data?.storm.stormId ?? null);
   const showSat = useLiveStormStore((s) => s.showSatellite);
   const showLight = useLiveStormStore((s) => s.showLightning);
+  const showRadar = useLiveStormStore((s) => s.showRadar);
   const flown = useRef(0);
 
   useEffect(() => {
@@ -84,7 +85,7 @@ export function MyLocationLayer({ map }: { map: MbMap | null }) {
     return () => {
       map.off("style.load", apply);
     };
-  }, [map, show, place, stormId, showSat, showLight]);
+  }, [map, show, place, stormId, showSat, showLight, showRadar]);
 
   useEffect(() => {
     if (!map || !show || !place || focus === 0 || focus === flown.current) return;

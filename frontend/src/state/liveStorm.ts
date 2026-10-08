@@ -126,12 +126,17 @@ interface LiveStormState {
   /** Incremented by the "center map" button. 0 never flies. */
   myLocationFocus: number;
 
-  // Geostationary picture and GOES-East lightning. Both off until asked.
+  // Geostationary picture, NEXRAD, and GOES-East lightning. Off until asked.
   showSatellite: boolean;
   showLightning: boolean;
-  /** Replay the last hour of satellite and lightning. Off keeps the latest scan. */
+  showRadar: boolean;
+  /** Replay the last hour of satellite, radar, and lightning. Off keeps the latest scan. */
   imageryLoop: boolean;
-  imageryStatus: { satellite: string | null; lightning: string | null } | null;
+  imageryStatus: {
+    satellite: string | null;
+    lightning: string | null;
+    radar: string | null;
+  } | null;
 
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
@@ -188,7 +193,11 @@ interface LiveStormState {
   ) => void;
   requestMyLocationFocus: () => void;
   setImageryStatus: (
-    s: { satellite: string | null; lightning: string | null } | null,
+    s: {
+      satellite: string | null;
+      lightning: string | null;
+      radar: string | null;
+    } | null,
   ) => void;
   setImageryLoop: (v: boolean) => void;
   setHideExposures: (v: boolean) => void;
@@ -270,6 +279,7 @@ export type ToggleKey =
   | "showGTWO"
   | "showSatellite"
   | "showLightning"
+  | "showRadar"
   | "hideExposures";
 
 export const useLiveStormStore = create<LiveStormState>((set, get) => ({
@@ -347,6 +357,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   myLocationFocus: 0,
   showSatellite: false,
   showLightning: false,
+  showRadar: false,
   imageryLoop: false,
   imageryStatus: null,
   hideExposures: false,
@@ -414,6 +425,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     // up after ✕ would hide the only control that turns them off.
     showSatellite: false,
     showLightning: false,
+    showRadar: false,
     imageryLoop: false,
     showMyLocation: false,
     imageryStatus: null,
