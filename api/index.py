@@ -30,14 +30,4 @@ os.environ.setdefault(
     "http://localhost:5173,http://localhost:4173,https://*.vercel.app",
 )
 
-# Stdout is the only stream the platform keeps when the process dies on boot.
-print("peril-vista api boot", flush=True)
-try:
-    from app.main import app  # noqa: E402  (must come after sys.path setup)
-except Exception:
-    import traceback
-
-    traceback.print_exc(file=sys.stdout)
-    sys.stdout.flush()
-    raise
-print("peril-vista api ready", flush=True)
+from app.main import app  # noqa: E402  (must come after sys.path setup)
