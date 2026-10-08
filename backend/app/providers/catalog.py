@@ -89,6 +89,9 @@ class JsonCatalogProvider(ExposureDataProvider):
         self._fact_files: set[str] = set()
         if facts_dir.exists():
             self._fact_files = {p.stem for p in facts_dir.glob("*.json")}
+            self._fact_files.update(
+                p.name[: -len(".json.gz")] for p in facts_dir.glob("*.json.gz")
+            )
 
     # ── subclass hooks ──────────────────────────────────────────
 
@@ -152,10 +155,18 @@ class JsonCatalogProvider(ExposureDataProvider):
         return ids
 
     def _load_mock_fact_file(self, dataset_id: str) -> list[ExposureFactNormalized]:
-        fp = self._root / "exposure_facts" / f"{dataset_id}.json"
-        if not fp.exists():
+        facts_dir = self._root / "exposure_facts"
+        plain = facts_dir / f"{dataset_id}.json"
+        packed = facts_dir / f"{dataset_id}.json.gz"
+        if plain.exists():
+            rows = self._load_json(plain, default=[])
+        elif packed.exists():
+            import gzip
+
+            with gzip.open(packed, "rt", encoding="utf-8") as handle:
+                rows = json.load(handle)
+        else:
             return []
-        rows = self._load_json(fp, default=[])
         return [ExposureFactNormalized.model_validate(r) for r in rows]
 
     # ── catalog ABC ─────────────────────────────────────────────

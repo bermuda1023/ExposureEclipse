@@ -32,6 +32,7 @@ Run from the repo root:
 from __future__ import annotations
 
 import csv
+import gzip
 import json
 import math
 import urllib.error
@@ -40,7 +41,7 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT_FACTS = ROOT / "mockdata" / "exposure_facts" / "ds-industry-ws.json"
+OUT_FACTS = ROOT / "mockdata" / "exposure_facts" / "ds-industry-ws.json.gz"
 OUT_CSV = ROOT / "mockdata" / "industry_exposure_counties.csv"
 OUT_SUMMARY = ROOT / "mockdata" / "industry_exposure_summary.json"
 OUT_IED = ROOT / "mockdata" / "ied_industry.csv"
@@ -843,7 +844,12 @@ def main() -> None:
             raise SystemExit(f"TIV identity failed for {row['geographyId']} {row['occupancySegment']}")
 
     OUT_FACTS.parent.mkdir(parents=True, exist_ok=True)
-    OUT_FACTS.write_text(json.dumps(facts, separators=(",", ":")), encoding="utf-8")
+    payload = json.dumps(facts, separators=(",", ":")).encode("utf-8")
+    with gzip.open(OUT_FACTS, "wb", compresslevel=9) as handle:
+        handle.write(payload)
+    plain = OUT_FACTS.parent / "ds-industry-ws.json"
+    if plain.exists():
+        plain.unlink()
     with OUT_CSV.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(csv_rows[0].keys()))
         writer.writeheader()
