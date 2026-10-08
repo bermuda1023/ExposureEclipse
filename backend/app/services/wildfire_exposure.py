@@ -97,10 +97,18 @@ def _load_locations() -> LocationSet:
             continue
         client = ds.get("cedentName") or ds.get("datasetId") or "Unknown"
         dataset_id = ds.get("datasetId") or ""
+        fact_plain = md / "exposure_facts" / f"{dataset_id}.json"
+        fact_packed = md / "exposure_facts" / f"{dataset_id}.json.gz"
         try:
-            rows = json.loads(
-                (md / "exposure_facts" / f"{dataset_id}.json").read_text(encoding="utf-8")
-            )
+            if fact_plain.exists():
+                rows = json.loads(fact_plain.read_text(encoding="utf-8"))
+            elif fact_packed.exists():
+                import gzip
+
+                with gzip.open(fact_packed, "rt", encoding="utf-8") as handle:
+                    rows = json.load(handle)
+            else:
+                raise FileNotFoundError(dataset_id)
         except Exception:  # noqa: BLE001
             warnings.append(f"Exposure facts for {dataset_id} could not be read; "
                             f"{client} may be understated.")

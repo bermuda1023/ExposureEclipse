@@ -17,6 +17,7 @@
     "api/index.py": {
       "runtime": "@vercel/python@4.3.1",
       "includeFiles": "mockdata/**",
+      "excludeFiles": "{frontend/**,docs/**,backend/tests/**,backend/scripts/**,**/*.pdf}",
       "maxDuration": 30
     }
   }

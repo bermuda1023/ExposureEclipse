@@ -410,9 +410,15 @@ def test_exposure_takes_max_across_perils_and_years_not_sum() -> None:
     for ds in datasets:
         if not ds.get("isIncludedInPortfolio"):
             continue
-        rows = _json.loads(
-            (md / "exposure_facts" / f"{ds['datasetId']}.json").read_text(encoding="utf-8")
-        )
+        fact_plain = md / "exposure_facts" / f"{ds['datasetId']}.json"
+        fact_packed = fact_plain.with_name(fact_plain.name + ".gz")
+        if fact_plain.exists():
+            rows = _json.loads(fact_plain.read_text(encoding="utf-8"))
+        else:
+            import gzip
+
+            with gzip.open(fact_packed, "rt", encoding="utf-8") as handle:
+                rows = _json.load(handle)
         for r in rows:
             if r.get("aggregation") != "COUNTY":
                 continue
