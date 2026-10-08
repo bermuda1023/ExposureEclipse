@@ -41,7 +41,7 @@ def test_map_state_returns_features_with_metric_value_mirror() -> None:
 
 
 def test_map_county_with_ied_gap_emits_market_share_warning() -> None:
-    """`US-FL-12086` is intentionally omitted from `mockdata/ied_industry.csv`."""
+    """`US-MS-28033` is omitted from `mockdata/ied_industry.csv`."""
     resp = client.post(
         "/api/exposures/map",
         json={
@@ -52,7 +52,7 @@ def test_map_county_with_ied_gap_emits_market_share_warning() -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    gap = next((f for f in body["features"] if f["geographyId"] == "US-FL-12086"), None)
+    gap = next((f for f in body["features"] if f["geographyId"] == "US-MS-28033"), None)
     assert gap is not None
     assert gap["clientMarketShare"] is None
     codes = {w["code"] for w in gap["warnings"]}

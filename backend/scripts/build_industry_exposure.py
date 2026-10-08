@@ -25,6 +25,10 @@ Commercial
   insured. Manufacturing floorspace is added because CBECS excludes industrial
   buildings, and that piece is included in the commercial segment.
 
+Florida is the exception. Each Florida county's bundled total is the supplied
+industry exposure database. Residential and commercial keep the mix this
+script would have produced, scaled so they add up to that total.
+
 Run from the repo root:
   python backend/scripts/build_industry_exposure.py
 """
@@ -45,9 +49,83 @@ OUT_FACTS = ROOT / "mockdata" / "exposure_facts" / "ds-industry-ws.json.gz"
 OUT_CSV = ROOT / "mockdata" / "industry_exposure_counties.csv"
 OUT_SUMMARY = ROOT / "mockdata" / "industry_exposure_summary.json"
 OUT_IED = ROOT / "mockdata" / "ied_industry.csv"
-# Miami-Dade stays out of the county denominator so the missing-IED warning
-# still has a live example. State and country rows keep it.
-IED_COUNTY_GAP = {"US-FL-12086"}
+# A small Mississippi county stays out of the county denominator so the
+# missing-IED warning still has a live example. Florida is no longer the
+# example: those county totals are the supplied industry book. State and
+# country rows keep the omitted county.
+IED_COUNTY_GAP = {"US-MS-28033"}
+
+# Supplied Florida industry exposure database. One bundled TIV per county.
+# Keyed by 5-digit county GEOID.
+FL_IED_TIV: dict[str, int] = {
+    "12001": 71_681_169_970,
+    "12003": 5_974_162_712,
+    "12005": 70_210_776_459,
+    "12007": 5_174_404_309,
+    "12009": 160_674_460_679,
+    "12011": 587_250_686_744,
+    "12013": 2_984_427_203,
+    "12015": 49_337_813_444,
+    "12017": 38_009_773_766,
+    "12019": 55_958_845_146,
+    "12021": 173_712_833_041,
+    "12023": 15_353_366_007,
+    "12027": 6_088_429_127,
+    "12029": 2_803_574_493,
+    "12031": 314_597_260_856,
+    "12033": 111_275_937_318,
+    "12035": 29_507_297_746,
+    "12037": 3_066_367_685,
+    "12039": 9_400_841_184,
+    "12041": 3_626_553_541,
+    "12043": 2_182_660_996,
+    "12045": 3_219_582_204,
+    "12047": 2_905_682_477,
+    "12049": 5_636_780_839,
+    "12051": 8_477_485_775,
+    "12053": 32_790_344_230,
+    "12055": 24_338_507_003,
+    "12057": 467_457_744_309,
+    "12059": 4_319_330_182,
+    "12061": 48_149_152_470,
+    "12063": 11_735_103_584,
+    "12065": 3_220_347_217,
+    "12067": 2_061_755_040,
+    "12069": 88_302_167_591,
+    "12071": 239_358_950_088,
+    "12073": 80_459_652_007,
+    "12075": 7_166_173_057,
+    "12077": 1_467_776_153,
+    "12079": 5_081_102_703,
+    "12081": 125_333_880_961,
+    "12083": 87_338_962_193,
+    "12085": 64_439_456_025,
+    "12086": 1_015_547_324_629,
+    "12087": 35_977_455_819,
+    "12089": 27_085_885_669,
+    "12091": 78_555_122_741,
+    "12093": 8_145_219_329,
+    "12095": 529_490_304_521,
+    "12097": 92_879_106_478,
+    "12099": 518_281_574_479,
+    "12101": 109_327_686_711,
+    "12103": 323_950_427_081,
+    "12105": 199_898_396_979,
+    "12107": 18_788_734_898,
+    "12109": 97_654_594_081,
+    "12111": 81_632_289_462,
+    "12113": 45_861_950_787,
+    "12115": 181_568_294_064,
+    "12117": 143_321_114_859,
+    "12119": 37_271_317_232,
+    "12121": 10_585_206_427,
+    "12123": 4_571_821_386,
+    "12125": 2_839_443_235,
+    "12127": 135_093_118_470,
+    "12129": 6_116_075_143,
+    "12131": 38_501_291_153,
+    "12133": 4_640_566_961,
+}
 
 USER_AGENT = "PerilVista/1.0 (industry exposure build)"
 ACS_YEAR = 2023
@@ -625,6 +703,59 @@ def fact_row(
     return row
 
 
+def apportion(parts: list[int], target: int) -> list[int]:
+    """Split target across parts, preserving each part's share. Exact integer."""
+    if target < 0:
+        raise ValueError(target)
+    total = sum(parts)
+    if not parts:
+        return []
+    if total <= 0:
+        out = [0] * len(parts)
+        out[0] = target
+        return out
+    bases: list[int] = []
+    remainders: list[int] = []
+    for part in parts:
+        numer = part * target
+        bases.append(numer // total)
+        remainders.append(numer % total)
+    leftover = target - sum(bases)
+    order = sorted(
+        range(len(parts)),
+        key=lambda i: (remainders[i], parts[i]),
+        reverse=True,
+    )
+    for i in range(leftover):
+        bases[order[i]] += 1
+    if sum(bases) != target:
+        raise RuntimeError("apportion did not land on the target")
+    return bases
+
+
+def scale_bucket_pair(res: dict[str, int], com: dict[str, int], target: int) -> None:
+    """Scale residential and commercial dollars so they sum to target."""
+    keys = ("building", "contents", "bi")
+    parts = [int(res[k]) for k in keys] + [int(com[k]) for k in keys]
+    scaled = apportion(parts, target)
+    for i, key in enumerate(keys):
+        res[key] = scaled[i]
+        com[key] = scaled[i + 3]
+
+
+def apply_florida_ied(counties: list[dict]) -> None:
+    seen: set[str] = set()
+    for county in counties:
+        target = FL_IED_TIV.get(county["geoid"])
+        if target is None:
+            continue
+        scale_bucket_pair(county["res"], county["com"], target)
+        seen.add(county["geoid"])
+    missing = set(FL_IED_TIV) - seen
+    if missing:
+        raise SystemExit(f"Florida IED counties missing from the book: {sorted(missing)}")
+
+
 def sum_buckets(buckets: list[dict[str, int]]) -> dict[str, int]:
     out = blank_bucket()
     for bucket in buckets:
@@ -654,9 +785,11 @@ def write_ied(csv_rows: list[dict]) -> None:
             county_out.append((gid, "COMMERCIAL", com))
 
     lines = [
-        "# Industry TIV proxy for client market share. Same book as the Industry client.",
-        "# Not an RMS or AIR industry database. Built from Census housing and CBECS floorspace.",
-        "# US-FL-12086 is omitted on purpose. State and country rows still include it.",
+        "# Industry TIV for client market share. Same book as the Industry client.",
+        "# Outside Florida this is a census and build-cost proxy, not RMS or AIR.",
+        "# Florida county totals are the supplied industry exposure database.",
+        "# Residential and commercial keep the prior mix, scaled to that total.",
+        "# US-MS-28033 is omitted at county grain. State and country rows still include it.",
         "geographyLevel,geographyId,occupancySegment,industryTIV,currency,sourceYear",
     ]
     def emit(level: str, gid: str, segment: str, tiv: int) -> None:
@@ -769,6 +902,8 @@ def main() -> None:
         if county["com"]["locations"] <= 0 and borrowed > 0:
             county["com"]["locations"] = max(1, borrowed // 2_000_000)
 
+    apply_florida_ied(counties)
+
     def tiv_of(bucket: dict[str, int]) -> int:
         return bucket["building"] + bucket["contents"] + bucket["bi"]
 
@@ -781,8 +916,8 @@ def main() -> None:
 
     if not (15e12 <= res_total <= 55e12):
         raise SystemExit(f"Residential total ${res_total:,.0f} is outside $15-55T")
-    if not (8e12 <= com_total <= 45e12):
-        raise SystemExit(f"Commercial total ${com_total:,.0f} is outside $8-45T")
+    if not (8e12 <= com_total <= 55e12):
+        raise SystemExit(f"Commercial total ${com_total:,.0f} is outside $8-55T")
 
     ranked = sorted(counties, key=lambda c: tiv_of(c["res"]) + tiv_of(c["com"]), reverse=True)
     print("Largest counties:")
@@ -866,7 +1001,9 @@ def main() -> None:
         "totalTiv": res_total + com_total,
         "note": (
             "Residential and commercial are informational. "
-            "Map TIV and impact losses use the bundled total."
+            "Map TIV and impact losses use the bundled total. "
+            "Florida county totals are the supplied industry exposure database. "
+            "The residential and commercial split keeps the prior mix."
         ),
     }
     OUT_SUMMARY.write_text(json.dumps(summary, indent=2), encoding="utf-8")

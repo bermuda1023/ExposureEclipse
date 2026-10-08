@@ -190,14 +190,16 @@ def test_ied_has_state_rows_and_county_gap(provider: MockExposureDataProvider) -
     # State coverage exists for the major cat states.
     assert {"US-FL", "US-TX", "US-CA", "US-NY"}.issubset(state_geos)
 
-    # Gap: Miami-Dade has facts but NO IED row.
+    # Gap: Jefferson Davis County, Mississippi has facts but no IED row.
+    # Florida is fully covered by the supplied industry book.
     fact_county_geos = {
         f.geography_id
         for f in provider.get_facts_for_dataset("ds-farmers-bda-2027")
         if f.aggregation == AggregationLevel.COUNTY.value
     }
-    assert "US-FL-12086" in fact_county_geos
-    assert "US-FL-12086" not in county_geos
+    assert "US-MS-28033" in fact_county_geos
+    assert "US-MS-28033" not in county_geos
+    assert "US-FL-12086" in county_geos
     # The contrast county IS present → the gap is intentional, not a missing fixture.
     assert "US-FL-12011" in county_geos
 

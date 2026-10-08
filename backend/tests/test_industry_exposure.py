@@ -165,7 +165,7 @@ def test_industry_facts_identity_and_exact_rollups(
     assert round(com_total, 2) == summary["commercialTiv"]
     assert round(res_total + com_total, 2) == summary["totalTiv"]
     assert 15e12 <= res_total <= 55e12
-    assert 8e12 <= com_total <= 45e12
+    assert 8e12 <= com_total <= 55e12
 
     county_by_state: dict[str, float] = {}
     for fact in county:
@@ -338,7 +338,12 @@ def test_ied_denominator_matches_industry_book_and_stays_sane(
         for row in ied
         if _value(row.geography_level) == AggregationLevel.COUNTY.value
     }
-    assert "US-FL-12086" not in county_ids
+    assert "US-FL-12086" in county_ids
+    assert total("COUNTY", "US-FL-12086") == 1_015_547_324_629
+    assert total("COUNTY", "US-FL-12011") == 587_250_686_744
+    assert total("COUNTY", "US-FL-12077") == 1_467_776_153
+    # The missing-denominator example moved off Florida once the IED arrived.
+    assert "US-MS-28033" not in county_ids
     assert "US-FL-12011" in county_ids
     assert total("COUNTY", "US-AL-01001") < 50e9
 
@@ -349,6 +354,7 @@ def test_county_reference_reports_industry_book_tiv() -> None:
     body = ref.json()
     assert body["industryResidentialTiv"] > 100e9
     assert body["industryCommercialTiv"] > 100e9
+    assert body["industryTiv"] == 1_015_547_324_629
     assert body["industryTiv"] == body["industryResidentialTiv"] + body["industryCommercialTiv"]
 
 

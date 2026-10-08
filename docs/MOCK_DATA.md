@@ -56,7 +56,7 @@ representative of a rich pre-aggregated cut, not a raw location dump.
 | ERT Not Found | Sample Client 2027 | `WARN_ERT_NOT_FOUND`, Run ERT offered |
 | Failed ERT job | Designed-To-Fail 2027 + Run ERT | job status `failed` + technical report + `email_sent=true` |
 | County unavailable | view county for a state with no county data | state fallback + `WARN_COUNTY_DATA_UNAVAILABLE` |
-| IED denominator missing | market share on `US-FL-12086` | `null` + `WARN_IED_DENOMINATOR_MISSING` |
+| IED denominator missing | market share on `US-MS-28033` | `null` + `WARN_IED_DENOMINATOR_MISSING` |
 | Currency mismatch | mix USD + EUR (e.g. cedent-level Munich + others) | `WARN_CURRENCY_MISMATCH` |
 | Filters return no rows | overconstrained filters | empty features + `WARN_FILTERS_RETURN_NO_ROWS` |
 | Prior-year missing | first-year programme (Munich 2027) | YoY status = `NEW` |
@@ -99,10 +99,13 @@ drift surfaces on first request for that EDM, not necessarily at process start.
 
 The rows are the Industry client book (`ds-industry-ws`), written by
 `backend/scripts/build_industry_exposure.py`. Country totals are about
-$33 trillion residential and $45 trillion commercial. State rows roll up
-from the counties. `US-FL-12086` (Miami-Dade) is omitted at county grain
+$34 trillion residential and $46 trillion commercial. State rows roll up
+from the counties. Florida county totals are the supplied industry
+exposure database; residential and commercial keep the prior mix, scaled
+to that total. `US-MS-28033` is omitted at county grain
 so `WARN_IED_DENOMINATOR_MISSING` still fires. State and country rows
-include that county. This is a census and build-cost proxy, not RMS or AIR.
+include that county. Outside Florida this is a census and build-cost
+proxy, not RMS or AIR.
 
 ## Treaty metadata + EDM linkage
 

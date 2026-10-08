@@ -1,7 +1,9 @@
 """County TIV from the Industry client book.
 
-The figures are the same dollars painted when the Industry client is selected.
-They are a census and build-cost proxy, not an RMS or AIR industry database.
+Florida counties use the supplied industry exposure database. The residential
+and commercial split keeps the prior mix, scaled so the two add up to that
+total. Every other county is still a census and build-cost proxy, not an
+RMS or AIR industry database.
 """
 
 from __future__ import annotations

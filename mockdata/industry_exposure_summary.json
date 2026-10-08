@@ -5,8 +5,8 @@
   "acsYear": 2023,
   "cbpYear": 2022,
   "counties": 3222,
-  "residentialTiv": 32975871382988,
-  "commercialTiv": 44844372923847,
-  "totalTiv": 77820244306835,
-  "note": "Residential and commercial are informational. Map TIV and impact losses use the bundled total."
+  "residentialTiv": 33971887826121,
+  "commercialTiv": 45967612542577,
+  "totalTiv": 79939500368698,
+  "note": "Residential and commercial are informational. Map TIV and impact losses use the bundled total. Florida county totals are the supplied industry exposure database. The residential and commercial split keeps the prior mix."
 }
