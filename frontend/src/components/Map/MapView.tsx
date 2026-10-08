@@ -70,6 +70,7 @@ const COUNTY_TILESET = {
 
 const STATE_FILL = "state-fill";
 const STATE_LINE = "state-line";
+const STATE_LINE_CASING = "state-line-casing";
 const COUNTY_FILL = "county-fill";
 const COUNTY_LINE = "county-line";
 
@@ -187,15 +188,6 @@ export function MapView({ data, isLoading, error }: Props) {
           ],
         },
       });
-      map.addLayer({
-        id: STATE_LINE,
-        type: "line",
-        source: STATE_TILESET.src,
-        "source-layer": STATE_TILESET.layer,
-        minzoom: STATE_ENV[0],
-        maxzoom: STATE_ENV[1],
-        paint: { "line-color": "#2c3a52", "line-width": 0.8, "line-opacity": 0.7 },
-      });
 
       // ── County source + layers ──
       map.addSource(COUNTY_TILESET.src, {
@@ -298,6 +290,55 @@ export function MapView({ data, isLoading, error }: Props) {
             0.28,
             0,
           ],
+        },
+      });
+
+      // State borders stay on top of county fills. County lines are thin and
+      // the same colour family, so without this the state edge vanishes the
+      // moment the map flips to county grain. A light casing keeps the black
+      // stroke readable on dark choropleth fills.
+      map.addLayer({
+        id: STATE_LINE_CASING,
+        type: "line",
+        source: STATE_TILESET.src,
+        "source-layer": STATE_TILESET.layer,
+        minzoom: COUNTY_THRESHOLD,
+        maxzoom: COUNTY_ENV[1],
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            COUNTY_THRESHOLD, 2.4,
+            7, 3.2,
+            10, 4.2,
+          ],
+          "line-opacity": 0.95,
+        },
+      });
+      map.addLayer({
+        id: STATE_LINE,
+        type: "line",
+        source: STATE_TILESET.src,
+        "source-layer": STATE_TILESET.layer,
+        minzoom: STATE_ENV[0],
+        maxzoom: COUNTY_ENV[1],
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#000000",
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            2, 0.7,
+            COUNTY_THRESHOLD - 0.01, 0.9,
+            COUNTY_THRESHOLD, 1.45,
+            7, 2.05,
+            10, 2.7,
+          ],
+          "line-opacity": 1,
         },
       });
 

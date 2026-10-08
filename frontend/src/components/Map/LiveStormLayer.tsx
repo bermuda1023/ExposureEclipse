@@ -1498,6 +1498,11 @@ export function LiveStormLayer({ map }: Props) {
       // particles back on top of the shear, under the official track.
       if (isShearView) placeWindParticlesUnderTrack(map);
 
+      // County zoom used to drop state borders. Keep the black state stroke
+      // above cones and county fills, and under the track so the line
+      // doesn't paint through the advisory.
+      raiseStateBoundaries(map, LAYER_FORECAST_HISTORY);
+
       // ── Visibility — driven purely by the panel toggles. ──
       setVis(map, LAYER_SST, showSst);
       setVis(map, LAYER_ALERTS_FILL, showAlerts);
@@ -1543,6 +1548,13 @@ export function LiveStormLayer({ map }: Props) {
 
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
+    // MapView adds the state stroke on `load`, after style.load. Seat it
+    // again once that layer exists so county zoom still shows state lines.
+    map.on("load", apply);
+    return () => {
+      map.off("load", apply);
+      map.off("style.load", apply);
+    };
   }, [
     map, data,
     showForecastHistory, showAlerts, showWatchesWarnings,
@@ -2433,4 +2445,14 @@ function moveToTop(map: MbMap, id: string): void {
   if (!map.getLayer(id)) return;
   // Two-arg form with beforeId undefined moves the layer to the very top.
   map.moveLayer(id);
+}
+
+/** Slot the state outline above wind polygons but below `beforeId` (the track). */
+function raiseStateBoundaries(map: MbMap, beforeId: string): void {
+  const before = map.getLayer(beforeId) ? beforeId : undefined;
+  for (const id of ["state-line-casing", "state-line"]) {
+    if (!map.getLayer(id)) continue;
+    if (before) map.moveLayer(id, before);
+    else map.moveLayer(id);
+  }
 }
