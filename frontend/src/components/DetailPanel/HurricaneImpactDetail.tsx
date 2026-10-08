@@ -12,6 +12,8 @@ import { useCedents } from "../../api/hooks";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
   applyWindBands,
+  representativeBand,
+  resolveBandFractions,
   useDamageAssumptionsStore,
   type LossBand,
 } from "../../state/damageAssumptions";
@@ -29,6 +31,7 @@ export function HurricaneImpactDetail() {
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
   const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
   const setOverride = useCountyOverridesStore((s) => s.set);
+  const setBandPercent = useCountyOverridesStore((s) => s.setBandPercent);
   const resetCounty = useCountyOverridesStore((s) => s.resetCounty);
   const resetStorm = useCountyOverridesStore((s) => s.resetStorm);
   const [openGeoid, setOpenGeoid] = useState<string | null>(null);
@@ -43,8 +46,9 @@ export function HurricaneImpactDetail() {
     for (const c of data.counties) {
       if (!c.hasData) continue;
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
-      if (exp !== 1.0) anyOverride = true;
-      const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt);
+      const bands = stormOverrides[c.geoid]?.bandPercent;
+      if (exp !== 1.0 || (bands && Object.keys(bands).length > 0)) anyOverride = true;
+      const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt, bands);
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high, anyOverride };
@@ -206,8 +210,9 @@ export function HurricaneImpactDetail() {
               const isOpen = openGeoid === c.geoid;
               const isFocused = focusedGeoid === c.geoid;
               const exposed = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
+              const bandPercent = stormOverrides[c.geoid]?.bandPercent;
               const band = c.hasData
-                ? applyWindBands(c.tiv, c.windBands, exposed, byCategory, c.maxWindKt)
+                ? applyWindBands(c.tiv, c.windBands, exposed, byCategory, c.maxWindKt, bandPercent)
                 : null;
               return (
                 <FragmentRow
@@ -218,6 +223,8 @@ export function HurricaneImpactDetail() {
                   band={band}
                   byCategory={byCategory}
                   exposedFraction={exposed}
+                  bandPercent={bandPercent}
+                  onBandPercent={(cat, pct) => setBandPercent(data.stormId, c.geoid, cat, pct)}
                   onExposedChange={(v) =>
                     setOverride(data.stormId, c.geoid, { exposedFraction: v })
                   }
@@ -261,6 +268,8 @@ function FragmentRow({
   band,
   byCategory,
   exposedFraction,
+  bandPercent,
+  onBandPercent,
   onExposedChange,
   onResetExposed,
   toggle,
@@ -273,6 +282,8 @@ function FragmentRow({
   band: LossBand | null;
   byCategory: ReturnType<typeof useDamageAssumptionsStore.getState>["byCategory"];
   exposedFraction: number;
+  bandPercent?: Partial<Record<string, number>>;
+  onBandPercent: (category: number, percent: number | null) => void;
   onExposedChange: (v: number) => void;
   onResetExposed: () => void;
   toggle: () => void;
@@ -280,6 +291,12 @@ function FragmentRow({
   programmeLabel: Map<string, string>;
 }) {
   const isOverridden = exposedFraction !== 1.0;
+  const slicesDirty = !!bandPercent && Object.keys(bandPercent).length > 0;
+  const slices = resolveBandFractions(c.windBands, bandPercent);
+  const mainSlice = representativeBand(slices);
+  const chipKt = mainSlice?.maxWindKt || c.maxWindKt;
+  const chipCat = mainSlice?.category ?? c.maxCategory;
+  const peakIsHigher = c.maxWindKt > chipKt;
   return (
     <>
       <tr
@@ -301,7 +318,7 @@ function FragmentRow({
             {c.name} <span style={{ color: "var(--ink-500)" }}>· {c.state}</span>
           </div>
           <div style={{ fontSize: "0.66rem", color: "var(--ink-500)" }}>
-            eye {c.closestDistanceNm.toFixed(1)} nm · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm{" "}
+            centroid {c.closestDistanceNm.toFixed(1)} nm from eye · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm{" "}
             <span
               title={
                 c.rmaxSource === "nhc"
@@ -329,6 +346,8 @@ function FragmentRow({
             scale={exposedFraction}
             byCategory={byCategory}
             currency={currency}
+            bandPercent={bandPercent}
+            onBandPercent={onBandPercent}
           />
           {/* Judgment scale on top of the area split. 100% uses the slices as-is. */}
           <div
@@ -365,7 +384,7 @@ function FragmentRow({
               }}
             />
             <span>%</span>
-            {isOverridden && (
+            { (isOverridden || slicesDirty) && (
               <button
                 onClick={onResetExposed}
                 style={{
@@ -376,7 +395,7 @@ function FragmentRow({
                   fontSize: "0.6rem",
                   marginLeft: 4,
                 }}
-                title="Reset to 100%"
+                title="Reset the scale and the slice percents"
               >
                 reset
               </button>
@@ -389,15 +408,19 @@ function FragmentRow({
               display: "inline-block",
               padding: "2px 7px",
               borderRadius: 999,
-              background: SAFFIR_SIMPSON_COLORS[c.maxCategory] ?? "var(--ink-300)",
-              color: c.maxCategory >= 3 ? "white" : "var(--ink-900)",
+              background: SAFFIR_SIMPSON_COLORS[chipCat] ?? "var(--ink-300)",
+              color: chipCat >= 3 ? "white" : "var(--ink-900)",
               fontWeight: 600,
               fontSize: "0.66rem",
               whiteSpace: "nowrap",
             }}
-            title="Strongest wind anywhere in the county. The slices below are the rest of the county."
+            title={
+              peakIsHigher
+                ? `Largest share of the county is ${chipKt} kt. The hottest point anywhere in the county is ${c.maxWindKt} kt, shown on that slice.`
+                : "Wind over the largest share of the county."
+            }
           >
-            {c.maxWindKt} kt
+            {chipKt} kt
           </span>
         </td>
         <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
@@ -449,7 +472,7 @@ function FragmentRow({
                     // total — programme TIV inside the wind field is the
                     // county fraction × programme TIV (assumes uniform
                     // distribution of programme TIV across the county).
-                    const pb = applyWindBands(p.tiv, c.windBands, exposedFraction, byCategory, c.maxWindKt);
+                    const pb = applyWindBands(p.tiv, c.windBands, exposedFraction, byCategory, c.maxWindKt, bandPercent);
                     return (
                       <tr key={p.datasetId}>
                         <td style={subTd}>

@@ -19,18 +19,35 @@ import { persist, createJSONStorage } from "zustand/middleware";
 export interface CountyOverride {
   /** 0..1; defaults to 1.0 (whole county exposed). */
   exposedFraction: number;
+  /**
+   * Category → percent of the county (0–100). -1 is clear.
+   * A missing category keeps the model fraction. Taking area off a slice
+   * leaves it in the clear, not in a neighboring category.
+   */
+  bandPercent?: Partial<Record<string, number>>;
 }
 
 interface CountyOverridesState {
   // stormId → geoid → override
   byStorm: Record<string, Record<string, CountyOverride>>;
   set: (stormId: string, geoid: string, partial: Partial<CountyOverride>) => void;
+  setBandPercent: (
+    stormId: string,
+    geoid: string,
+    category: number,
+    percent: number | null,
+  ) => void;
   resetCounty: (stormId: string, geoid: string) => void;
   resetStorm: (stormId: string) => void;
   get: (stormId: string, geoid: string) => CountyOverride;
 }
 
 const DEFAULT: CountyOverride = { exposedFraction: 1.0 };
+
+function isDefault(row: CountyOverride): boolean {
+  const bands = row.bandPercent ?? {};
+  return row.exposedFraction === 1.0 && Object.keys(bands).length === 0;
+}
 
 export const useCountyOverridesStore = create<CountyOverridesState>()(
   persist(
@@ -41,9 +58,11 @@ export const useCountyOverridesStore = create<CountyOverridesState>()(
           const storm = state.byStorm[stormId] ?? {};
           const cur = storm[geoid] ?? DEFAULT;
           const next = { ...cur, ...partial };
-          // If the override matches the default, drop it to keep state lean.
+          if (partial.bandPercent) {
+            next.bandPercent = { ...(cur.bandPercent ?? {}), ...partial.bandPercent };
+          }
           const stormNext = { ...storm };
-          if (next.exposedFraction === 1.0) {
+          if (isDefault(next)) {
             delete stormNext[geoid];
           } else {
             stormNext[geoid] = next;
@@ -51,6 +70,20 @@ export const useCountyOverridesStore = create<CountyOverridesState>()(
           return {
             byStorm: { ...state.byStorm, [stormId]: stormNext },
           };
+        }),
+      setBandPercent: (stormId, geoid, category, percent) =>
+        set((state) => {
+          const storm = state.byStorm[stormId] ?? {};
+          const cur = storm[geoid] ?? DEFAULT;
+          const bands = { ...(cur.bandPercent ?? {}) };
+          const key = String(category);
+          if (percent == null || Number.isNaN(percent)) delete bands[key];
+          else bands[key] = Math.max(0, Math.min(100, percent));
+          const next: CountyOverride = { ...cur, bandPercent: bands };
+          const stormNext = { ...storm };
+          if (isDefault(next)) delete stormNext[geoid];
+          else stormNext[geoid] = next;
+          return { byStorm: { ...state.byStorm, [stormId]: stormNext } };
         }),
       resetCounty: (stormId, geoid) =>
         set((state) => {

@@ -111,6 +111,73 @@ export function applyCategory(
 export interface WindSlice {
   category: number;
   areaFraction: number;
+  maxWindKt?: number;
+}
+
+/**
+ * Apply an underwriter's slice percents. Categories they did not touch keep
+ * the model share. Anything left over is clear (not in the storm). If the
+ * edited slices add up to more than the county, they are scaled down.
+ */
+export function resolveBandFractions<T extends WindSlice>(
+  bands: T[] | undefined,
+  bandPercent?: Partial<Record<string, number>> | null,
+): T[] {
+  const model = bands ?? [];
+  if (!bandPercent || Object.keys(bandPercent).length === 0) return model;
+  const cats = new Set<number>();
+  for (const band of model) {
+    if (band.category !== -1) cats.add(band.category);
+  }
+  for (const key of Object.keys(bandPercent)) {
+    const cat = Number(key);
+    if (cat !== -1 && Number.isFinite(cat)) cats.add(cat);
+  }
+  const raw: T[] = [];
+  for (const cat of cats) {
+    const modelBand = model.find((b) => b.category === cat);
+    const pct = bandPercent[String(cat)];
+    const frac = pct == null
+      ? (modelBand?.areaFraction ?? 0)
+      : Math.max(0, Math.min(100, pct)) / 100;
+    raw.push({
+      ...(modelBand ?? { category: cat, areaFraction: 0 }),
+      category: cat,
+      areaFraction: frac,
+    } as T);
+  }
+  let sum = raw.reduce((s, b) => s + b.areaFraction, 0);
+  const clearPct = bandPercent["-1"];
+  let clear = clearPct == null ? 0 : Math.max(0, Math.min(100, clearPct)) / 100;
+  if (clearPct != null && sum + clear > 1 && sum > 0) {
+    const room = Math.max(0, 1 - clear);
+    for (const band of raw) band.areaFraction *= room / sum;
+    sum = room;
+  } else if (sum > 1) {
+    for (const band of raw) band.areaFraction /= sum;
+    sum = 1;
+    clear = 0;
+  }
+  const clearFrac = clearPct == null ? Math.max(0, 1 - sum) : clear;
+  const out = raw.filter(
+    (b) => b.areaFraction > 0.0005 || bandPercent?.[String(b.category)] != null,
+  );
+  if (clearFrac > 0.0005) {
+    const modelClear = model.find((b) => b.category === -1);
+    out.push({
+      ...(modelClear ?? { category: -1, areaFraction: 0 }),
+      category: -1,
+      areaFraction: clearFrac,
+    } as T);
+  }
+  return out;
+}
+
+/** The slice that covers the most of the county. Not the hottest point. */
+export function representativeBand<T extends WindSlice>(bands: T[] | undefined): T | null {
+  const live = (bands ?? []).filter((b) => b.category >= 0 && b.areaFraction >= 0.005);
+  if (live.length === 0) return null;
+  return live.reduce((best, band) => (band.areaFraction > best.areaFraction ? band : best));
 }
 
 /**
@@ -128,9 +195,11 @@ export function applyWindBands(
   exposedFraction: number,
   byCategory: Record<Sshws, CategoryAssumption>,
   fallbackWindKt: number,
+  bandPercent?: Partial<Record<string, number>> | null,
 ): LossBand {
   const scale = Math.max(0, Math.min(1, exposedFraction));
-  const live = (bands ?? []).filter((b) => b.category >= 0 && b.areaFraction > 0);
+  const resolved = resolveBandFractions(bands, bandPercent);
+  const live = resolved.filter((b) => b.category >= 0 && b.areaFraction > 0);
   if (live.length === 0) {
     return applyAssumption(tiv * scale, fallbackWindKt, byCategory);
   }

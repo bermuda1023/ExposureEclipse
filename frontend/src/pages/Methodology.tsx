@@ -253,18 +253,28 @@ export function Methodology() {
         <ul>
           <li>
             A county is listed when at least 1% of its area sees tropical-storm
-            wind, or when any sample is hurricane-force. The wind at each
-            sample is the peak that point felt: Vmax if the eyewall crossed
-            it, otherwise a profile pinned to Vmax at Rmax and 64 kt at the
-            directional R64, decaying through the tropical-storm skirt.
-            Between fixes the track is filled in so a 6-hour gap cannot skip
-            the core. The county is not stamped with the storm's peak just
-            because the centroid sits inside the outer field.
+            wind, or when any sample is hurricane-force. Samples are one grid
+            over the whole county, sized from the county's own area, so a chain
+            of islands cannot outvote the mainland and a 10 nm eyewall is not
+            one cell. The wind at each sample is the peak that point felt:
+            Vmax if the eyewall crossed it, otherwise a profile pinned to
+            Vmax at Rmax and 64 kt at the directional R64, decaying through
+            the tropical-storm skirt. Between fixes the track is filled in
+            so a 6-hour gap cannot skip the core. The county is not stamped
+            with the storm's peak just because the centroid sits inside the
+            outer field. The bright core on the map is the eyewall. The wide
+            ring is colored as the wind halfway out to 64 kt, not as the peak.
           </li>
           <li>
             Each county comes back as area fractions: clear, tropical storm,
             and Cat 1 through Cat 5. Those are the subsections under the
-            county name.
+            county name. The wind chip is the category that covers the
+            largest share of the county, not the hottest point. The distance
+            under the name is from the centroid, so a key that the eye crossed
+            can still show up as its own slice. Each slice
+            percent can be overwritten; what you take off a slice is treated
+            as not in the storm. The scale box is still an extra haircut on
+            top of those slices.
           </li>
           <li>
             The visualization footprint still draws every hurricane-strength

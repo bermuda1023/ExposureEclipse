@@ -9,6 +9,8 @@ import { useMemo, useState } from "react";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
   applyWindBands,
+  representativeBand,
+  resolveBandFractions,
   useDamageAssumptionsStore,
 } from "../../state/damageAssumptions";
 import { useCountyOverridesStore } from "../../state/countyOverrides";
@@ -42,7 +44,10 @@ export function HurricaneImpactPanel() {
     for (const c of data.counties) {
       if (!c.hasData) continue;
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
-      const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt);
+      const b = applyWindBands(
+        c.tiv, c.windBands, exp, byCategory, c.maxWindKt,
+        stormOverrides[c.geoid]?.bandPercent,
+      );
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high };
@@ -258,7 +263,7 @@ export function HurricaneImpactPanel() {
                         {c.name} <span style={{ color: "var(--ink-500)" }}>· {c.state}</span>
                       </div>
                       <div style={{ fontSize: "0.66rem", color: "var(--ink-500)" }}>
-                        eye {c.closestDistanceNm.toFixed(1)} nm · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm
+                        centroid {c.closestDistanceNm.toFixed(1)} nm from eye · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm
                       </div>
                       <CountyWindSlices
                         bands={c.windBands}
@@ -266,25 +271,41 @@ export function HurricaneImpactPanel() {
                         scale={stormOverrides[c.geoid]?.exposedFraction ?? 1.0}
                         byCategory={byCategory}
                         currency={data.currency}
+                        bandPercent={stormOverrides[c.geoid]?.bandPercent}
                         compact
                       />
                     </td>
                     <td style={{ ...td, textAlign: "center" }}>
+                      {(() => {
+                        const slices = resolveBandFractions(
+                          c.windBands, stormOverrides[c.geoid]?.bandPercent,
+                        );
+                        const main = representativeBand(slices);
+                        const chipKt = main?.maxWindKt || c.maxWindKt;
+                        const chipCat = main?.category ?? c.maxCategory;
+                        const peakIsHigher = c.maxWindKt > chipKt;
+                        return (
                       <span
                         style={{
                           display: "inline-block",
                           padding: "2px 7px",
                           borderRadius: 999,
-                          background: SAFFIR_SIMPSON_COLORS[c.maxCategory] ?? "var(--ink-300)",
-                          color: c.maxCategory >= 3 ? "white" : "var(--ink-900)",
+                          background: SAFFIR_SIMPSON_COLORS[chipCat] ?? "var(--ink-300)",
+                          color: chipCat >= 3 ? "white" : "var(--ink-900)",
                           fontWeight: 600,
                           fontSize: "0.66rem",
                           whiteSpace: "nowrap",
                         }}
-                        title="Strongest wind anywhere in the county, not the storm peak. The line under the name is the rest of the county."
+                        title={
+                          peakIsHigher
+                            ? `Largest share of the county is ${chipKt} kt. Peak anywhere is ${c.maxWindKt} kt.`
+                            : "Wind over the largest share of the county."
+                        }
                       >
-                        {c.maxWindKt} kt
+                        {chipKt} kt
                       </span>
+                        );
+                      })()}
                     </td>
                     <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
                       {c.hasData ? formatMoneyCompact(c.tiv, data.currency) : "—"}
@@ -295,7 +316,10 @@ export function HurricaneImpactPanel() {
                       )}
                       {c.hasData && (() => {
                         const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
-                        const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt);
+                        const b = applyWindBands(
+                          c.tiv, c.windBands, exp, byCategory, c.maxWindKt,
+                          stormOverrides[c.geoid]?.bandPercent,
+                        );
                         return (
                           <>
                             <div

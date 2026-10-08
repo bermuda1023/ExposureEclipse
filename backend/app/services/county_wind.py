@@ -91,6 +91,20 @@ def experienced_wind_kt(
     return local_wind_kt(distance_nm, vmax_kt, rmax, r64_nm)
 
 
+def skirt_wind_kt(vmax_kt: int, rmax: float, r64_nm: float) -> int:
+    """Wind used to color the R64 annulus, not the eyewall.
+
+    The drawn core stays at Vmax. The wide ring is the wind about halfway
+    from Rmax out to the 64 kt edge, so a Cat 4 fix does not paint a 50 nm
+    disk as Cat 4.
+    """
+    if vmax_kt < 64 or rmax <= 0:
+        return max(0, int(vmax_kt))
+    outer = r64_nm if r64_nm > rmax * 1.05 else rmax * 2.5
+    mid = math.sqrt(rmax * max(outer, rmax * 1.1))
+    return local_wind_kt(mid, vmax_kt, rmax, outer)
+
+
 def outer_radius_nm(
     vmax_kt: int,
     rmax: float,
@@ -166,6 +180,82 @@ def sample_polygon_rings(rings: list[list[tuple[float, float]]]) -> list[tuple[f
             pts = [pts[int(i * stride)] for i in range(80)]
         return pts
     # Island or sliver the grid missed: centroid stand-in is added by the caller.
+    return pts
+
+
+def _ring_area_deg2(ring: list[tuple[float, float]]) -> float:
+    a = 0.0
+    n = len(ring)
+    for i in range(n):
+        x1, y1 = ring[i]
+        x2, y2 = ring[(i + 1) % n]
+        a += x1 * y2 - x2 * y1
+    return abs(a) * 0.5
+
+
+def sample_polygons(
+    polygons: list[list[list[tuple[float, float]]]],
+) -> list[tuple[float, float]]:
+    """Equal-area samples across every part of a county.
+
+    Sampling each island on its own grid lets a chain of keys outvote the
+    mainland: Monroe was coming back about a quarter Cat 4 because the keys
+    held most of the points even though they are under a third of the polygon.
+    The step comes from the county's own area and is shared by every part,
+    so a point stands for the same patch of county wherever it lands, and
+    there are enough of them to see a 10 nm eyewall.
+    """
+    outers: list[list[tuple[float, float]]] = []
+    holes: list[list[list[tuple[float, float]]]] = []
+    for rings in polygons:
+        if not rings or len(rings[0]) < 3:
+            continue
+        outers.append(rings[0])
+        holes.append([h for h in rings[1:] if len(h) >= 3])
+    if not outers:
+        return []
+    coords = [pt for ring in outers for pt in ring]
+    lons = [p[0] for p in coords]
+    lats = [p[1] for p in coords]
+    min_lon, max_lon = min(lons), max(lons)
+    min_lat, max_lat = min(lats), max(lats)
+    width = max_lon - min_lon
+    height = max_lat - min_lat
+    if width < 1e-6 or height < 1e-6:
+        return []
+    area = 0.0
+    for outer, hole_rings in zip(outers, holes):
+        area += _ring_area_deg2(outer)
+        for hole in hole_rings:
+            area -= _ring_area_deg2(hole)
+    area = max(area, 1e-8)
+    # ~140 cells inside the polygon. 0.02° is about 1 nm, fine enough that a
+    # 10 nm eyewall is not one unlucky cell. 0.12° keeps a huge county cheap.
+    # Each part is walked on its own bounding box so the water between a
+    # mainland and its keys is not scanned, but the step is shared, so a
+    # point still stands for the same area everywhere.
+    step = math.sqrt(area / 140.0)
+    step = max(0.02, min(step, 0.12))
+    pts: list[tuple[float, float]] = []
+    for outer, hole_rings in zip(outers, holes):
+        xs = [p[0] for p in outer]
+        ys = [p[1] for p in outer]
+        y = min(ys) + step * 0.5
+        y_max = max(ys)
+        x_min = min(xs)
+        x_max = max(xs)
+        while y < y_max:
+            x = x_min + step * 0.5
+            while x < x_max:
+                if point_in_ring(x, y, outer) and not any(
+                    point_in_ring(x, y, hole) for hole in hole_rings
+                ):
+                    pts.append((y, x))
+                x += step
+            y += step
+    if len(pts) > 160:
+        stride = len(pts) / 160.0
+        pts = [pts[int(i * stride)] for i in range(160)]
     return pts
 
 

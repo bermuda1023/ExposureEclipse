@@ -8,6 +8,7 @@ import { formatMoneyCompact } from "../../lib/format";
 import type { WindBand } from "../../api/hurricanes";
 import {
   applyCategory,
+  resolveBandFractions,
   type CategoryAssumption,
   type Sshws,
 } from "../../state/damageAssumptions";
@@ -30,6 +31,9 @@ interface Props {
   currency: string;
   /** One line, highest band first. Used in the floating panel. */
   compact?: boolean;
+  /** When set, each slice percent is an editable override. */
+  onBandPercent?: (category: number, percent: number | null) => void;
+  bandPercent?: Partial<Record<string, number>>;
 }
 
 export function CountyWindSlices({
@@ -39,9 +43,13 @@ export function CountyWindSlices({
   byCategory,
   currency,
   compact = false,
+  onBandPercent,
+  bandPercent,
 }: Props) {
-  const rows = (bands ?? [])
-    .filter((b) => b.areaFraction >= 0.005)
+  const modelBands = bands ?? [];
+  const resolved = resolveBandFractions(modelBands, bandPercent);
+  const rows = resolved
+    .filter((b) => b.areaFraction >= 0.005 || bandPercent?.[String(b.category)] != null)
     .slice()
     .sort((a, b) => b.category - a.category);
   if (rows.length === 0) return null;
@@ -76,10 +84,18 @@ export function CountyWindSlices({
               color: "var(--ink-600)",
             }}
           >
-            <span>
+            <span onClick={(e) => e.stopPropagation()}>
               <b style={{ color: "var(--ink-800)" }}>{LABEL[b.category] ?? b.category}</b>
               {" "}
-              {Math.round(b.areaFraction * 100)}%
+              {onBandPercent ? (
+                <SlicePercent
+                  model={modelBands.find((m) => m.category === b.category)?.areaFraction ?? b.areaFraction}
+                  override={bandPercent?.[String(b.category)]}
+                  onChange={(pct) => onBandPercent(b.category, pct)}
+                />
+              ) : (
+                <>{Math.round(b.areaFraction * 100)}%</>
+              )}
               {b.category >= 0 && b.maxWindKt > 0 ? ` · ${b.maxWindKt} kt` : ""}
             </span>
             {loss && assumption ? (
@@ -96,5 +112,50 @@ export function CountyWindSlices({
         );
       })}
     </div>
+  );
+}
+
+function SlicePercent({
+  model,
+  override,
+  onChange,
+}: {
+  model: number;
+  override: number | undefined;
+  onChange: (percent: number | null) => void;
+}) {
+  const shown = override ?? Math.round(model * 100);
+  const dirty = override != null && Math.abs(override - Math.round(model * 100)) >= 1;
+  return (
+    <input
+      type="number"
+      min={0}
+      max={100}
+      step={1}
+      value={Math.round(shown)}
+      title={dirty ? `Model had ${Math.round(model * 100)}%. Clear the box to put it back.` : "Share of the county. Edit to override. The rest becomes not in the storm."}
+      onChange={(e) => {
+        const raw = e.target.value.trim();
+        if (raw === "") {
+          onChange(null);
+          return;
+        }
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v)) return;
+        const pct = Math.max(0, Math.min(100, v));
+        if (Math.abs(pct - Math.round(model * 100)) < 0.5) onChange(null);
+        else onChange(pct);
+      }}
+      style={{
+        width: 36,
+        padding: "0 2px",
+        fontSize: "0.6rem",
+        textAlign: "right",
+        border: `1px solid ${dirty ? "#fbbf24" : "var(--ink-300)"}`,
+        background: dirty ? "#fef3c7" : "white",
+        borderRadius: 3,
+        fontFamily: "ui-monospace, monospace",
+      }}
+    />
   );
 }

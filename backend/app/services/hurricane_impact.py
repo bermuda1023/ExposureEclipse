@@ -27,8 +27,9 @@ from .county_wind import (
     experienced_wind_kt,
     include_county,
     outer_radius_nm,
-    sample_polygon_rings,
+    sample_polygons,
     severity,
+    skirt_wind_kt,
 )
 from .ibtracs import (
     Storm,
@@ -224,10 +225,8 @@ def _samples_for_geom(
     sliver that the grid misses still has one point.
     """
     polys = [geom["arcs"]] if geom.get("type") == "Polygon" else list(geom.get("arcs") or [])
-    pts: list[tuple[float, float]] = []
-    for poly in polys:
-        rings = [_resolve_ring(r, arcs) for r in poly]
-        pts.extend(sample_polygon_rings(rings))
+    polygons = [[_resolve_ring(r, arcs) for r in poly] for poly in polys]
+    pts = sample_polygons(polygons)
     if not any(
         abs(p[0] - centroid[0]) < 1e-4 and abs(p[1] - centroid[1]) < 1e-4 for p in pts
     ):
@@ -514,7 +513,12 @@ def _quads_asymmetric_r64(footprint: list[FootprintPoint]) -> list[ConeQuad]:
                     (rb_lon, rb_lat),
                     (ra_lon, ra_lat),
                 ),
-                wind_kt=(a.wind_kt + b.wind_kt) // 2,
+                # The annulus is not the eyewall. Color it as the wind
+                # halfway out to 64 kt, not as the storm's peak.
+                wind_kt=int(round((
+                    skirt_wind_kt(a.wind_kt, a.rmax_nm, a.r64_nm)
+                    + skirt_wind_kt(b.wind_kt, b.rmax_nm, b.r64_nm)
+                ) / 2)),
                 start_wind_kt=a.wind_kt,
                 end_wind_kt=b.wind_kt,
             )
@@ -825,7 +829,7 @@ def compute_impact(
         outer_rings.append(
             {
                 "ring": ring,
-                "wind_kt": pt.wind_kt,
+                "wind_kt": skirt_wind_kt(pt.wind_kt, pt.rmax_nm, pt.r64_nm),
                 "r64_nm": pt.r64_nm,
                 "r64_source": pt.r64_source,
             }

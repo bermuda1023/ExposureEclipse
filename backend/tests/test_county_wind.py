@@ -7,6 +7,8 @@ from app.services.county_wind import (
     experienced_wind_kt,
     include_county,
     local_wind_kt,
+    sample_polygons,
+    skirt_wind_kt,
 )
 from app.services.hurricane_impact import (
     CountyMeta,
@@ -15,6 +17,27 @@ from app.services.hurricane_impact import (
     compute_impact,
 )
 from app.services.ibtracs import Storm, TrackPoint
+
+
+def test_skirt_is_not_painted_as_the_eyewall() -> None:
+    # Irma over the keys: 115 kt, Rmax 10, R64 ~50. The wide ring is not Cat 4.
+    skirt = skirt_wind_kt(115, 10.0, 52.5)
+    assert 64 <= skirt < 96
+
+
+def test_islands_do_not_outvote_the_mainland() -> None:
+    def square(x0, y0, x1, y1):
+        return [[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]]
+
+    # Mainland is ~0.64 deg². Four islands are ~0.09 deg² together, about 12%.
+    # A per-island grid would give the islands most of the points.
+    mainland = square(-81.0, 25.2, -80.2, 26.0)
+    specks = [square(-81.7 + i * 0.25, 24.5, -81.55 + i * 0.25, 24.65) for i in range(4)]
+    pts = sample_polygons([mainland, *specks])
+    assert len(pts) >= 40
+    keys = sum(1 for lat, _lon in pts if lat < 25.0)
+    share = keys / len(pts)
+    assert 0.03 < share < 0.25
 
 
 def test_profile_pins_eyewall_and_r64_and_drops_the_far_field() -> None:
