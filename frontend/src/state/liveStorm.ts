@@ -60,7 +60,7 @@ interface LiveStormState {
   // -fetch the required model grid(s) once per storm. Status is exposed so
   // the panel can distinguish "loading" from "no data available at this
   // bbox" (Open-Meteo's ECMWF variants return nulls over the mid-Pacific).
-  windMapMode: WindMapMode;
+  windMapMode: WindMapMode | null;
   gfsGrid: WindModelGrid | null;
   ecmwfGrid: WindModelGrid | null;
   gfsGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
@@ -148,7 +148,7 @@ interface LiveStormState {
   pushToDetail: () => void;
   popFromDetail: () => void;
   setToggle: (key: ToggleKey, value: boolean) => void;
-  setWindMapMode: (mode: WindMapMode) => void;
+  setWindMapMode: (mode: WindMapMode | null) => void;
   setGfsGrid: (g: WindModelGrid | null) => void;
   setEcmwfGrid: (g: WindModelGrid | null) => void;
   setGfsGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;

@@ -711,7 +711,9 @@ export function Methodology() {
         <SubHead>Source mode selector</SubHead>
         <p>
           The panel exposes six modes: <b>Obs</b>, <b>GFS</b>, <b>ECMWF</b>,
-          and three <b>diff</b> views (Obs−GFS, Obs−ECMWF, GFS−ECMWF). GFS
+          and three <b>diff</b> views (Obs−GFS, Obs−ECMWF, GFS−ECMWF).
+          Click the active source again to turn that wind field off. The
+          storm track stays. GFS
           and ECMWF are the Open-Meteo hourly 10 m fields (
           <code>gfs_seamless</code>, <code>ecmwf_ifs025</code>), sampled
           every 6 h out to 120 h. A large cone is requested on a coarser

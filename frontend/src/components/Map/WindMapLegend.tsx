@@ -78,7 +78,7 @@ export function WindMapLegend() {
   const shearOn = useLiveStormStore(shearViewActive);
   const hazardActive = useHazardOverlayStore((s) => s.active);
 
-  if (!data || !showWindMap) return null;
+  if (!data || !showWindMap || !mode) return null;
 
   const isDiff = mode.startsWith("diff-");
   const stops = shearOn ? SHEAR_STOPS : isDiff ? DIFF_STOPS : SPEED_STOPS;

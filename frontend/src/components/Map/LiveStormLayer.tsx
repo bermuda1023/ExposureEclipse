@@ -840,7 +840,10 @@ export function LiveStormLayer({ map }: Props) {
       let viewStep = obsStep;
       let isDiffView = false;
       let isShearView = false;
-      if (windMapMode === "gfs" && gfsCellsAtFrame) {
+      if (windMapMode == null) {
+        // Source toggled off. Do not fall through to the observed grid.
+        cellsForView = [];
+      } else if (windMapMode === "gfs" && gfsCellsAtFrame) {
         cellsForView = gfsCellsAtFrame;
         viewStep = gfsStep;
       } else if (windMapMode === "ecmwf" && ecmwfCellsAtFrame) {
@@ -1525,9 +1528,10 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_NHC_CONE_LINE, showForecastCone);
       setVis(map, LAYER_SURGE_FILL, showSurge);
       setVis(map, LAYER_SURGE_LINE, showSurge);
-      setVis(map, LAYER_WIND_MAP_FILL, showWindMap);
-      setVis(map, LAYER_WIND_SHEAR_ARROW, showWindMap);
-      setVis(map, LAYER_WIND_OBS, showWindMap);
+      const windPaint = showWindMap && windMapMode != null;
+      setVis(map, LAYER_WIND_MAP_FILL, windPaint);
+      setVis(map, LAYER_WIND_SHEAR_ARROW, windPaint);
+      setVis(map, LAYER_WIND_OBS, windPaint);
       const showJma = !!data?.jma;
       setVis(map, LAYER_JMA_GALE, showJma);
       setVis(map, LAYER_JMA_STORM, showJma);
@@ -1901,7 +1905,7 @@ export function LiveStormLayer({ map }: Props) {
 
     function renderShearPopup(
       cell: { windKt: number; windDirDeg: number | null },
-      mode: import("../../state/liveStorm").WindMapMode,
+      mode: import("../../state/liveStorm").WindMapMode | null,
     ): string {
       const modelName = mode === "ecmwf" ? "ECMWF" : "GFS";
       const kt = cell.windKt;
@@ -1963,11 +1967,11 @@ export function LiveStormLayer({ map }: Props) {
       },
       forecast: import("../../api/live").PointForecast | null,
       loaded: boolean,
-      mode: import("../../state/liveStorm").WindMapMode,
+      mode: import("../../state/liveStorm").WindMapMode | null,
       obsAtClick: number | null,
     ): string {
       const rows: string[] = [];
-      const isDiff = mode.startsWith("diff-");
+      const isDiff = !!mode && mode.startsWith("diff-");
       const modeLabel: Record<string, string> = {
         "observed": "Observed (IDW blend)",
         "gfs": "GFS forecast",
@@ -1977,7 +1981,7 @@ export function LiveStormLayer({ map }: Props) {
         "diff-gfs-vs-ecmwf": "GFS − ECMWF",
       };
       rows.push(
-        `<div style="font-weight:700;color:#0f172a;margin-bottom:4px">Wind at point <span style="color:#64748b;font-weight:400">· ${modeLabel[mode] ?? mode}</span></div>`,
+        `<div style="font-weight:700;color:#0f172a;margin-bottom:4px">Wind at point <span style="color:#64748b;font-weight:400">· ${mode ? (modeLabel[mode] ?? mode) : "Wind"}</span></div>`,
       );
       if (isDiff) {
         // Compute the Δ from the actual model / obs values at the click
@@ -2012,7 +2016,7 @@ export function LiveStormLayer({ map }: Props) {
         }
       } else {
         rows.push(
-          `<div><b>${modeLabel[mode]}:</b> ${speedTriple(obs.windKt)}</div>`,
+          `<div><b>${mode ? (modeLabel[mode] ?? mode) : "Wind"}:</b> ${speedTriple(obs.windKt)}</div>`,
           `<div>Direction: ${compass(obs.windDirDeg)}</div>`,
         );
       }
@@ -2101,7 +2105,7 @@ export function LiveStormLayer({ map }: Props) {
             `<div style="margin-top:5px;font-size:10px">Δ vs model mean: ${note}</div>`,
           );
         }
-      } else if (mode === "observed" || mode.startsWith("diff-")) {
+      } else if (mode === "observed" || (!!mode && mode.startsWith("diff-"))) {
         // Only warn when the failed fetch actually breaks the popup's
         // purpose — observed mode expects models for cross-validation,
         // and diff modes need both operands. In gfs / ecmwf modes the

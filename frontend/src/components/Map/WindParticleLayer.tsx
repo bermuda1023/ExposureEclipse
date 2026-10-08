@@ -292,7 +292,7 @@ function selectActiveCells(): {
   step: number;
 } | null {
   const s = useLiveStormStore.getState();
-  if (!s.showWindMap || !s.showWindParticles) return null;
+  if (!s.showWindMap || !s.showWindParticles || !s.windMapMode) return null;
   // Shear is not a flow, but the 10 m particles stay on. They are what
   // shows the circulation, and therefore the center, at this slider hour.
   const mode = s.windMapMode;
@@ -337,11 +337,10 @@ export function WindParticleLayer({ map }: Props) {
 
   useEffect(() => {
     if (!map) return;
-    if (!showWindMap || !showWindParticles) {
-      // Ensure layer is removed if it exists.
+    if (!showWindMap || !showWindParticles || !mode || mode.startsWith("diff-")) {
       try {
         if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
-      } catch { /* map torn down */ }
+      } catch { /* */ }
       return;
     }
 
@@ -357,14 +356,6 @@ export function WindParticleLayer({ map }: Props) {
     const markTrailsDirty = () => {
       trailsDirty = true;
     };
-
-    // Skip diff modes — particles only make sense in observed / gfs / ecmwf.
-    if (mode.startsWith("diff-")) {
-      try {
-        if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
-      } catch { /* */ }
-      return;
-    }
 
     const active = selectActiveCells();
     if (!active || !active.bbox || active.cells.length === 0) {

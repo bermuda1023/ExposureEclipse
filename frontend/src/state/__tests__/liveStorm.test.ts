@@ -13,6 +13,16 @@ describe("live storm reload", () => {
     useLiveStormStore.getState().clear();
   });
 
+  it("turns the wind source off without dropping the storm", () => {
+    useLiveStormStore.getState().start("AL012026");
+    useLiveStormStore.getState().setWindMapMode("gfs");
+    useLiveStormStore.getState().setWindMapMode(null);
+    expect(useLiveStormStore.getState().windMapMode).toBeNull();
+    expect(useLiveStormStore.getState().activeStormId).toBe("AL012026");
+    useLiveStormStore.getState().clear();
+    expect(useLiveStormStore.getState().windMapMode).toBe("observed");
+  });
+
   it("shows the wind field and cone by default", () => {
     const s = useLiveStormStore.getState();
     expect(s.showWindField).toBe(true);

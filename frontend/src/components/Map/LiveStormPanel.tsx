@@ -1462,7 +1462,9 @@ function WindMapModeSelector({
         : shearStatus === "error"
           ? "Shear request failed."
           : null;
-  const activeStatus = statusForMode(store.windMapMode) ?? shearStatusLine;
+  const activeStatus = store.windMapMode
+    ? (statusForMode(store.windMapMode) ?? shearStatusLine)
+    : null;
 
   return (
     <div
@@ -1489,6 +1491,18 @@ function WindMapModeSelector({
       >
         Wind map source
       </div>
+      {store.windMapMode == null && (
+        <div
+          style={{
+            gridColumn: "span 3",
+            fontSize: "0.62rem",
+            color: "var(--ink-500)",
+            marginBottom: 2,
+          }}
+        >
+          Off. Click Obs, GFS, or ECMWF to show wind again. The storm track stays.
+        </div>
+      )}
       {modes.map(([mode, label, hint]) => {
         const active = store.windMapMode === mode;
         const badge = modeBadge(mode);
@@ -1496,8 +1510,12 @@ function WindMapModeSelector({
           <button
             key={mode}
             type="button"
-            title={hint}
-            onClick={() => useLiveStormStore.getState().setWindMapMode(mode)}
+            title={active ? `${hint}. Click again to turn this source off.` : hint}
+            aria-pressed={active}
+            onClick={() => {
+              const cur = useLiveStormStore.getState().windMapMode;
+              useLiveStormStore.getState().setWindMapMode(cur === mode ? null : mode);
+            }}
             style={{
               all: "unset",
               cursor: "pointer",
@@ -1608,8 +1626,8 @@ function WindMapTimeSlider({
 }) {
   if (!store.showWindMap && !store.showWindParticles && !store.data?.jma) return null;
   const mode = store.windMapMode;
-  // Observed grid is always current-time — no frames to scrub through.
-  if (mode === "observed") return null;
+  // No source selected, or the observed grid is always current-time.
+  if (!mode || mode === "observed") return null;
 
   const needsGfs =
     mode === "gfs" || mode === "diff-obs-vs-gfs" || mode === "diff-gfs-vs-ecmwf";
