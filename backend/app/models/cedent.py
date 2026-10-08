@@ -68,6 +68,9 @@ class Programme(CamelModel):
     inception_date: datetime | None = None
     expiry_date: datetime | None = None
     notes: str | None = None
+    # Reference books (the Industry cedant) are selectable but are not
+    # part of the in-force client portfolio. Client deals default to True.
+    include_in_portfolio: bool = True
     edm: EDMRef
     # `dataset_id` is the legacy stable id used by exposure_facts/<id>.json. We
     # keep it so we don't have to rename every fact file when promoting to the

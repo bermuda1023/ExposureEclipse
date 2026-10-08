@@ -1,5 +1,49 @@
 [
   {
+    "cedentId": "ced-industry",
+    "cedentName": "Industry",
+    "chains": [
+      {
+        "chainId": "chain-industry-us-ws",
+        "cedentId": "ced-industry",
+        "chainName": "US property industry",
+        "office": "REF",
+        "defaultPeril": "WS",
+        "programmes": [
+          {
+            "programmeId": "prog-industry-ws-2026",
+            "chainId": "chain-industry-us-ws",
+            "cedentId": "ced-industry",
+            "programmeName": "US property industry — wind, 2026 estimate",
+            "treatyYear": 2026,
+            "perils": ["WS"],
+            "peril": "WS",
+            "office": "REF",
+            "underwriter": "Reference",
+            "status": "BOUND",
+            "signedShare": 1.0,
+            "includeInPortfolio": false,
+            "notes": "Ground-up estimate of US insured property value, residential and commercial. The split is informational. Map TIV and impact losses use the bundled total. Not an RMS or AIR industry database, and not part of the in-force client portfolio. Select this cedant, then run county impact.",
+            "datasetId": "ds-industry-ws",
+            "edm": {
+              "serverName": "REFERENCE",
+              "edmDatabaseName": "Industry_US_Property_WS",
+              "currency": "USD",
+              "ertStatus": "ERT_READY",
+              "availableGranularity": ["COUNTRY", "STATE", "COUNTY"],
+              "lastGeneratedAt": "2026-10-08T00:00:00Z",
+              "exposureDataCutoffDate": "2026-01-01T00:00:00Z"
+            },
+            "inceptionDate": "2026-01-01T00:00:00Z",
+            "expiryDate": "2026-12-31T00:00:00Z"
+          }
+        ]
+      }
+    ],
+    "region": "Reference",
+    "notes": "Select Industry to put estimated US property values on the map and through the live-storm impact calc. Residential and commercial are shown separately and summed for every calc."
+  },
+  {
     "cedentId": "ced-farmers",
     "cedentName": "Farmers Group",
     "chains": [

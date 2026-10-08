@@ -81,6 +81,9 @@ export interface ImpactedCounty {
    * measurement or the Willoughby parametric fallback. */
   rmaxSource: "ibtracs" | "willoughby" | "nhc";
   tiv: number;
+  /** Informational split. The loss band uses tiv, not these fields. */
+  residentialTiv?: number;
+  commercialTiv?: number;
   locationCount: number;
   hasData: boolean;
   byProgramme: ImpactProgrammeContribution[];
@@ -128,6 +131,9 @@ export interface ImpactSummary {
   countiesWithData: number;
   totalTiv: number;
   totalLocationCount: number;
+  /** Informational. Losses use totalTiv, which already bundles both. */
+  residentialTiv?: number;
+  commercialTiv?: number;
 }
 
 export interface HurricaneImpactResponse {

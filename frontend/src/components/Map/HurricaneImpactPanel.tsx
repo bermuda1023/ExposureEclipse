@@ -33,6 +33,8 @@ export function HurricaneImpactPanel() {
   const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
   const stormOverrides = data ? (overridesByStorm[data.stormId] ?? {}) : {};
 
+  // Loss uses county TIV, already the bundled residential + commercial
+  // total. Segment fields are display-only and must not be applied again.
   const totals = useMemo(() => {
     if (!data) return { mean: 0, low: 0, high: 0 };
     let mean = 0, low = 0, high = 0;
@@ -211,6 +213,11 @@ export function HurricaneImpactPanel() {
                 label="Loss band ±1SD"
                 value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
               />
+              <SegmentNote
+                residential={data.summary.residentialTiv}
+                commercial={data.summary.commercialTiv}
+                currency={data.currency}
+              />
             </div>
             {data.footprint.length > 0 && (
               <RmaxSourceLine footprint={data.footprint} />
@@ -272,6 +279,11 @@ export function HurricaneImpactPanel() {
                     </td>
                     <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
                       {c.hasData ? formatMoneyCompact(c.tiv, data.currency) : "—"}
+                      {(c.residentialTiv ?? 0) > 0 && (c.commercialTiv ?? 0) > 0 && (
+                        <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
+                          Res {formatMoneyCompact(c.residentialTiv, data.currency)} · Com {formatMoneyCompact(c.commercialTiv, data.currency)}
+                        </div>
+                      )}
                       {c.hasData && (() => {
                         const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
                         const b = applyAssumption(c.tiv * exp, c.maxWindKt, byCategory);
@@ -332,6 +344,24 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div style={{ fontWeight: 700, color: "var(--ink-900)", marginTop: 1 }}>{value}</div>
+    </div>
+  );
+}
+
+function SegmentNote({
+  residential,
+  commercial,
+  currency,
+}: {
+  residential: number | undefined;
+  commercial: number | undefined;
+  currency: string;
+}) {
+  if ((residential ?? 0) <= 0 || (commercial ?? 0) <= 0) return null;
+  return (
+    <div style={{ fontSize: "0.66rem", color: "var(--ink-600)", gridColumn: "1 / -1" }}>
+      Residential {formatMoneyCompact(residential, currency)} · Commercial{" "}
+      {formatMoneyCompact(commercial, currency)}. Information only. The loss uses the bundled total.
     </div>
   );
 }

@@ -1,0 +1,12 @@
+{
+  "datasetId": "ds-industry-ws",
+  "currency": "USD",
+  "expressedIn": "early 2026 USD",
+  "acsYear": 2023,
+  "cbpYear": 2022,
+  "counties": 3222,
+  "residentialTiv": 32975871382988,
+  "commercialTiv": 44844372923847,
+  "totalTiv": 77820244306835,
+  "note": "Residential and commercial are informational. Map TIV and impact losses use the bundled total."
+}

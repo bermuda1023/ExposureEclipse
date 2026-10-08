@@ -90,6 +90,8 @@ class ExposureDataProvider(ABC):
         for cedent in self.list_cedents():
             for chain in cedent.chains:
                 for prog in chain.programmes:
+                    if not prog.include_in_portfolio:
+                        continue
                     if in_force_only and not prog.is_in_force():
                         continue
                     if prog.dataset_id not in seen:

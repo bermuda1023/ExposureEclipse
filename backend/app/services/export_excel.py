@@ -367,6 +367,8 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
             ("Counties Impacted", summary.get("countiesImpacted")),
             ("Counties With Portfolio Data", summary.get("countiesWithData")),
             ("Total TIV (in selection)", summary.get("totalTiv")),
+            ("Residential TIV (information)", summary.get("residentialTiv")),
+            ("Commercial TIV (information)", summary.get("commercialTiv")),
             ("Total Location Count", summary.get("totalLocationCount")),
         ],
     )
@@ -387,6 +389,8 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         "Has Portfolio Data",
         "Centroid Lat",
         "Centroid Lon",
+        "Residential TIV (information)",
+        "Commercial TIV (information)",
     ]
     _write_header_row(ws, headers)
     for r, c in enumerate(counties, start=2):
@@ -404,6 +408,8 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         ws.cell(row=r, column=12, value=c.get("hasData"))
         ws.cell(row=r, column=13, value=c.get("centroidLat"))
         ws.cell(row=r, column=14, value=c.get("centroidLon"))
+        ws.cell(row=r, column=15, value=c.get("residentialTiv"))
+        ws.cell(row=r, column=16, value=c.get("commercialTiv"))
 
     buf = io.BytesIO()
     wb.save(buf)

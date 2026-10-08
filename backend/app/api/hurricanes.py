@@ -293,6 +293,9 @@ def _compute_impact_payload(
             "countiesWithData": counties_with_data,
             "totalTiv": total_tiv,
             "totalLocationCount": total_loc,
+            # Informational. totalTiv already bundles both segments.
+            "residentialTiv": sum(i.residential_tiv for i in impacts),
+            "commercialTiv": sum(i.commercial_tiv for i in impacts),
         },
         "counties": [
             {
@@ -308,6 +311,8 @@ def _compute_impact_payload(
                 "rmaxAtClosestNm": round(i.rmax_at_closest_nm, 1),
                 "rmaxSource": i.rmax_source,
                 "tiv": i.tiv,
+                "residentialTiv": i.residential_tiv,
+                "commercialTiv": i.commercial_tiv,
                 "locationCount": i.location_count,
                 "hasData": i.has_data,
                 "byProgramme": [

@@ -283,9 +283,12 @@ class CountyImpact:
     closest_distance_nm: float  # closest approach of the storm's eye
     rmax_at_closest_nm: float   # the Rmax we used for that point
     rmax_source: str            # 'ibtracs' (recon) | 'willoughby' (formula)
-    tiv: float                  # joined from the user's selection
+    tiv: float                  # joined from the user's selection (all segments)
     location_count: int
     has_data: bool             # true if any fact row exists for this county
+    # Informational split. Loss calcs use ``tiv``, which already bundles these.
+    residential_tiv: float = 0.0
+    commercial_tiv: float = 0.0
     # Parametric damage ratio + projected ground-up loss for the user's
     # in-scope TIV, computed from the county's max sustained wind. See
     # services/damage_ratio.py for the curve.
@@ -684,6 +687,8 @@ def join_tiv(
     by_geo: dict[str, tuple[float, int]] = {}
     # Two-level index: geo -> dataset_id -> (tiv, loc)
     by_geo_prog: dict[str, dict[str, tuple[float, int]]] = {}
+    # Informational only. Residential + commercial are not separate losses.
+    by_geo_seg: dict[str, dict[str, float]] = {}
     for f in facts:
         gid = getattr(f, "geography_id", None)
         agg = getattr(f, "aggregation", None)
@@ -695,6 +700,10 @@ def join_tiv(
         prog_map = by_geo_prog.setdefault(gid, {})
         cur_p_tiv, cur_p_loc = prog_map.get(ds_id, (0.0, 0))
         prog_map[ds_id] = (cur_p_tiv + (f.tiv or 0.0), cur_p_loc + (f.location_count or 0))
+        seg = getattr(f, "occupancy_segment", None) or ""
+        seg = seg.value if hasattr(seg, "value") else str(seg)
+        seg_map = by_geo_seg.setdefault(gid, {})
+        seg_map[seg] = seg_map.get(seg, 0.0) + float(f.tiv or 0.0)
 
     # NOTE: damage_ratio + projected_loss are intentionally NOT computed
     # server-side. The user supplies their own mean + SD per Saffir-Simpson
@@ -708,6 +717,9 @@ def join_tiv(
             imp.tiv = tiv
             imp.location_count = loc
             imp.has_data = True
+            seg_map = by_geo_seg.get(imp.geography_id, {})
+            imp.residential_tiv = float(seg_map.get("RESIDENTIAL", 0.0))
+            imp.commercial_tiv = float(seg_map.get("COMMERCIAL", 0.0))
             prog_map = by_geo_prog.get(imp.geography_id, {})
             imp.by_programme = [
                 ProgrammeContribution(dataset_id=ds, tiv=t, location_count=lc)

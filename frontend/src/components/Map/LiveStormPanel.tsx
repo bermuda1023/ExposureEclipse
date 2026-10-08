@@ -862,7 +862,7 @@ export function LiveStormPanel() {
                   textTransform: "uppercase",
                   letterSpacing: "0.04em",
                 }}
-                title="County TIV under the live NHC official track + current/forecast wind radii (not HURDAT)"
+                title="County exposure under the live NHC track. Uses the cedant you have selected. With none selected, this is the in-force client portfolio, not the Industry book. Residential and commercial inside a book are bundled into one loss."
               >
                 Run county impact
               </button>}

@@ -103,6 +103,55 @@ export function Methodology() {
             replacement cost) is derived from{" "}
             <code>us-atlas TopoJSON</code> for centroids plus ~35 curated
             census-style rows and deterministic synthesis for the remainder.
+            That panel is a per-home sense check. It is not the Industry book.
+          </li>
+        </ul>
+        <SubHead>Industry cedant</SubHead>
+        <ul>
+          <li>
+            Industry is a reference cedant for estimated US property
+            insured value, not a treaty. It is left out of the in-force
+            portfolio, so the map stays on the client book until Industry
+            is selected. Select it, then use Run county impact on a live
+            storm. The loss is ground-up exposure times the damage ratios.
+            It is not an RMS or AIR industry database. Those files can
+            replace this book later without changing the calc.
+          </li>
+          <li>
+            Residential and commercial are stored as separate rows so the
+            county detail and the impact panel can show the split. Every
+            calc bundles them. Map TIV, pivot, and the impact loss all sum
+            the two segments. The loss is not run twice.
+          </li>
+          <li>
+            Residential value starts from Census ACS 2023 5-year housing
+            by tenure and units in structure, for every US county and
+            Puerto Rico. Owner market value is turned into a structure
+            replacement cost by removing a modeled land share, then lifting
+            the median toward the mean and bridging to early 2026 dollars.
+            The land share is higher where the county median sits far above
+            its state, because that premium is mostly land. Contents and
+            additional living expense sit on the structure. Homeowner
+            take-up is about 91 percent, higher on the hurricane coast and
+            lower in California. Renters contents use a 48 percent take-up.
+            Condo interiors stay residential. The condo shell and buildings
+            with 5 or more units sit in commercial, so the structure is not
+            counted twice. Small rental houses stay residential.
+          </li>
+          <li>
+            Commercial value allocates EIA CBECS 2018 floorspace, grown
+            forward, across counties by Census County Business Patterns
+            employment, then prices it with a reconstruction cost per
+            square foot and a state cost index. Schools, churches, and the
+            small public-building stock are only partly insured. County
+            Business Patterns does not publish government payroll, so that
+            small public stock is spread with total employment.
+            Manufacturing floorspace is added because CBECS leaves
+            industrial buildings out, and that industrial piece is included
+            in commercial. The national result is about $33 trillion
+            residential and about $45 trillion commercial, in early 2026
+            dollars. Rebuild it with{" "}
+            <code>backend/scripts/build_industry_exposure.py</code>.
           </li>
         </ul>
         <Sources>
@@ -119,6 +168,36 @@ export function Methodology() {
               us-atlas TopoJSON
             </a>{" "}
             (MIT) — county / state centroids.
+          </li>
+          <li>
+            <a
+              href="https://www.census.gov/programs-surveys/acs"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Census ACS 2023 5-year
+            </a>{" "}
+            — housing counts and median value for the residential estimate.
+          </li>
+          <li>
+            <a
+              href="https://www.census.gov/programs-surveys/cbp"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Census County Business Patterns 2022
+            </a>{" "}
+            — employment used to place commercial floorspace.
+          </li>
+          <li>
+            <a
+              href="https://www.eia.gov/consumption/commercial"
+              target="_blank"
+              rel="noreferrer"
+            >
+              EIA CBECS 2018
+            </a>{" "}
+            — national commercial floorspace by activity.
           </li>
         </Sources>
       </Section>
@@ -193,6 +272,8 @@ export function Methodology() {
             User-editable per-SSHWS-category damage-ratio inputs (mean +
             SD) live in the <code>damageAssumptions</code> Zustand store.
             Together they produce a probabilistic loss band per storm.
+            The band multiplies the bundled county TIV. Residential and
+            commercial figures on the same screen are information only.
           </li>
           <li>
             Per-county <b>exposed-fraction overrides</b>{" "}

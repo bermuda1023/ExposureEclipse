@@ -32,9 +32,9 @@ export function HurricaneImpactDetail() {
   const resetStorm = useCountyOverridesStore((s) => s.resetStorm);
   const [openGeoid, setOpenGeoid] = useState<string | null>(null);
 
-  // Apply the user's assumptions to every impacted county, scaling each
-  // county's TIV by its exposed-fraction override (default 100%). Memoised
-  // on assumptions + overrides + counties so re-renders are cheap.
+  // Loss uses county TIV, already the bundled residential + commercial
+  // total. Segment fields are display-only and must not be applied again.
+  // Exposed-fraction override defaults to 100%.
   const stormOverrides = data ? (overridesByStorm[data.stormId] ?? {}) : {};
   const totals = useMemo(() => {
     if (!data) return { mean: 0, low: 0, high: 0, anyOverride: false };
@@ -145,6 +145,11 @@ export function HurricaneImpactDetail() {
             value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
           />
         </div>
+        <SegmentNote
+          residential={data.summary.residentialTiv}
+          commercial={data.summary.commercialTiv}
+          currency={data.currency}
+        />
         <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
           Rmax multiplier {data.multiplier}× — counties exposed to ≥ 85 kt sustained winds.
           {totals.anyOverride && (
@@ -391,6 +396,11 @@ function FragmentRow({
         </td>
         <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
           {c.hasData ? formatMoneyCompact(c.tiv, currency) : "—"}
+          {(c.residentialTiv ?? 0) > 0 && (c.commercialTiv ?? 0) > 0 && (
+            <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
+              Res {formatMoneyCompact(c.residentialTiv, currency)} · Com {formatMoneyCompact(c.commercialTiv, currency)}
+            </div>
+          )}
           {band && (
             <>
               <div
@@ -484,6 +494,24 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div style={{ fontWeight: 700, color: "var(--ink-900)", marginTop: 1 }}>{value}</div>
+    </div>
+  );
+}
+
+function SegmentNote({
+  residential,
+  commercial,
+  currency,
+}: {
+  residential: number | undefined;
+  commercial: number | undefined;
+  currency: string;
+}) {
+  if ((residential ?? 0) <= 0 || (commercial ?? 0) <= 0) return null;
+  return (
+    <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
+      Residential {formatMoneyCompact(residential, currency)} · Commercial{" "}
+      {formatMoneyCompact(commercial, currency)}. Information only. The loss uses the bundled total.
     </div>
   );
 }

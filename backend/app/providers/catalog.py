@@ -289,6 +289,8 @@ class JsonCatalogProvider(ExposureDataProvider):
         ids: list[str] = []
         seen: set[str] = set()
         for p in self._programme_by_id.values():
+            if not p.include_in_portfolio:
+                continue
             if in_force_only and not p.is_in_force():
                 continue
             if p.edm.ert_status == ErtStatus.ERT_NOT_FOUND:
