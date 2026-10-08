@@ -31,7 +31,9 @@ import { HurricaneLayer } from "./HurricaneLayer";
 import { HurricaneImpactPanel } from "./HurricaneImpactPanel";
 import { HazardOverlayLayer } from "./HazardOverlayLayer";
 import { HazardOverlayLegend } from "./HazardOverlayLegend";
+import { LiveImageryLayer } from "./LiveImageryLayer";
 import { LiveStormLayer } from "./LiveStormLayer";
+import { MyLocationLayer } from "./MyLocationLayer";
 import { LiveStormPanel } from "./LiveStormPanel";
 import { ModelTrackLayer } from "./ModelTrackLayer";
 import { StrikeProbabilityLayer } from "./StrikeProbabilityLayer";
@@ -45,6 +47,7 @@ import { WindMapLegend } from "./WindMapLegend";
 import { WindParticleLayer } from "./WindParticleLayer";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { useHazardOverlayStore } from "../../state/hazardOverlay";
+import { liveStormHidesExposureFills, useLiveStormStore } from "../../state/liveStorm";
 import { useLiveWildfireStore } from "../../state/liveWildfire";
 import { useLiveFloodStore } from "../../state/liveFlood";
 import { MapTooltip } from "./Tooltip";
@@ -560,11 +563,15 @@ export function MapView({ data, isLoading, error }: Props) {
   const floodHidesExposures = useLiveFloodStore(
     (s) => s.active && s.hideExposures,
   );
+  const stormHidesExposures = useLiveStormStore((s) =>
+    liveStormHidesExposureFills(s),
+  );
   useEffect(() => {
     const m = mapInstance;
     if (!m) return;
     const visibility =
       hazardActive !== null || wildfireHidesExposures || floodHidesExposures
+        || stormHidesExposures
         ? "none"
         : "visible";
     const apply = () => {
@@ -577,7 +584,7 @@ export function MapView({ data, isLoading, error }: Props) {
     return () => {
       m.off("style.load", apply);
     };
-  }, [mapInstance, hazardActive, wildfireHidesExposures, floodHidesExposures]);
+  }, [mapInstance, hazardActive, wildfireHidesExposures, floodHidesExposures, stormHidesExposures]);
 
   // ── Render ──
   if (!hasToken) {
@@ -599,6 +606,7 @@ export function MapView({ data, isLoading, error }: Props) {
       <HurricaneImpactPanel />
       <HazardOverlayLayer map={mapInstance} />
       <HazardOverlayLegend />
+      <LiveImageryLayer map={mapInstance} />
       <LiveStormLayer map={mapInstance} />
       <ModelTrackLayer map={mapInstance} />
       <StrikeProbabilityLayer map={mapInstance} />
@@ -606,6 +614,7 @@ export function MapView({ data, isLoading, error }: Props) {
       <WindParticleLayer map={mapInstance} />
       <WildfireLayer map={mapInstance} />
       <FloodLayer map={mapInstance} />
+      <MyLocationLayer map={mapInstance} />
       <LiveStormPanel />
       <WildfirePanel />
       <WildfireLegend />

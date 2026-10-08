@@ -160,6 +160,37 @@ def test_intensity_spread_by_lead() -> None:
     assert lead_72.member_count == 6
 
 
+def test_majority_member_cycle_is_the_one_reported() -> None:
+    older = [
+        _member(f"AP{i:02d}", "gefs_ens",
+                lats=[25.0, 25.5], lons=[-80.0, -80.4], winds=[80, 90])
+        for i in range(1, 5)
+    ]
+    for t in older:
+        t.init_cycle = "2026-10-07T12Z"
+    newer = _member("GDMI", "ai", [25.0, 25.5], [-80.0, -80.4], [80, 90])
+    newer.init_cycle = "2026-10-07T18Z"
+    risk = compute_ensemble_risk([newer, *older])
+    assert risk.init_cycle == "2026-10-07T12Z"
+    assert risk.ensemble_total == 5
+
+
+def test_lead_before_24h_does_not_count_as_a_strike() -> None:
+    # Passes over the county at 12 h, then runs away. The early segment
+    # is the storm's current position, not the forecast.
+    member = ModelTrack(
+        tech_id="AP01", label="", family="gefs_ens",
+        init_cycle="2026-10-07T12Z",
+        fixes=[
+            ModelFix(hours_out=12, lat=25.5, lon=-80.4, wind_kt=90, pressure_mb=None),
+            ModelFix(hours_out=24, lat=28.0, lon=-84.0, wind_kt=90, pressure_mb=None),
+            ModelFix(hours_out=48, lat=32.0, lon=-88.0, wind_kt=80, pressure_mb=None),
+        ],
+    )
+    risk = compute_ensemble_risk([member])
+    assert all(c.state_usps != "FL" for c in risk.strike_by_county)
+
+
 def test_short_lead_members_excluded() -> None:
     # A member whose track stops at T+12 shouldn't count for strike probability
     # — MIN_LEAD_HOURS=24. But it will still contribute to intensity spread at

@@ -42,22 +42,19 @@ const FADE_OPACITY = 0.94;               // slow decay = long visible trails
 const SPEED_FACTOR = 0.6;
 const DROP_RATE = 0.003;                 // baseline particle respawn rate
 const DROP_RATE_BUMP = 0.01;             // extra respawn in low-wind cells
-const POINT_SIZE = 2.5;                  // pixel size for each particle
-const PARTICLE_ALPHA = 0.55;             // per-particle base alpha; trails
+const POINT_SIZE = 4.0;                  // pixel size for each particle
+const PARTICLE_ALPHA = 0.7;              // per-particle base alpha; trails
                                          // then fade below this via FADE_OPACITY
 
-// Whitish palette with just a hint of colour for high winds — mirrors
-// Windy.com's aesthetic where the particles read as motion and the
-// underlying heatmap carries the speed information. Dark saturated
-// colours from earlier iterations turned the particle layer into an
-// opaque black mass over the map.
+// Dark enough to read on the light basemap and the pale low-wind fills.
+// The old near-white ramp disappeared everywhere except over the darkest
+// fills. Alpha stays under 1 so the trails don't paint a solid sheet.
 const RAMP_COLORS: Record<number, string> = {
-  0.00: "rgb(255,255,255)",
-  0.20: "rgb(255,255,240)",
-  0.40: "rgb(255,250,220)",
-  0.60: "rgb(255,240,200)",
-  0.80: "rgb(255,230,210)",
-  1.00: "rgb(255,220,220)",
+  0.00: "rgb(30,41,59)",
+  0.25: "rgb(29,78,216)",
+  0.55: "rgb(180,83,9)",
+  0.80: "rgb(185,28,28)",
+  1.00: "rgb(88,28,135)",
 };
 
 interface Props {

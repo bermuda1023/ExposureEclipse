@@ -171,6 +171,8 @@ uniform float u_particle_alpha;
 varying vec2 v_particle_pos;
 
 void main() {
+    vec2 c = gl_PointCoord - vec2(0.5);
+    if (dot(c, c) > 0.25) discard;
     vec2 velocity = mix(u_wind_min, u_wind_max, texture2D(u_wind, v_particle_pos).rg);
     float speed_t = length(velocity) / length(u_wind_max);
     vec2 ramp_pos = vec2(fract(16.0 * speed_t), floor(16.0 * speed_t) / 16.0);

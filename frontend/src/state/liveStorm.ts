@@ -10,6 +10,7 @@
 
 import { create } from "zustand";
 import type {
+  DailyForecast,
   EnsembleRiskResponse,
   GTWOResponse,
   LiveStormBundle,
@@ -69,6 +70,8 @@ interface LiveStormState {
   // Retry bumps `reloadNonce` so the panel fetches again.
   gfsAttemptNonce: number;
   ecmwfAttemptNonce: number;
+  // Shown while a model grid is waiting out the per-minute limit.
+  windGridNotice: string | null;
   // 850–200 hPa shear for the GFS / ECMWF slider. Off until the user asks.
   // Stored per model so flipping GFS ↔ ECMWF does not throw the field away.
   showWindShear: boolean;
@@ -111,6 +114,24 @@ interface LiveStormState {
   gtwoData: GTWOResponse | null;
   gtwoStatus: "idle" | "loading" | "ok" | "empty" | "error";
   showGTWO: boolean;
+  // TIV choropleth. Off until asked. Only takes effect while live-storm
+  // mode is on (panel open, docked, or a storm still on the map).
+  hideExposures: boolean;
+
+  // Tucked-away "where I am" card. Off until that section is opened.
+  // The place is an IP fix, not GPS. Closing the live-storm panel hides it.
+  showMyLocation: boolean;
+  myPlace: { lat: number; lon: number; label: string } | null;
+  myPlaceStatus: "idle" | "loading" | "ok" | "error";
+  dailyForecast: DailyForecast | null;
+  dailyForecastStatus: "idle" | "loading" | "ok" | "empty" | "error";
+  /** Incremented by the "center map" button. 0 never flies. */
+  myLocationFocus: number;
+
+  // Geostationary picture and GOES-East lightning. Both off until asked.
+  showSatellite: boolean;
+  showLightning: boolean;
+  imageryStatus: { satellite: string | null; lightning: string | null } | null;
 
   start: (stormId: string) => void;
   setData: (data: LiveStormBundle) => void;
@@ -129,6 +150,7 @@ interface LiveStormState {
   setEcmwfGridStatus: (s: "idle" | "loading" | "ok" | "empty" | "error") => void;
   setGfsAttemptNonce: (n: number) => void;
   setEcmwfAttemptNonce: (n: number) => void;
+  setWindGridNotice: (s: string | null) => void;
   setShowWindShear: (v: boolean) => void;
   setGfsShear: (g: WindModelGrid | null) => void;
   setEcmwfShear: (g: WindModelGrid | null) => void;
@@ -157,6 +179,18 @@ interface LiveStormState {
   setGTWOStatus: (
     s: "idle" | "loading" | "ok" | "empty" | "error",
   ) => void;
+  setShowMyLocation: (v: boolean) => void;
+  setMyPlace: (p: { lat: number; lon: number; label: string } | null) => void;
+  setMyPlaceStatus: (s: "idle" | "loading" | "ok" | "error") => void;
+  setDailyForecast: (f: DailyForecast | null) => void;
+  setDailyForecastStatus: (
+    s: "idle" | "loading" | "ok" | "empty" | "error",
+  ) => void;
+  requestMyLocationFocus: () => void;
+  setImageryStatus: (
+    s: { satellite: string | null; lightning: string | null } | null,
+  ) => void;
+  setHideExposures: (v: boolean) => void;
 }
 
 /** A model grid the map can draw. Cells with no frames, or frames whose
@@ -204,6 +238,19 @@ export function shearViewActive(s: ShearViewState): boolean {
   return frame.windKt.some((kt) => typeof kt === "number");
 }
 
+/** Live-storm mode is the open panel, the detail-rail copy, or a storm
+ *  still drawn after the chrome is closed. The choropleth stays put
+ *  until the user asks, and comes back as soon as that mode ends. */
+export function liveStormHidesExposureFills(s: {
+  hideExposures: boolean;
+  pickerOpen: boolean;
+  pushedToDetail: boolean;
+  activeStormId: string | null;
+}): boolean {
+  if (!s.hideExposures) return false;
+  return s.pickerOpen || s.pushedToDetail || s.activeStormId != null;
+}
+
 export type ToggleKey =
   | "showForecastHistory"
   | "showAlerts"
@@ -221,7 +268,10 @@ export type ToggleKey =
   | "showEnsembleEnvelope"
   | "showAiEnvelope"
   | "showStrikeProbability"
-  | "showGTWO";
+  | "showGTWO"
+  | "showSatellite"
+  | "showLightning"
+  | "hideExposures";
 
 export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   activeStormId: null,
@@ -257,6 +307,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   ecmwfGridStatus: "idle" as const,
   gfsAttemptNonce: -1,
   ecmwfAttemptNonce: -1,
+  windGridNotice: null,
   showWindShear: false,
   gfsShear: null,
   ecmwfShear: null,
@@ -292,6 +343,16 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   gtwoData: null,
   gtwoStatus: "idle" as const,
   showGTWO: false,
+  showMyLocation: false,
+  myPlace: null,
+  myPlaceStatus: "idle" as const,
+  dailyForecast: null,
+  dailyForecastStatus: "idle" as const,
+  myLocationFocus: 0,
+  showSatellite: false,
+  showLightning: false,
+  imageryStatus: null,
+  hideExposures: false,
 
   start: (stormId) =>
     set({
@@ -306,6 +367,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       ecmwfGridStatus: "idle",
       gfsAttemptNonce: -1,
       ecmwfAttemptNonce: -1,
+      windGridNotice: null,
       gfsShear: null,
       ecmwfShear: null,
       gfsShearStatus: "idle",
@@ -334,6 +396,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     gfsGrid: null, ecmwfGrid: null,
     gfsGridStatus: "idle", ecmwfGridStatus: "idle",
     gfsAttemptNonce: -1, ecmwfAttemptNonce: -1,
+    windGridNotice: null,
     showWindShear: false,
     gfsShear: null, ecmwfShear: null,
     gfsShearStatus: "idle", ecmwfShearStatus: "idle",
@@ -350,6 +413,12 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     modelTracksStatus: "idle",
     ensembleRisk: null,
     ensembleRiskStatus: "idle",
+    // Imagery and the location dot are part of this panel. Leaving them
+    // up after ✕ would hide the only control that turns them off.
+    showSatellite: false,
+    showLightning: false,
+    showMyLocation: false,
+    imageryStatus: null,
   }),
   setToggle: (key, value) => set({ [key]: value } as Partial<LiveStormState>),
   setWindMapMode: (mode) => set({ windMapMode: mode, windMapFrameIndex: 0 }),
@@ -359,6 +428,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   setEcmwfGridStatus: (s) => set({ ecmwfGridStatus: s }),
   setGfsAttemptNonce: (n) => set({ gfsAttemptNonce: n }),
   setEcmwfAttemptNonce: (n) => set({ ecmwfAttemptNonce: n }),
+  setWindGridNotice: (s) => set({ windGridNotice: s }),
   setShowWindShear: (v) => set({ showWindShear: v }),
   setGfsShear: (g) => set({ gfsShear: g }),
   setEcmwfShear: (g) => set({ ecmwfShear: g }),
@@ -379,6 +449,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       ecmwfGridStatus: "idle",
       gfsAttemptNonce: -1,
       ecmwfAttemptNonce: -1,
+      windGridNotice: null,
       gfsShearStatus: "idle",
       ecmwfShearStatus: "idle",
       gfsShearAttemptNonce: -1,
@@ -423,4 +494,13 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   }),
   setGTWOData: (r) => set({ gtwoData: r }),
   setGTWOStatus: (s) => set({ gtwoStatus: s }),
+  setShowMyLocation: (v) => set({ showMyLocation: v }),
+  setMyPlace: (p) => set({ myPlace: p }),
+  setMyPlaceStatus: (s) => set({ myPlaceStatus: s }),
+  setDailyForecast: (f) => set({ dailyForecast: f }),
+  setDailyForecastStatus: (s) => set({ dailyForecastStatus: s }),
+  requestMyLocationFocus: () =>
+    set({ myLocationFocus: get().myLocationFocus + 1 }),
+  setImageryStatus: (s) => set({ imageryStatus: s }),
+  setHideExposures: (v) => set({ hideExposures: v }),
 }));

@@ -1,5 +1,6 @@
 /**
- * Live hurricane endpoints — current Atlantic storms from NHC plus invests.
+ * Live hurricane endpoints — current Atlantic storms from NHC, invests,
+ * and official JMA typhoons.
  *
  * The bundle endpoint returns everything the live overlay needs in one shot:
  * observed track + forecast advisories (latest + history) + active NWS
@@ -28,8 +29,61 @@ export interface LiveStormListResponse {
   // NHC-issued advisory yet). Model tracks + ensemble strike probability
   // work; NHC-issued products (cone, surge, watches/warnings) do not.
   invests: LiveStormRow[];
+  /** Official JMA typhoons. Empty when JMA is not issuing one. */
+  typhoons?: LiveStormRow[];
   hasActive: boolean;
   note: string | null;
+}
+
+export interface JmaFix {
+  hoursOut: number;
+  validTime: string;
+  lat: number;
+  lon: number;
+  windKt: number | null;
+  windMs: number | null;
+  pressureMb: number | null;
+  categoryEn: string;
+  categoryJp: string;
+  intensity: string | null;
+}
+
+export interface JmaCircle {
+  kind: "gale" | "storm" | "probability" | string;
+  hoursOut: number;
+  label: string;
+  centerLon: number;
+  centerLat: number;
+  radiusM: number;
+  ring: [number, number][];
+}
+
+export interface JmaPath {
+  kind: "tangent" | "storm-arc" | "storm-line" | string;
+  hoursOut: number;
+  coordinates: [number, number][];
+}
+
+/** Official JMA bulletin. Present only when the selected id is a typhoon. */
+export interface JmaOverlay {
+  nameEn: string;
+  nameJp: string;
+  typhoonNumber: string;
+  issuedAt: string;
+  categoryEn: string;
+  categoryJp: string;
+  intensity: string | null;
+  windMs: number | null;
+  windKt: number | null;
+  gustMs: number | null;
+  gustKt: number | null;
+  pressureMb: number | null;
+  galeRanges: string[];
+  stormRanges: string[];
+  note: string;
+  fixes: JmaFix[];
+  circles: JmaCircle[];
+  paths: JmaPath[];
 }
 
 export interface ObservedFix {
@@ -239,6 +293,8 @@ export interface WindModelGrid {
   stepDeg: number;
   cells: WindGridCoord[];
   frames: WindModelFrame[];
+  /** Empty because the forecast service's per-minute limit was already spent. */
+  rateLimited?: boolean;
 }
 
 export interface ModelForecast {
@@ -254,6 +310,31 @@ export interface PointForecast {
   lon: number;
   fetchedAtUtc: string;
   forecasts: ModelForecast[];
+}
+
+/** One local calendar day. Wind is the daily maximum, not the current hour. */
+export interface DailyDay {
+  date: string;
+  weatherCode: number | null;
+  tempMaxF: number | null;
+  tempMinF: number | null;
+  precipIn: number | null;
+  windMaxKt: number | null;
+  gustMaxKt: number | null;
+  windDirDeg: number | null;
+}
+
+export interface DailyModel {
+  model: "gfs" | "ecmwf" | string;
+  days: DailyDay[];
+}
+
+export interface DailyForecast {
+  lat: number;
+  lon: number;
+  timezone: string | null;
+  fetchedAtUtc: string;
+  models: DailyModel[];
 }
 
 export interface LiveStormBundle {
@@ -279,6 +360,8 @@ export interface LiveStormBundle {
   windMap: WindGridPoint[];
   windMapMeta: WindGridMeta;
   windObs: WindObs[];
+  /** Null for NHC storms. Set for a JMA typhoon. */
+  jma?: JmaOverlay | null;
 }
 
 // ─────────── ATCF a-deck spaghetti tracks (GEFS/ECMWF-ENS/AI) ───────────
@@ -436,6 +519,10 @@ export const fetchLiveStormList = () =>
 
 export const fetchWindPointForecast = (lat: number, lon: number) =>
   apiGet<PointForecast>("/live/wind-forecast", { lat, lon });
+
+/** Five local days, GFS and ECMWF, at one point. Not the hourly popup. */
+export const fetchDailyForecast = (lat: number, lon: number) =>
+  apiGet<DailyForecast>("/live/daily-forecast", { lat, lon });
 
 export interface ReconPoll {
   recon: ReconObs[];

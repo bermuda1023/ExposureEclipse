@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
 import urllib.parse
 import urllib.request
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -193,6 +195,176 @@ def point_forecast(lat: float, lon: float) -> PointForecast:
     )
 
 
+# Daily point forecast for the tucked-away "where I am" card. Separate from
+# the hourly click popup and from the gridded location budget: two calls,
+# not hundreds.
+_DAILY_FIELDS = (
+    "weather_code",
+    "temperature_2m_max",
+    "temperature_2m_min",
+    "precipitation_sum",
+    "wind_speed_10m_max",
+    "wind_gusts_10m_max",
+    "wind_direction_10m_dominant",
+)
+_DAILY_DAYS = 5
+_DAILY_CACHE: TtlCache[tuple[float, float, str], dict] = TtlCache(
+    ttl_s=30 * 60, maxsize=128,
+)
+
+
+@dataclass(slots=True, frozen=True)
+class DailyDay:
+    date: str
+    weather_code: int | None
+    temp_max_f: float | None
+    temp_min_f: float | None
+    precip_in: float | None
+    wind_max_kt: float | None
+    gust_max_kt: float | None
+    wind_dir_deg: float | None
+
+
+@dataclass(slots=True, frozen=True)
+class ModelDaily:
+    model: str
+    days: list[DailyDay]
+
+
+@dataclass(slots=True, frozen=True)
+class DailyForecast:
+    lat: float
+    lon: float
+    timezone: str | None
+    fetched_at_utc: str
+    models: list[ModelDaily]
+
+
+def _opt_float(v: object) -> float | None:
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
+def _opt_int(v: object) -> int | None:
+    f = _opt_float(v)
+    return int(f) if f is not None else None
+
+
+def _round(v: float | None, places: int) -> float | None:
+    return round(v, places) if v is not None else None
+
+
+def _fetch_open_meteo_daily(lat: float, lon: float, model_key: str) -> dict | None:
+    """One daily forecast. Successful bodies only are cached. A 429 or a
+    body with no ``daily.time`` is a miss and is not stored."""
+    key = (lat, lon, model_key)
+    hit = _DAILY_CACHE.get(key)
+    if hit is not None:
+        return hit
+    params = {
+        "latitude": f"{lat:.3f}",
+        "longitude": f"{lon:.3f}",
+        "daily": ",".join(_DAILY_FIELDS),
+        "forecast_days": _DAILY_DAYS,
+        "wind_speed_unit": "kn",
+        "temperature_unit": "fahrenheit",
+        "precipitation_unit": "inch",
+        "timezone": "auto",
+        "models": model_key,
+    }
+    url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    times = ((data or {}).get("daily") or {}).get("time") or []
+    if not times:
+        return None
+    _DAILY_CACHE.set(key, data)
+    return data
+
+
+def _extract_daily(data: dict, wire_name: str) -> ModelDaily | None:
+    daily = (data or {}).get("daily") or {}
+    times = daily.get("time") or []
+    if not times:
+        return None
+    days: list[DailyDay] = []
+    codes = daily.get("weather_code") or []
+    tmax = daily.get("temperature_2m_max") or []
+    tmin = daily.get("temperature_2m_min") or []
+    precip = daily.get("precipitation_sum") or []
+    wind = daily.get("wind_speed_10m_max") or []
+    gust = daily.get("wind_gusts_10m_max") or []
+    direc = daily.get("wind_direction_10m_dominant") or []
+    for i, date in enumerate(times[:_DAILY_DAYS]):
+        if not isinstance(date, str) or not date:
+            continue
+        days.append(DailyDay(
+            date=date,
+            weather_code=_opt_int(codes[i] if i < len(codes) else None),
+            temp_max_f=_round(_opt_float(tmax[i] if i < len(tmax) else None), 1),
+            temp_min_f=_round(_opt_float(tmin[i] if i < len(tmin) else None), 1),
+            precip_in=_round(_opt_float(precip[i] if i < len(precip) else None), 2),
+            wind_max_kt=_round(_opt_float(wind[i] if i < len(wind) else None), 1),
+            gust_max_kt=_round(_opt_float(gust[i] if i < len(gust) else None), 1),
+            wind_dir_deg=_round(_opt_float(direc[i] if i < len(direc) else None), 0),
+        ))
+    if not days:
+        return None
+    return ModelDaily(model=wire_name, days=days)
+
+
+def daily_forecast(lat: float, lon: float) -> DailyForecast:
+    """Five local days of GFS and ECMWF at one point.
+
+    Temperatures are Fahrenheit, precipitation is inches, wind is knots.
+    Dates are the calendar at that coordinate (Open-Meteo ``timezone=auto``),
+    not UTC. An unreachable model is omitted; both missing leaves ``models``
+    empty rather than raising.
+    """
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lat_q = round(lat * 20) / 20
+    lon_q = round(lon * 20) / 20
+    payloads: list[tuple[str, dict]] = []
+    with ThreadPoolExecutor(max_workers=len(MODELS)) as pool:
+        futures = {
+            pool.submit(_fetch_open_meteo_daily, lat_q, lon_q, key): wire
+            for key, wire in MODELS
+        }
+        for fut, wire in futures.items():
+            try:
+                data = fut.result()
+            except Exception:  # noqa: BLE001
+                data = None
+            if data is not None:
+                payloads.append((wire, data))
+    order = {wire: i for i, (_k, wire) in enumerate(MODELS)}
+    payloads.sort(key=lambda item: order.get(item[0], 999))
+    models: list[ModelDaily] = []
+    tz: str | None = None
+    for wire, data in payloads:
+        if tz is None:
+            raw_tz = data.get("timezone")
+            if isinstance(raw_tz, str) and raw_tz:
+                tz = raw_tz
+        row = _extract_daily(data, wire)
+        if row is not None:
+            models.append(row)
+    return DailyForecast(
+        lat=lat, lon=lon, timezone=tz, fetched_at_utc=now_iso, models=models,
+    )
+
+
 @dataclass(slots=True, frozen=True)
 class WindCoord:
     lat: float
@@ -218,6 +390,10 @@ class ModelWindGrid:
     step_deg: float
     cells: list[WindCoord]
     frames: list[ModelWindFrame]
+    # True when this empty grid was refused by the per-minute location
+    # budget (or Open-Meteo answered 429). Not cached. The panel waits
+    # out the minute and asks once more.
+    rate_limited: bool = False
 
     @property
     def valid_time_utc(self) -> str:
@@ -233,7 +409,10 @@ class ModelWindGrid:
 # on the wind heatmap when Open-Meteo rate-limited a handful of the chunks.
 # 80 locations is the size that returns promptly. A 400-location URL is
 # what made a basin-sized click die at the proxy.
-_CHUNK_SIZE = 80
+# 200 locations is one or two HTTP calls for a cone that already fits
+# the per-minute location budget below. Smaller chunks spent that
+# budget on GFS, and the ECMWF grid that followed came back empty.
+_CHUNK_SIZE = 200
 # Aggressive retry policy — the model-grid fetch is chunked in row-major
 # order, so a permanent failure on any single chunk drops a horizontal
 # band from the response. Better to hammer the retry for a few extra
@@ -244,14 +423,46 @@ _RETRY_BACKOFF_S = 0.6
 # Forecast horizon for the timeline slider. NHC issues 5-day forecasts;
 # we sample every 6 hours through the same window.
 _FORECAST_HOURS: tuple[int, ...] = (0, 6, 12, 18, 24, 30, 36, 42, 48, 60, 72, 96, 120)
-# A 0.25° grid over a 5-day cone is several thousand points. Open-Meteo
-# then 429s or the whole request outlives the proxy, and the panel shows
-# "failed" on every retry. Cap the cell count and coarsen the step.
-_MAX_MODEL_CELLS = 1000
+# Open-Meteo's free tier is 600 calls per minute per IP, and a
+# multi-location request counts one call per coordinate. A gulf cone at
+# 0.75° is about 660 locations: GFS, requested first, succeeds, and
+# ECMWF is then rejected for the rest of that minute. 250 leaves room
+# for the other model in the same minute. The step coarsens to fit.
+_MAX_MODEL_CELLS = 250
+# Shared by surface and shear, both models. A third grid in the same
+# minute (shear on top of both surface fields) waits rather than 429ing.
+_LOCATION_BUDGET = 500
+_LOCATION_WINDOW_S = 60.0
+_location_events: deque[tuple[float, int]] = deque()
+_location_lock = threading.Lock()
 # Stop waiting and return whatever chunks finished. Unfinished cells are
 # left as gaps, not painted as calm.
-_GRID_DEADLINE_S = 18.0
+_GRID_DEADLINE_S = 28.0
 _GRID_CACHE: TtlCache[tuple, "ModelWindGrid"] = TtlCache(ttl_s=180, maxsize=12)
+
+
+class OpenMeteoRateLimited(Exception):
+    """The free-tier minute window is full. Retrying now only extends it."""
+
+
+def _try_reserve_locations(n: int) -> bool:
+    """Claim ``n`` locations against the rolling minute budget.
+
+    A fresh process always admits one grid: the cell cap is under the
+    budget. The second and third grids in the same process share what
+    is left. Refused grids are not sent, so a 429 does not get worse.
+    """
+    if n <= 0:
+        return True
+    now = time.monotonic()
+    with _location_lock:
+        while _location_events and now - _location_events[0][0] >= _LOCATION_WINDOW_S:
+            _location_events.popleft()
+        spent = sum(count for _, count in _location_events)
+        if spent + n > _LOCATION_BUDGET:
+            return False
+        _location_events.append((now, n))
+        return True
 
 
 def choose_model_step(
@@ -411,11 +622,12 @@ def _fetch_bulk_chunk(
     hourly: str = _SURFACE_HOURLY,
     fields: tuple[str, ...] = _SURFACE_FIELDS,
 ) -> tuple[dict, ...]:
-    """Fetch one multi-location Open-Meteo chunk with retries on 429.
-    Successful responses that contain at least one real wind value are
-    cached; failures, empty bodies, and all-null winds are not (so a
-    transient rate-limit doesn't permanently poison the bbox).
-    ``refresh`` bypasses the cache read."""
+    """Fetch one multi-location Open-Meteo chunk.
+
+    A 429 is raised as ``OpenMeteoRateLimited`` and not retried. 5xx and
+    network errors are retried. Successful responses that contain at
+    least one real wind value are cached; failures, empty bodies, and
+    all-null winds are not. ``refresh`` bypasses the cache read."""
     key = (lat_str, lon_str, model_key, hourly)
     if not refresh:
         hit = _bulk_cache.get(key)
@@ -449,15 +661,17 @@ def _fetch_bulk_chunk(
             items = tuple(payload)
             break
         except urllib.error.HTTPError as e:
-            # Retry 429 (rate-limit), 500-series (transient upstream), and
-            # 502/503/504 (edge/gateway hiccups). Anything else — 400 for a
-            # malformed URL, 404 for an unknown model — is a permanent
-            # failure and further retries won't help.
-            transient = (
-                e.code == 429
-                or (500 <= e.code < 600)
-            )
-            if transient and attempt < _RETRY_ATTEMPTS:
+            e.close()
+            # A 429 means the minute is already spent. Sleeping a few
+            # seconds and calling again still lands inside that minute,
+            # and the extra calls keep the window shut. Surface it and
+            # let the panel wait the minute out.
+            if e.code == 429:
+                raise OpenMeteoRateLimited() from e
+            # Retry 500-series (transient upstream) and 502/503/504
+            # (edge/gateway hiccups). Anything else — 400 for a malformed
+            # URL, 404 for an unknown model — is a permanent failure.
+            if 500 <= e.code < 600 and attempt < _RETRY_ATTEMPTS:
                 _t.sleep(_RETRY_BACKOFF_S * (2 ** attempt))
                 continue
             break
@@ -594,6 +808,11 @@ def _assemble_model_grid(
         return ModelWindGrid(
             model=model_wire, step_deg=step_deg, cells=[], frames=[],
         )
+    if not _try_reserve_locations(len(coords)):
+        return ModelWindGrid(
+            model=model_wire, step_deg=step_deg, cells=[], frames=[],
+            rate_limited=True,
+        )
 
     now = datetime.now(timezone.utc)
     chunks = [
@@ -608,8 +827,11 @@ def _assemble_model_grid(
     all_dirs: dict[int, list[float | None]] = {h: [] for h in _FORECAST_HOURS}
     frame_valid_times: dict[int, str] = {h: "" for h in _FORECAST_HOURS}
 
-    pool = ThreadPoolExecutor(max_workers=min(4, len(chunks)))
+    # Two at a time. Four parallel chunks plus a second model was enough
+    # to trip Open-Meteo's per-minute limit and return an empty ECMWF grid.
+    pool = ThreadPoolExecutor(max_workers=min(2, len(chunks)))
     fut_to_chunk: dict = {}
+    rate_limited = False
     try:
         for ch in chunks:
             lat_str = ",".join(f"{c[0]:.3f}" for c in ch)
@@ -624,6 +846,9 @@ def _assemble_model_grid(
             ch = fut_to_chunk[fut]
             try:
                 items = fut.result()
+            except OpenMeteoRateLimited:
+                rate_limited = True
+                items = ()
             except Exception:  # noqa: BLE001
                 items = ()
             if not items or not _chunk_has_real_wind(tuple(items), fields):
@@ -651,15 +876,17 @@ def _assemble_model_grid(
             wind_dir_deg=all_dirs[h],
         ))
 
-    grid = ModelWindGrid(
-        model=model_wire, step_deg=step_deg,
-        cells=all_coords, frames=frames,
-    )
-    if any(
+    has_wind = any(
         kt is not None and kt > 0
         for frame in frames
         for kt in frame.wind_kt
-    ):
+    )
+    grid = ModelWindGrid(
+        model=model_wire, step_deg=step_deg,
+        cells=all_coords, frames=frames,
+        rate_limited=rate_limited and not has_wind,
+    )
+    if has_wind:
         cache.set(cache_key, grid)
     return grid
 
@@ -710,6 +937,10 @@ __all__ = [
     "choose_model_step",
     "deep_layer_shear",
     "fetch_model_shear_grid",
+    "DailyDay",
+    "DailyForecast",
+    "ModelDaily",
+    "daily_forecast",
     "fetch_model_wind_grid",
     "point_forecast",
 ]

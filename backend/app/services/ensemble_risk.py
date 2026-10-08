@@ -19,7 +19,7 @@ lands a TS, and the pricing spread on any exposed portfolio is enormous.
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
 from .atcf_adecks import ENSEMBLE_FAMILIES, ModelTrack
@@ -148,10 +148,14 @@ def _passes_within(
     peak = 0
     hit = False
     # Walk segments (fix i, fix i+1) so we don't miss a track that skips
-    # a county between two 12-hour-apart fixes.
+    # a county between two 12-hour-apart fixes. Leads under 24 h are where
+    # every member still sits on the storm. Counting them paints a blob on
+    # the current position, west of a forecast that has already turned.
     for i in range(len(track.fixes) - 1):
         a = track.fixes[i]
         b = track.fixes[i + 1]
+        if a.hours_out < MIN_LEAD_HOURS:
+            continue
         d_km = _point_to_segment_km(
             county.centroid_lat, county.centroid_lon,
             a.lat, a.lon, b.lat, b.lon,
@@ -202,7 +206,9 @@ def compute_ensemble_risk(
             threshold_nm=threshold_nm,
         )
 
-    init_cycle = members[0].init_cycle
+    # The first member can be a single newer AI track. The cycle that
+    # owns the vote is the one most members actually come from.
+    init_cycle = Counter(m.init_cycle for m in members).most_common(1)[0][0]
     counties = county_centroids()
 
     strikes: list[CountyStrikeProb] = []

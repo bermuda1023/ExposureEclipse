@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { LiveStormBundle, ModelTracksResponse, ReconPoll } from "../../api/live";
-import { shearViewActive, useLiveStormStore, windGridUsable } from "../liveStorm";
+import {
+  liveStormHidesExposureFills,
+  shearViewActive,
+  useLiveStormStore,
+  windGridUsable,
+} from "../liveStorm";
 import type { WindModelGrid } from "../../api/live";
 
 describe("live storm reload", () => {
@@ -13,6 +18,28 @@ describe("live storm reload", () => {
     expect(s.showWindField).toBe(true);
     expect(s.showForecastCone).toBe(true);
     expect(s.showEnsembleEnvelope).toBe(true);
+    expect(s.showSatellite).toBe(false);
+    expect(s.showLightning).toBe(false);
+    expect(s.showMyLocation).toBe(false);
+    expect(s.hideExposures).toBe(false);
+  });
+
+  it("hides exposure fills only while live-storm mode is on and asked", () => {
+    const base = {
+      hideExposures: true,
+      pickerOpen: false,
+      pushedToDetail: false,
+      activeStormId: null as string | null,
+    };
+    expect(liveStormHidesExposureFills(base)).toBe(false);
+    expect(liveStormHidesExposureFills({ ...base, pickerOpen: true })).toBe(true);
+    expect(liveStormHidesExposureFills({ ...base, pushedToDetail: true })).toBe(true);
+    expect(liveStormHidesExposureFills({ ...base, activeStormId: "AL012026" })).toBe(true);
+    expect(liveStormHidesExposureFills({
+      ...base,
+      hideExposures: false,
+      activeStormId: "AL012026",
+    })).toBe(false);
   });
 
   it("treats a frameless or all-zero model grid as unusable", () => {

@@ -239,6 +239,15 @@ export function Methodology() {
             Overlays stay until ✕. The toolbar chip only shows/hides chrome;
             it does not clear the storm.
           </li>
+          <li>
+            <b>Hide exposures</b> drops the state and county TIV fills
+            while the panel is open, docked in the detail rail, or a storm
+            is still on the map. Borders stay. It is off until turned on,
+            and the fills come back when live-storm mode ends. The same
+            switch already exists on wildfire and flood. MapView is the
+            only place that changes that visibility, so the three requests
+            combine instead of fighting.
+          </li>
         </ul>
         <SubHead>Storm list</SubHead>
         <ul>
@@ -250,6 +259,34 @@ export function Methodology() {
             Invests (CY 90–99): probed from ATCF a-decks in parallel.
             Model tracks and ensemble strike probability work; NHC cone /
             watches / surge do not until an advisory exists.
+          </li>
+        </ul>
+        <SubHead>Japan typhoons</SubHead>
+        <ul>
+          <li>
+            Active systems come from the feed behind the JMA typhoon page
+            (<code>targetTc.json</code>, then <code>forecast.json</code> and{" "}
+            <code>specifications.json</code> for that storm).
+            This is not a versioned API. A 404 or an empty list is a quiet
+            basin, not an error, and it does not blank the NHC list.
+          </li>
+          <li>
+            The map draws the official track, the analysis gale circle
+            (15 m/s) and storm circle (25 m/s), the 70% forecast circles, and
+            the storm-warning arcs JMA already computed. Those circles are
+            not an NHC cone, and they are not a landfall probability.
+          </li>
+          <li>
+            Bulletin winds are 10-minute sustained. They are not on the
+            Saffir-Simpson scale and not the 1-minute NHC wind. GFS and
+            ECMWF particles on the same box are model wind, labeled
+            separately. There is no public western Pacific a-deck, so there
+            is no ensemble spaghetti and no US-county strike vote.
+          </li>
+          <li>
+            The horizon is about 72 hours. A point JMA has already called an
+            extratropical low stays on the track. No prefecture loss: there
+            is no Japan book of business.
           </li>
         </ul>
         <SubHead>Observed &amp; forecast tracks</SubHead>
@@ -325,19 +362,29 @@ export function Methodology() {
           </li>
           <li>
             For each coastal county centroid, a member "strikes" if any
-            segment of its track passes within the threshold (default{" "}
-            <b>60 nm</b>) . The percent is striking members ÷ members
-            considered. A member whose last fix is before 24 h is left
-            out — it cannot speak to a later landfall. The default sweep
-            is Atlantic and Gulf coastal states, not every US county.
+            segment of its track at a lead of <b>24 h or later</b> passes
+            within the threshold (default <b>60 nm</b>). The earlier part
+            of the track is where every member is still on the storm, and
+            counting it painted a blob on the current position instead of
+            on the forecast. The percent is striking members ÷ members
+            considered. The dot is the county centroid, so it sits inland
+            of the coastline. A member whose last fix is before 24 h is
+            left out. The default sweep is Atlantic and Gulf coastal
+            states, not every US county.
           </li>
           <li>
-            The number moves when the a-deck does. A cycle that has 30
-            GEFS members and one GraphCast track is mostly a GEFS vote;
-            the AI track is one vote, not a separate product. If Euro
-            ensemble rows are absent, they are absent — we do not invent
-            them. This is a track-passage rate, not a calibrated
-            probability of damaging wind.
+            The number moves when the a-deck does. GEFS members are often
+            one cycle behind the official forecast, and the circles follow
+            the members — so they can sit west or east of the blue official
+            line until those members are posted. The cycle shown is the one
+            most of the votes come from, not a newer single AI track. While
+            the layer is on, the member tracks are drawn and the vote is
+            refreshed every 10 minutes. A cycle that has 30 GEFS members
+            and one GraphCast track is mostly a GEFS vote; the AI track is
+            one vote, not a separate product. If Euro ensemble rows are
+            absent, they are absent — we do not invent them. This is a
+            track-passage rate, not a calibrated probability of damaging
+            wind.
           </li>
         </ul>
         <SubHead>Formation outlook (TWO)</SubHead>
@@ -481,12 +528,16 @@ export function Methodology() {
         <ul>
           <li>
             <b>Grid step</b>: 0.25° for the observed field. GFS and ECMWF
-            start at 0.5° and coarsen (up to 2°) when the cone is large,
-            so the Open-Meteo request finishes instead of timing out.
-            Each model square is drawn at that model's own step — a 1°
-            cell is a 1° tile, not a 0.25° dot. Diff views match the
+            start at 0.5° and coarsen (up to 2°) so one cone stays under
+            about 250 locations. Open-Meteo counts each location toward
+            600 calls per minute; a finer gulf grid used the whole minute
+            on whichever model was asked first, and the other came back
+            empty. Each model square is drawn at that model's own step —
+            a 1° cell is a 1° tile, not a 0.25° dot. Diff views match the
             nearest model cell out to half of the coarser step. A chunk
             that does not come back is left as a gap, not painted calm.
+            If the minute is already spent, that model waits and retries
+            once rather than showing a failed grid.
           </li>
           <li>
             <b>Method</b>: inverse-distance weighted (power = 2),
@@ -672,6 +723,69 @@ export function Methodology() {
         </Sources>
       </Section>
 
+      <Section id="place-forecast" title="Location, satellite, and lightning">
+        <p>
+          Three optional layers on the live-storm panel. All of them stay
+          off until asked. None of them is a landfall probability.
+        </p>
+        <SubHead>My location</SubHead>
+        <ul>
+          <li>
+            The control is a closed section at the bottom of the live-storm
+            panel, not a toolbar chip. Opening it asks the browser for an
+            approximate position from its public network address (
+            <a href="https://ipwho.is/" target="_blank" rel="noreferrer">ipwho.is</a>
+            ). It does not prompt for GPS, and the address is not stored.
+            Closing the panel hides the dot again.
+          </li>
+          <li>
+            The 5-day card is{" "}
+            <code>/api/live/daily-forecast</code>: Open-Meteo daily fields
+            for GFS (<code>gfs_seamless</code>) and ECMWF (
+            <code>ecmwf_ifs025</code>) at that point. High and low are
+            Fahrenheit, rain is inches, wind is the daily maximum in knots.
+            The dates are local to the point. This is not the hourly wind
+            popup on a map click, and it does not spend the gridded
+            location budget.
+          </li>
+        </ul>
+        <SubHead>Satellite</SubHead>
+        <ul>
+          <li>
+            Latest geostationary image from{" "}
+            <a href="https://realearth.ssec.wisc.edu/" target="_blank" rel="noreferrer">
+              SSEC RealEarth
+            </a>
+            , chosen by the active storm longitude, or by the map center
+            when no storm is selected. GOES-East and GOES-West are true
+            color. Himawari (Japan and the western Pacific) is true color.
+            Europe and Africa use Meteosat-11 enhanced infrared, because
+            that feed has no true-color tile. The picture is the latest
+            scan, refreshed about every 10 minutes, not a forecast.
+          </li>
+          <li>
+            Tiles stop at zoom 7 and are stretched past that. They sit
+            under the track and the wind grid. Heavy use can pick up a
+            RealEarth watermark; the layer is off unless the chip is on.
+          </li>
+        </ul>
+        <SubHead>Lightning</SubHead>
+        <ul>
+          <li>
+            GOES-East GLM group density, same tile service. These are
+            optical flashes from the satellite (in-cloud and
+            cloud-to-ground). They are not confirmed ground strikes and
+            they are not a commercial lightning network.
+          </li>
+          <li>
+            The disk covers the Americas and the Atlantic. A storm in
+            Japan, or in Europe, is outside it, and the map draws nothing
+            rather than inventing flashes. GOES-West lightning is not on
+            this feed.
+          </li>
+        </ul>
+      </Section>
+
       <Section id="hazard-grids" title="Hazard climatology grids (tornado / hail / wildfire)">
         <p>
           Grids are built <b>offline</b> and baked into{" "}
@@ -766,9 +880,10 @@ export function Methodology() {
             trip.
           </li>
           <li>
-            Model-grid Open-Meteo requests are chunked (max 100 coords per
-            URL) and dispatched in parallel with lru caching per (bbox,
-            model).
+            Model-grid Open-Meteo requests are chunked (200 locations per
+            URL, at most 250 per grid) and a rolling minute budget is
+            shared by GFS, ECMWF, and shear. A usable grid is cached for
+            a few minutes; an empty or rate-limited grid is not.
           </li>
         </ul>
       </Section>
@@ -831,6 +946,7 @@ function TOC() {
     ["hurricane-impact", "Hurricane impact engine"],
     ["live-storms", "Live-storm overlay"],
     ["wind-heatmap", "Interpolated wind heatmap"],
+    ["place-forecast", "Location, satellite, and lightning"],
     ["hazard-grids", "Hazard climatology grids"],
     ["layers-engine", "Layer / XOL engine"],
     ["observability", "Observability & edge behaviour"],

@@ -27,6 +27,7 @@ import {
   type WindModelGrid,
 } from "../../api/live";
 import { SURFACE_WIND_STOPS } from "./LiveStormLayer";
+import { MyLocationSection } from "./MyLocationSection";
 import { FAMILY_COLOR } from "./ModelTrackLayer";
 import { GTWO_BUCKET_COLOR } from "./TWOLayer";
 
@@ -72,6 +73,13 @@ export function LiveStormPanel() {
   const perils = useViewStore((s) => s.perils);
   const filters = useFiltersStore();
   const [detailSlot, setDetailSlot] = useState<HTMLElement | null>(null);
+  // The location dot only exists while this panel is on screen. Closing
+  // the chrome hides it again. Collapse keeps it, the same as other overlays.
+  useEffect(() => {
+    if (!open && !pushedToDetail) {
+      useLiveStormStore.getState().setShowMyLocation(false);
+    }
+  }, [open, pushedToDetail]);
   useEffect(() => {
     if (!pushedToDetail) {
       setDetailSlot(null);
@@ -180,16 +188,28 @@ export function LiveStormPanel() {
           setStatus("empty");
         }
       };
+      const label = model === "gfs" ? "GFS" : "ECMWF";
+      const note = useLiveStormStore.getState().setWindGridNotice;
       try {
         let g = await fetchWindModelGrid(bbox, model, { refresh });
         if (!stillCurrent()) return;
-        // One automatic bypass of the backend cache. Cells with null winds
-        // used to count as success and could never be asked for again.
-        if (!windGridUsable(g) && !refresh) {
+        if (!windGridUsable(g) && g.rateLimited) {
+          // The other model already used this minute. Asking again now
+          // just extends the lockout.
+          note(`${label} is waiting out the forecast service's per-minute limit.`);
+          await new Promise((r) => setTimeout(r, 65000));
+          if (!stillCurrent()) return;
+          g = await fetchWindModelGrid(bbox, model, { refresh: true });
+        } else if (!windGridUsable(g) && !refresh) {
           await new Promise((r) => setTimeout(r, 1500));
           if (!stillCurrent()) return;
           g = await fetchWindModelGrid(bbox, model, { refresh: true });
         }
+        note(
+          !windGridUsable(g) && g.rateLimited
+            ? `${label} is still rate-limited. Wait a minute, then use Retry.`
+            : null,
+        );
         apply(g);
       } catch {
         if (!stillCurrent()) return;
@@ -197,13 +217,16 @@ export function LiveStormPanel() {
           try {
             await new Promise((r) => setTimeout(r, 1500));
             if (!stillCurrent()) return;
-            apply(await fetchWindModelGrid(bbox, model, { refresh: true }));
+            const g = await fetchWindModelGrid(bbox, model, { refresh: true });
+            note(null);
+            apply(g);
             return;
           } catch {
             // The explicit refresh also failed — surface the error.
           }
         }
         if (!stillCurrent()) return;
+        note(null);
         setGrid(null);
         setStatus("error");
       }
@@ -259,15 +282,27 @@ export function LiveStormPanel() {
         setStatus("empty");
       }
     };
+    const label = model === "gfs" ? "GFS shear" : "ECMWF shear";
+    const note = useLiveStormStore.getState().setWindGridNotice;
     void (async () => {
       try {
         let g = await fetchWindShearGrid(bbox, model, { refresh });
         if (!stillCurrent()) return;
-        if (!windGridUsable(g) && !refresh) {
+        if (!windGridUsable(g) && g.rateLimited) {
+          note(`${label} is waiting out the forecast service's per-minute limit.`);
+          await new Promise((r) => setTimeout(r, 65000));
+          if (!stillCurrent()) return;
+          g = await fetchWindShearGrid(bbox, model, { refresh: true });
+        } else if (!windGridUsable(g) && !refresh) {
           await new Promise((r) => setTimeout(r, 1500));
           if (!stillCurrent()) return;
           g = await fetchWindShearGrid(bbox, model, { refresh: true });
         }
+        note(
+          !windGridUsable(g) && g.rateLimited
+            ? `${label} is still rate-limited. Wait a minute, then use Retry.`
+            : null,
+        );
         apply(g);
       } catch {
         if (!stillCurrent()) return;
@@ -275,13 +310,16 @@ export function LiveStormPanel() {
           try {
             await new Promise((r) => setTimeout(r, 1500));
             if (!stillCurrent()) return;
-            apply(await fetchWindShearGrid(bbox, model, { refresh: true }));
+            const g = await fetchWindShearGrid(bbox, model, { refresh: true });
+            note(null);
+            apply(g);
             return;
           } catch {
             // fall through
           }
         }
         if (!stillCurrent()) return;
+        note(null);
         setGrid(null);
         setStatus("error");
       }
@@ -295,7 +333,9 @@ export function LiveStormPanel() {
   // recon feed alone — the full bundle is too slow to repeat, and a page
   // reload should not be required to see the next pass.
   useEffect(() => {
-    if (!activeId || !stormIsLive) return;
+    // Hurricane-hunter polls are an Atlantic product. A JMA id would 404
+    // against the recon archive and keep retrying.
+    if (!activeId || !stormIsLive || /^TC\d+$/i.test(activeId)) return;
     let cancelled = false;
     let inflight = false;
     const tick = async () => {
@@ -379,6 +419,23 @@ export function LiveStormPanel() {
       }
     })();
 
+    if (/^TC\d+$/i.test(activeId)) {
+      // No public western Pacific a-deck. Don't hit NHC for an empty file.
+      useLiveStormStore.getState().setModelTracks({
+        stormId: activeId,
+        initCycle: null,
+        availableCycles: [],
+        tracks: [],
+        families: [],
+        ensembleEnvelope: null,
+        aiEnvelope: null,
+        notes: ["JMA does not publish an NHC a-deck. There is no ensemble vote."],
+        attribution: "Japan Meteorological Agency",
+      });
+      useLiveStormStore.getState().setModelTracksStatus("empty");
+      return () => { cancelled = true; };
+    }
+
     if (useLiveStormStore.getState().modelTracksStatus !== "loading") {
       useLiveStormStore.getState().setModelTracksStatus("loading");
     }
@@ -423,35 +480,45 @@ export function LiveStormPanel() {
   // their availability drives chip greying-out on storm select. No lazy
   // effect needed here.)
 
-  // Same pattern for the ensemble strike-probability grid. Threshold change
-  // invalidates the cache (via setStrikeThresholdNm in the store), so this
-  // effect re-fires when either the toggle or the threshold changes.
+  // Strike probability. A loaded result used to sit there forever, so an
+  // advisory update moved the official line and the circles stayed on the
+  // previous ensemble. Refresh every 10 minutes while the layer is on.
   useEffect(() => {
     if (!activeId) return;
     if (!store.showStrikeProbability) return;
-    if (store.ensembleRisk || store.ensembleRiskStatus === "loading") return;
-    const nonce = store.reloadNonce;
-    const threshold = store.strikeThresholdNm;
-    // No cleanup flag: setting "loading" re-runs this effect, and a cleanup
-    // that dropped the in-flight request would leave strike probability stuck.
-    const s = useLiveStormStore.getState();
-    s.setEnsembleRiskStatus("loading");
-    fetchEnsembleRisk(activeId, { thresholdNm: threshold, refresh: nonce > 0 })
-      .then((r) => {
-        const now = useLiveStormStore.getState();
-        if (now.activeStormId !== activeId || now.reloadNonce !== nonce) return;
-        if (now.strikeThresholdNm !== threshold) return;
-        now.setEnsembleRisk(r);
-        now.setEnsembleRiskStatus(r.strikeByCounty.length > 0 ? "ok" : "empty");
-      })
-      .catch(() => {
-        const now = useLiveStormStore.getState();
-        if (now.activeStormId !== activeId || now.reloadNonce !== nonce) return;
-        now.setEnsembleRiskStatus("error");
-      });
+    if (/^TC\d+$/i.test(activeId)) return;
+    let cancelled = false;
+    const load = (refresh: boolean) => {
+      const nonce = useLiveStormStore.getState().reloadNonce;
+      const threshold = useLiveStormStore.getState().strikeThresholdNm;
+      const had = useLiveStormStore.getState().ensembleRisk;
+      if (!had) useLiveStormStore.getState().setEnsembleRiskStatus("loading");
+      fetchEnsembleRisk(activeId, { thresholdNm: threshold, refresh })
+        .then((r) => {
+          if (cancelled) return;
+          const now = useLiveStormStore.getState();
+          if (now.activeStormId !== activeId || now.reloadNonce !== nonce) return;
+          if (now.strikeThresholdNm !== threshold) return;
+          if (!now.showStrikeProbability) return;
+          now.setEnsembleRisk(r);
+          now.setEnsembleRiskStatus(r.strikeByCounty.length > 0 ? "ok" : "empty");
+        })
+        .catch(() => {
+          if (cancelled) return;
+          const now = useLiveStormStore.getState();
+          if (now.activeStormId !== activeId || now.reloadNonce !== nonce) return;
+          if (!now.ensembleRisk) now.setEnsembleRiskStatus("error");
+        });
+    };
+    load(store.reloadNonce > 0);
+    const timer = window.setInterval(() => load(true), 10 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [
     activeId, store.showStrikeProbability, store.strikeThresholdNm,
-    store.ensembleRisk, store.ensembleRiskStatus, store.reloadNonce,
+    store.reloadNonce,
   ]);
 
   // GTWO (Tropical Weather Outlook) — basin-wide, doesn't need a storm.
@@ -669,6 +736,15 @@ export function LiveStormPanel() {
                   onPick={pickStorm}
                 />
               )}
+              {(list.data.typhoons ?? []).length > 0 && (
+                <StormPicker
+                  label={`Japan (JMA · ${(list.data.typhoons ?? []).length})`}
+                  rows={list.data.typhoons ?? []}
+                  activeId={activeId}
+                  variant="jma"
+                  onPick={pickStorm}
+                />
+              )}
             </>
           )}
           <div style={{ borderTop: "1px solid var(--ink-200)", paddingTop: 8, display: "grid", gap: 10 }}>
@@ -677,6 +753,14 @@ export function LiveStormPanel() {
                 without wading past storm-specific chips. */}
             <ChipGroup label="Basin (no storm needed)">
               <SmartChip store={store} status={chipStatus.showGTWO} k="showGTWO" label="Formation outlook (TWO)" hint="NHC 7-day outlook · yellow/orange/red = low/med/high chance" color="#f97316" />
+              <SmartChip
+                store={store}
+                status={{ available: true }}
+                k="hideExposures"
+                label={store.hideExposures ? "Exposures hidden" : "Hide exposures"}
+                hint="Take the TIV choropleth off the map while live storm is open. State and county borders stay."
+                color="#334155"
+              />
               <GTWOStatusLine store={store} />
             </ChipGroup>
 
@@ -709,6 +793,12 @@ export function LiveStormPanel() {
               <WindMapModeSelector store={store} />
               <WindMapTimeSlider store={store} />
             </ChipGroup>
+
+            <ChipGroup label="Imagery">
+              <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image for this storm. GOES, Himawari, or Meteosat. Off until turned on." color="#0369a1" />
+              <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes. Does not cover Japan or Europe. Off until turned on." color="#ca8a04" />
+              <ImageryStatusLine />
+            </ChipGroup>
           </div>
           {store.activeStormId && (
             <button
@@ -725,6 +815,7 @@ export function LiveStormPanel() {
               Clear active storm
             </button>
           )}
+          <MyLocationSection />
           {store.isLoading && <div style={{ color: "var(--ink-500)" }}>Fetching live data…</div>}
           {store.error && (
             <div style={{ color: "var(--error-700)", fontSize: "0.7rem" }}>{store.error}</div>
@@ -736,6 +827,7 @@ export function LiveStormPanel() {
             || (
               !!store.data
               && store.data.storm.classification !== "INVEST"
+              && !store.data.jma
               && !store.data.forecastCone
             )
           ) && (
@@ -761,10 +853,10 @@ export function LiveStormPanel() {
           {store.data && (
             <>
               <BundleSummary data={store.data} />
-              <WatchWarnExposureSection data={store.data} />
+              {!store.data.jma && <WatchWarnExposureSection data={store.data} />}
               {store.showModelTracks && <ModelTracksSection />}
               {store.showStrikeProbability && <EnsembleRiskSection />}
-              <button
+              {!store.data.jma && <button
                 onClick={runImpact}
                 style={{
                   all: "unset",
@@ -783,7 +875,7 @@ export function LiveStormPanel() {
                 title="County TIV under the live NHC official track + current/forecast wind radii (not HURDAT)"
               >
                 Run county impact
-              </button>
+              </button>}
             </>
           )}
         </div>
@@ -823,6 +915,7 @@ function useChipAvailability(
   const data = store.data;
   const modelTracks = store.modelTracks;
   const isInvest = data?.storm.classification === "INVEST";
+  const isJma = !!data?.jma;
   const bundleLoaded = !!data;
   const tracksLoaded =
     store.modelTracksStatus === "ok" || store.modelTracksStatus === "empty";
@@ -980,7 +1073,75 @@ function useChipAvailability(
         };
   }
 
+  // A JMA typhoon overwrites the NHC availability checks. Those feeds are
+  // not loaded, so "no buoys in this bbox" would be the wrong reason.
+  if (isJma) {
+    const notIssued = "Not issued for a JMA typhoon.";
+    out.showForecastCone = {
+      available: false,
+      reason: "JMA publishes a forecast circle, not an NHC cone. The circles are already on the map.",
+    };
+    out.showForecastHistory = {
+      available: false,
+      reason: "Prior-advisory ghosts are an NHC product.",
+    };
+    out.showWindField = {
+      available: false,
+      reason: "Gale and storm radii come from the JMA bulletin, not the NHC wind swath.",
+    };
+    out.showModelTracks = {
+      available: false,
+      reason: "No public western Pacific a-deck, so there is no ensemble spaghetti.",
+    };
+    out.showEnsembleEnvelope = {
+      available: false,
+      reason: "No ensemble members for a JMA typhoon.",
+    };
+    out.showAiEnvelope = {
+      available: false,
+      reason: "No ensemble members for a JMA typhoon.",
+    };
+    out.showStrikeProbability = {
+      available: false,
+      reason: "Strike probability is a US county vote. It is not computed for Japan.",
+    };
+    out.showWatchesWarnings = { available: false, reason: notIssued };
+    out.showSurge = { available: false, reason: "No NHC surge product for a JMA typhoon." };
+    out.showAlerts = { available: false, reason: "NWS alerts are not loaded for a JMA typhoon." };
+    out.showWindMap = {
+      available: false,
+      reason: "No NDBC or NWS obs. Switch the wind source to GFS or ECMWF for model wind.",
+    };
+    out.showWindParticles = { available: true };
+    out.showBuoys = { available: false, reason: "NDBC buoys are not loaded for a JMA typhoon." };
+    out.showRecon = { available: false, reason: "Hurricane hunters are an Atlantic product." };
+    out.showLand = { available: false, reason: "NWS land stations are not loaded for a JMA typhoon." };
+    out.showSst = { available: false, reason: "The SST grid is not loaded for a JMA typhoon." };
+  }
+
   return out;
+}
+
+function ImageryStatusLine() {
+  const showSat = useLiveStormStore((s) => s.showSatellite);
+  const showLight = useLiveStormStore((s) => s.showLightning);
+  const status = useLiveStormStore((s) => s.imageryStatus);
+  if (!showSat && !showLight) return null;
+  return (
+    <div
+      style={{
+        gridColumn: "span 2",
+        fontSize: "0.62rem",
+        color: "var(--ink-600)",
+        lineHeight: 1.35,
+        display: "grid",
+        gap: 3,
+      }}
+    >
+      {showSat && <div>{status?.satellite ?? "Loading satellite…"}</div>}
+      {showLight && <div>{status?.lightning ?? "Checking lightning coverage…"}</div>}
+    </div>
+  );
 }
 
 function ChipGroup({
@@ -1091,7 +1252,7 @@ function StormPicker({
   rows: LiveStormRow[];
   activeId: string | null;
   onPick: (id: string) => void;
-  variant?: "active" | "invest" | "replay";
+  variant?: "active" | "invest" | "replay" | "jma";
 }) {
   // Loading state so we can show a spinner on the active picker button
   // while the a-deck / bundle fetch is in flight — previously the button
@@ -1108,7 +1269,7 @@ function StormPicker({
   // against the yellow invest bg (the "gray with yellow outline" bug the
   // user hit was actually the brand-50 fill against the yellow border).
   const variantStyle: Record<
-    "active" | "invest" | "replay",
+    "active" | "invest" | "replay" | "jma",
     {
       idle:   { bg: string; border: string; text: string };
       active: { bg: string; border: string; text: string; dot: string };
@@ -1131,6 +1292,12 @@ function StormPicker({
       idle:   { bg: "#f1f5f9", border: "#cbd5e1", text: "#475569" },
       active: { bg: "#e2e8f0", border: "#475569", text: "#0f172a", dot: "#475569" },
       label:  "#475569",
+    },
+    jma: {
+      idle:   { bg: "#ccfbf1", border: "#5eead4", text: "#134e4a" },
+      active: { bg: "#99f6e4", border: "#0f766e", text: "#134e4a", dot: "#0f766e" },
+      label:  "#115e59",
+      hint:   "Official JMA track. 10-minute wind, forecast circles, gale and storm radii. No NHC cone and no ensemble strike vote.",
     },
   };
   const vs = variantStyle[variant];
@@ -1243,7 +1410,10 @@ function WindMapModeSelector({
 }: {
   store: ReturnType<typeof useLiveStormStore.getState>;
 }) {
-  if (!store.showWindMap) return null;
+  const jma = !!store.data?.jma;
+  // Particles, and a JMA storm, still need a model source. The obs heatmap
+  // stays off — there is no NDBC or NWS pool under a typhoon.
+  if (!store.showWindMap && !store.showWindParticles && !jma) return null;
   const modes: Array<[WindMapMode, string, string]> = [
     ["observed", "Obs", "Interpolated observations"],
     ["gfs", "GFS", "NOAA GFS surface wind"],
@@ -1264,8 +1434,18 @@ function WindMapModeSelector({
   // One-line status describing why the active mode has nothing to show.
   const statusForMode = (mode: WindMapMode): string | null => {
     if (mode === "observed") {
+      if (jma) return "No NWS or NDBC obs on a JMA typhoon. GFS and ECMWF are model wind, not the 10-minute maximum.";
       if (obsEmpty) return "No surface obs in this bbox (open-ocean storm).";
       return null;
+    }
+    const busy = (s: typeof store.gfsGridStatus) =>
+      s === "loading" || s === "empty" || s === "error";
+    if (
+      store.windGridNotice
+      && ((needsGfs(mode) && busy(store.gfsGridStatus))
+        || (needsEcmwf(mode) && busy(store.ecmwfGridStatus)))
+    ) {
+      return store.windGridNotice;
     }
     if (needsGfs(mode)) {
       if (store.gfsGridStatus === "loading") return "GFS loading…";
@@ -1300,6 +1480,8 @@ function WindMapModeSelector({
     : store.ecmwfShearStatus;
   const shearStatusLine = !store.showWindShear || !shearMode
     ? null
+    : store.windGridNotice && (shearStatus === "loading" || shearStatus === "empty" || shearStatus === "error")
+      ? store.windGridNotice
     : shearStatus === "loading"
       ? "850–200 hPa shear loading…"
       : shearStatus === "empty"
@@ -1451,7 +1633,7 @@ function WindMapTimeSlider({
 }: {
   store: ReturnType<typeof useLiveStormStore.getState>;
 }) {
-  if (!store.showWindMap) return null;
+  if (!store.showWindMap && !store.showWindParticles && !store.data?.jma) return null;
   const mode = store.windMapMode;
   // Observed grid is always current-time — no frames to scrub through.
   if (mode === "observed") return null;
@@ -2004,7 +2186,10 @@ function EnsembleRiskSection() {
         them, and AI tracks (GraphCast, AIFS, and the others on the file).
         Official, deterministic, and ensemble-mean tracks are not votes.
         A county's percent is how many of those tracks pass within the
-        threshold of its centroid, at a lead of at least 24 h.
+        threshold of its centroid at a lead of 24 h or later. Dots sit on
+        the county centroid, inland of the coastline. Ensemble members are
+        often one cycle behind the official line, so the circles can sit
+        west or east of that line until the new members are posted.
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2035,8 +2220,15 @@ function EnsembleRiskSection() {
       {risk && risk.strikeByCounty.length > 0 && (
         <>
           <div style={{ fontSize: "0.62rem", color: "var(--ink-500)" }}>
-            {risk.ensembleTotal} ensemble members · {risk.strikeByCounty.length} coastal counties within {risk.thresholdNm.toFixed(0)} nm
+            {risk.ensembleTotal} ensemble members
+            {risk.initCycle ? ` · ${risk.initCycle}` : ""}
+            {" "}· {risk.strikeByCounty.length} coastal counties within {risk.thresholdNm.toFixed(0)} nm
           </div>
+          {risk.notes.length > 0 && (
+            <div style={{ fontSize: "0.62rem", color: "#78350f", background: "#fef3c7", padding: 4, borderRadius: 3 }}>
+              {risk.notes[0]}
+            </div>
+          )}
           <div style={{ display: "grid", gap: 2 }}>
             {top.map((c) => (
               <div
@@ -2217,11 +2409,12 @@ function SurfaceWindScale({ maxKt }: { maxKt: number }) {
 
 function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundle }) {
   const isInvest = data.storm.classification === "INVEST";
+  const jma = data.jma;
   // Invests get a distinct pale-yellow summary card matching the picker
   // treatment, plus an explicit note that NHC-issued products (cone, surge,
   // watches/warnings) will be empty until an advisory is issued.
-  const bg = isInvest ? "#fef3c7" : "var(--brand-50)";
-  const border = isInvest ? "#fbbf24" : "var(--brand-400)";
+  const bg = jma ? "#ccfbf1" : isInvest ? "#fef3c7" : "var(--brand-50)";
+  const border = jma ? "#0f766e" : isInvest ? "#fbbf24" : "var(--brand-400)";
   return (
     <div
       style={{
@@ -2236,9 +2429,25 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
       }}
     >
       <div>
-        <strong>{data.storm.name}</strong> · {data.storm.year} ·{" "}
-        {data.storm.intensityKt} kt
+        <strong>{data.storm.name}</strong>
+        {jma?.nameJp ? ` / ${jma.nameJp}` : ""} · {data.storm.year}
+        {jma ? ` · JMA ${jma.typhoonNumber}` : ""}
+        {" · "}
+        {jma?.windMs != null ? `${jma.windMs} m/s 10-min` : `${data.storm.intensityKt} kt`}
+        {jma?.pressureMb != null ? ` · ${jma.pressureMb} hPa` : ""}
       </div>
+      {jma && (
+        <div style={{ fontSize: "0.62rem", color: "#134e4a" }}>
+          {jma.note}
+          {jma.galeRanges.length > 0 && (
+            <div>Gale (15 m/s): {jma.galeRanges.join("; ")}</div>
+          )}
+          {jma.stormRanges.length > 0 && (
+            <div>Storm (25 m/s): {jma.stormRanges.join("; ")}</div>
+          )}
+          {jma.intensity && <div>JMA intensity: {jma.intensity}</div>}
+        </div>
+      )}
       {isInvest && (
         <div style={{ fontSize: "0.62rem", color: "#78350f", fontStyle: "italic" }}>
           Pre-advisory invest — enable "Model tracks" + "Strike probability"
@@ -2246,7 +2455,9 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
           until an advisory is issued.
         </div>
       )}
-      <div>{data.observedTrack.length} observed fixes · {data.forecasts.length} advisories</div>
+      {!jma && (
+        <div>{data.observedTrack.length} observed fixes · {data.forecasts.length} advisories</div>
+      )}
       {data.watchesWarnings.length > 0 && (
         <div>
           <strong>{data.watchesWarnings.length}</strong> NHC watches/warnings
@@ -2257,10 +2468,12 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
           )}
         </div>
       )}
-      <div>
-        {data.alerts.length} other alerts · {data.buoys.length} buoys
-        {(data.recon?.length ?? 0) > 0 ? ` · ${data.recon.length} hunter pts` : ""}
-      </div>
+      {!jma && (
+        <div>
+          {data.alerts.length} other alerts · {data.buoys.length} buoys
+          {(data.recon?.length ?? 0) > 0 ? ` · ${data.recon.length} hunter pts` : ""}
+        </div>
+      )}
       {(data.recon?.length ?? 0) > 0 && (
         <SurfaceWindScale
           maxKt={Math.max(...data.recon.map((p) => p.surfaceKt))}

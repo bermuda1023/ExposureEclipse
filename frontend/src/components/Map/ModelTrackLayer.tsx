@@ -169,12 +169,22 @@ export function ModelTrackLayer({ map }: Props) {
   const showAiEnv = useLiveStormStore((s) => s.showAiEnvelope);
   const modelTracks = useLiveStormStore((s) => s.modelTracks);
   const visibleFamilies = useLiveStormStore((s) => s.visibleFamilies);
+  const showStrike = useLiveStormStore((s) => s.showStrikeProbability);
 
   useEffect(() => {
     if (!map) return;
     const apply = () => {
       const tracks = modelTracks?.tracks ?? [];
-      setSource(map, SRC_TRACKS, buildTracksFC(tracks, visibleFamilies));
+      // The strike circles are a vote of GEFS / ECMWF ensemble / AI.
+      // Those members are off the spaghetti by default, which left the
+      // circles sitting beside the official line with nothing under them.
+      const drawn = new Set(showTracks ? visibleFamilies : []);
+      if (showStrike) {
+        drawn.add("gefs_ens");
+        drawn.add("ecmwf_ens");
+        drawn.add("ai");
+      }
+      setSource(map, SRC_TRACKS, buildTracksFC(tracks, drawn));
       setSource(
         map,
         SRC_ENVELOPE,
@@ -188,7 +198,7 @@ export function ModelTrackLayer({ map }: Props) {
       setSource(
         map,
         `${SRC_TRACKS}-endpoints`,
-        buildEndPointsFC(tracks, visibleFamilies),
+        buildEndPointsFC(tracks, drawn),
       );
 
       ensureLayer(map, LAYER_ENVELOPE, {
@@ -271,7 +281,7 @@ export function ModelTrackLayer({ map }: Props) {
       moveToTop(map, LAYER_TRACKS);
       moveToTop(map, LAYER_TRACK_END_LABELS);
 
-      setVis(map, LAYER_TRACKS, showTracks);
+      setVis(map, LAYER_TRACKS, showTracks || showStrike);
       setVis(map, LAYER_TRACK_END_LABELS, showTracks);
       // Envelope chips are independent of the spaghetti toggle. Requiring
       // model tracks left the consensus polygon off even when its chip was on.
@@ -283,7 +293,7 @@ export function ModelTrackLayer({ map }: Props) {
 
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, modelTracks, visibleFamilies, showTracks, showEnv, showAiEnv]);
+  }, [map, modelTracks, visibleFamilies, showTracks, showStrike, showEnv, showAiEnv]);
 
   // Hover popup — read "this line is X" without clicking.
   useEffect(() => {

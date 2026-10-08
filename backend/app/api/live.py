@@ -42,6 +42,13 @@ from ..services.atcf_adecks import (
 )
 from ..services.ensemble_envelope import build_envelope
 from ..services.invests import InvestSummary, fetch_active_invests
+from ..services.jma_typhoon import (
+    JmaStorm,
+    JmaSummary,
+    fetch_active_typhoons,
+    fetch_typhoon,
+    is_jma_id,
+)
 from ..services.nhc_gtwo import fetch_gtwo
 from ..services.ensemble_risk import (
     ATLANTIC_COASTAL_STATES,
@@ -61,6 +68,7 @@ from ..services.wind_field_map import (
 )
 from ..services.recon_obs import fetch_recon_bundle, recon_for_idw
 from ..services.wind_forecast import (
+    daily_forecast,
     fetch_model_shear_grid,
     fetch_model_wind_grid,
     point_forecast,
@@ -95,6 +103,10 @@ class LiveStormListResponse(CamelModel):
     # both work for them; NHC-issued products (cone, surge, watches/warnings)
     # do not. Rendered as a distinct picker section.
     invests: list[LiveStormRow]
+    # Official JMA typhoons (western North Pacific). A separate list so a
+    # Japan track is not mistaken for an NHC advisory: no cone, no a-deck,
+    # no US county strike vote.
+    typhoons: list[LiveStormRow] = []
     has_active: bool
     note: str | None = None
 
@@ -334,6 +346,10 @@ class WindModelGridOut(CamelModel):
     step_deg: float
     cells: list[WindGridCoordOut]
     frames: list[WindModelFrameOut]
+    # Empty because the per-minute location budget was already spent.
+    # The panel waits and retries; a genuinely calm or uncovered grid
+    # leaves this false.
+    rate_limited: bool = False
 
 
 class ModelForecastOut(CamelModel):
@@ -354,6 +370,92 @@ class PointForecastOut(CamelModel):
     lon: float
     fetched_at_utc: str
     forecasts: list[ModelForecastOut]
+
+
+class DailyDayOut(CamelModel):
+    """One local calendar day. Wind is the daily maximum, not the hour
+    the click popup shows."""
+
+    date: str
+    weather_code: int | None
+    temp_max_f: float | None
+    temp_min_f: float | None
+    precip_in: float | None
+    wind_max_kt: float | None
+    gust_max_kt: float | None
+    wind_dir_deg: float | None
+
+
+class DailyModelOut(CamelModel):
+    model: str            # "gfs" | "ecmwf"
+    days: list[DailyDayOut]
+
+
+class DailyForecastOut(CamelModel):
+    """Five local days at one point, GFS and ECMWF. ``models`` is empty
+    when Open-Meteo is unreachable."""
+
+    lat: float
+    lon: float
+    timezone: str | None
+    fetched_at_utc: str
+    models: list[DailyModelOut]
+
+
+class JmaFixOut(CamelModel):
+    hours_out: int
+    valid_time: str
+    lat: float
+    lon: float
+    wind_kt: int | None
+    wind_ms: float | None
+    pressure_mb: int | None
+    category_en: str
+    category_jp: str
+    intensity: str | None
+
+
+class JmaCircleOut(CamelModel):
+    """Closed ring. ``kind`` is gale, storm, or probability."""
+
+    kind: str
+    hours_out: int
+    label: str
+    center_lon: float
+    center_lat: float
+    radius_m: float
+    ring: list[list[float]]
+
+
+class JmaPathOut(CamelModel):
+    """Open line. ``kind`` is tangent, storm-arc, or storm-line."""
+
+    kind: str
+    hours_out: int
+    coordinates: list[list[float]]
+
+
+class JmaOverlayOut(CamelModel):
+    """Official JMA bulletin drawn in place of the NHC cone."""
+
+    name_en: str
+    name_jp: str
+    typhoon_number: str
+    issued_at: str
+    category_en: str
+    category_jp: str
+    intensity: str | None
+    wind_ms: float | None
+    wind_kt: int | None
+    gust_ms: float | None
+    gust_kt: int | None
+    pressure_mb: int | None
+    gale_ranges: list[str]
+    storm_ranges: list[str]
+    note: str
+    fixes: list[JmaFixOut]
+    circles: list[JmaCircleOut]
+    paths: list[JmaPathOut]
 
 
 class LiveStormBundle(CamelModel):
@@ -395,6 +497,8 @@ class LiveStormBundle(CamelModel):
     # The cleaned obs pool that fed the heatmap. Shipped so the click popup
     # can show contributor stations for any given cell.
     wind_obs: list[WindObsOut]
+    # Set only for a JMA id. Null on every NHC storm and invest.
+    jma: JmaOverlayOut | None = None
 
 
 # ─────────────────────────── helpers ───────────────────────────
@@ -415,6 +519,127 @@ def _invest_to_row(inv: InvestSummary) -> LiveStormRow:
         lon=inv.lon,
         is_live=True,
         label=inv.label,
+    )
+
+
+def _jma_row(s: JmaSummary) -> LiveStormRow:
+    return LiveStormRow(
+        storm_id=s.storm_id,
+        name=s.name,
+        year=s.year,
+        classification=s.classification,
+        intensity_kt=s.intensity_kt,
+        pressure_mb=s.pressure_mb,
+        lat=s.lat,
+        lon=s.lon,
+        is_live=True,
+        label=s.label,
+    )
+
+
+def _bundle_from_jma(storm: JmaStorm) -> LiveStormBundle:
+    """Track, circles, and radii only. No NHC products and no US impact."""
+    empty_wind = WindFieldOut(inner_cone=[], outer_cone=[], outer_rings=[])
+    observed = [
+        ObservedFix(
+            lat=lat,
+            lon=lon,
+            wind_kt=storm.summary.intensity_kt if i == len(storm.observed) - 1 else 0,
+            category=0,
+            status=storm.summary.classification,
+            datetime=storm.forecast[0].valid_time if storm.forecast else storm.issued_at,
+        )
+        for i, (lat, lon) in enumerate(storm.observed)
+    ]
+    points = [
+        ForecastFix(
+            lat=fix.lat,
+            lon=fix.lon,
+            wind_kt=fix.wind_kt or 0,
+            hours_out=fix.hours_out,
+            valid_time=fix.valid_time,
+        )
+        for fix in storm.forecast
+    ]
+    advisory = ForecastAdvisory(
+        advisory_number=1,
+        issued_at=storm.issued_at,
+        points=points,
+        synthetic=False,
+    ) if points else None
+    return LiveStormBundle(
+        storm=_jma_row(storm.summary),
+        observed_track=observed,
+        forecasts=[advisory] if advisory else [],
+        bbox=list(storm.bbox),
+        alerts=[],
+        watches_warnings=[],
+        watches_warnings_zone_only=0,
+        buoys=[],
+        land_stations=[],
+        recon=[],
+        vortex=None,
+        sst=[],
+        sst_min_c=None,
+        sst_max_c=None,
+        sst_meta=SSTMeta(source="none", step_deg=0.0),
+        observed_wind_field=empty_wind,
+        forecast_wind_field=empty_wind,
+        forecast_cone=None,
+        peak_surge=[],
+        wind_map=[],
+        wind_map_meta=WindGridMeta(
+            step_deg=0.0, obs_max_age_hours=0.0, idw_radius_km=0.0,
+        ),
+        wind_obs=[],
+        jma=JmaOverlayOut(
+            name_en=storm.summary.name,
+            name_jp=storm.summary.name_jp,
+            typhoon_number=storm.typhoon_number,
+            issued_at=storm.issued_at,
+            category_en=storm.summary.classification,
+            category_jp=storm.category_jp,
+            intensity=storm.intensity,
+            wind_ms=storm.wind_ms,
+            wind_kt=storm.summary.intensity_kt or None,
+            gust_ms=storm.gust_ms,
+            gust_kt=storm.gust_kt,
+            pressure_mb=storm.summary.pressure_mb,
+            gale_ranges=storm.gale_ranges,
+            storm_ranges=storm.storm_ranges,
+            note=storm.note,
+            fixes=[
+                JmaFixOut(
+                    hours_out=fix.hours_out,
+                    valid_time=fix.valid_time,
+                    lat=fix.lat,
+                    lon=fix.lon,
+                    wind_kt=fix.wind_kt,
+                    wind_ms=fix.wind_ms,
+                    pressure_mb=fix.pressure_mb,
+                    category_en=fix.category_en,
+                    category_jp=fix.category_jp,
+                    intensity=fix.intensity,
+                )
+                for fix in storm.forecast
+            ],
+            circles=[
+                JmaCircleOut(
+                    kind=c.kind,
+                    hours_out=c.hours_out,
+                    label=c.label,
+                    center_lon=c.center_lon,
+                    center_lat=c.center_lat,
+                    radius_m=c.radius_m,
+                    ring=c.ring,
+                )
+                for c in storm.circles
+            ],
+            paths=[
+                JmaPathOut(kind=p.kind, hours_out=p.hours_out, coordinates=p.coordinates)
+                for p in storm.paths
+            ],
+        ),
     )
 
 
@@ -572,15 +797,21 @@ def _states_in_bbox(bbox: tuple[float, float, float, float]) -> list[str]:
 
 @router.get("/storms", response_model=LiveStormListResponse)
 def list_live_storms() -> LiveStormListResponse:
-    """Active NHC storms + invests. Replay storms are not offered."""
+    """Active NHC storms, invests, and JMA typhoons. Replay is not offered."""
     active = [_summary_to_row(s) for s in fetch_active_summaries()]
     try:
         invests = [_invest_to_row(i) for i in fetch_active_invests()]
     except Exception:  # noqa: BLE001 — invest FTP outage → empty, not 5xx
         invests = []
+    try:
+        typhoons = [_jma_row(s) for s in fetch_active_typhoons()]
+    except Exception:  # noqa: BLE001 — JMA outage must not blank the NHC list
+        typhoons = []
     note = None
-    if not active and not invests:
-        note = "No active Atlantic storms or invests right now."
+    if not active and not invests and not typhoons:
+        note = "No active Atlantic storms, invests, or JMA typhoons right now."
+    elif not active and not invests:
+        note = "No active Atlantic storms or invests. JMA typhoons are listed separately."
     elif not active and invests:
         note = (
             "No active named/numbered storms — but "
@@ -593,6 +824,7 @@ def list_live_storms() -> LiveStormListResponse:
         active=active,
         replay=[],
         invests=invests,
+        typhoons=typhoons,
         has_active=bool(active),
         note=note,
     )
@@ -615,7 +847,22 @@ def live_storm_bundle(
     Ancillary feeds (alerts, buoys, land, SST, recon, wind map) run together
     under one deadline so a slow one cannot drop the cone and wind field.
     ``refresh`` drops the short-lived NHC caches and fetches again.
+    A ``TC*`` id is a JMA typhoon and never touches NHC products.
     """
+    if is_jma_id(atcf_id):
+        storm = fetch_typhoon(atcf_id, refresh=refresh)
+        if storm is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "DATASET_NOT_FOUND",
+                    "message": (
+                        f"Typhoon '{atcf_id}' is not in the current JMA list. "
+                        "An empty list means JMA is not issuing a typhoon."
+                    ),
+                },
+            )
+        return _bundle_from_jma(storm)
     if refresh:
         clear_current_storms_cache()
     result = storm_and_forecasts(
@@ -1204,6 +1451,7 @@ def wind_model_grid(
             )
             for f in grid.frames
         ],
+        rate_limited=grid.rate_limited,
     )
 
 
@@ -1240,6 +1488,7 @@ def wind_shear_grid(
             )
             for f in grid.frames
         ],
+        rate_limited=grid.rate_limited,
     )
 
 
@@ -1268,6 +1517,45 @@ def wind_forecast_at_point(
                 wind_gust_kt=f.wind_gust_kt,
             )
             for f in result.forecasts
+        ],
+    )
+
+
+@router.get("/daily-forecast", response_model=DailyForecastOut)
+def daily_forecast_at_point(
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lon: float = Query(..., ge=-180.0, le=180.0),
+) -> DailyForecastOut:
+    """Five local days of GFS and ECMWF at one point.
+
+    Powers the tucked-away location card. Not the hourly click popup and
+    not the wind-grid fetch. Temperatures are Fahrenheit, rain is inches,
+    wind is the daily maximum in knots.
+    """
+    result = daily_forecast(lat, lon)
+    return DailyForecastOut(
+        lat=result.lat,
+        lon=result.lon,
+        timezone=result.timezone,
+        fetched_at_utc=result.fetched_at_utc,
+        models=[
+            DailyModelOut(
+                model=m.model,
+                days=[
+                    DailyDayOut(
+                        date=d.date,
+                        weather_code=d.weather_code,
+                        temp_max_f=d.temp_max_f,
+                        temp_min_f=d.temp_min_f,
+                        precip_in=d.precip_in,
+                        wind_max_kt=d.wind_max_kt,
+                        gust_max_kt=d.gust_max_kt,
+                        wind_dir_deg=d.wind_dir_deg,
+                    )
+                    for d in m.days
+                ],
+            )
+            for m in result.models
         ],
     )
 
@@ -1423,6 +1711,21 @@ def model_tracks(
     ``initCycle`` (YYYYMMDDHH) restricts to a specific model cycle. Default:
     the latest cycle present in the file.
     """
+    if is_jma_id(atcf_id):
+        return ModelTracksResponse(
+            storm_id=atcf_id.upper(),
+            init_cycle=None,
+            available_cycles=[],
+            tracks=[],
+            families=[],
+            ensemble_envelope=None,
+            ai_envelope=None,
+            notes=[
+                "JMA does not publish an NHC a-deck. There is no ensemble "
+                "member vote for this typhoon.",
+            ],
+            attribution="Japan Meteorological Agency typhoon bulletin.",
+        )
     tracks = fetch_model_tracks(
         atcf_id,
         init_cycle=init_cycle,
@@ -1600,7 +1903,22 @@ def ensemble_risk_endpoint(
     ``allStates=true`` to walk the full US county set (slower). Threshold
     is in nautical miles from the county centroid to the nearest point on
     each member's track. Default 60 nm ≈ R64 envelope of a mature hurricane.
+    Not computed for JMA typhoons: there is no public member file, and the
+    vote is over US county centroids.
     """
+    if is_jma_id(atcf_id):
+        return EnsembleRiskResponse(
+            storm_id=atcf_id.upper(),
+            init_cycle=None,
+            ensemble_total=0,
+            threshold_nm=threshold_nm,
+            strike_by_county=[],
+            intensity_by_lead=[],
+            notes=[
+                "Strike probability is a US county vote over NHC a-deck "
+                "members. It is not computed for a JMA typhoon.",
+            ],
+        )
     tracks = fetch_model_tracks(atcf_id, refresh=refresh)
     notes: list[str] = []
     if not tracks:
@@ -1635,6 +1953,23 @@ def ensemble_risk_endpoint(
             f"{threshold_nm:.0f} nm of any coastal county centroid. Increase "
             "the threshold, or the storm may be too far out or on a "
             "sea-only trajectory."
+        )
+    ofcl_cycles = [
+        t.init_cycle for t in tracks
+        if t.tech_id == "OFCL" and t.init_cycle
+    ]
+    newest_ofcl = max(ofcl_cycles) if ofcl_cycles else None
+    if (
+        risk.init_cycle
+        and newest_ofcl
+        and risk.init_cycle < newest_ofcl
+    ):
+        notes.append(
+            f"Most of the vote is still the {risk.init_cycle} ensemble. "
+            f"The official forecast is {newest_ofcl} and can sit well east "
+            f"or west of those members until the new ensemble is in the "
+            f"a-deck. The circles follow the members, not the official line, "
+            f"and they refresh when that file updates."
         )
     return EnsembleRiskResponse(
         storm_id=atcf_id.upper(),

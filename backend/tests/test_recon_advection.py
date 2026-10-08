@@ -111,6 +111,18 @@ def test_model_step_coarsens_a_basin_sized_bbox():
     assert step >= 0.5
 
 
+def test_model_step_keeps_a_gulf_cone_under_the_minute_budget():
+    # The Isaias-sized probe bbox. Both models have to fit in 600
+    # location-weighted calls, so one cone stays at or under the cap.
+    from app.services.wind_forecast import _MAX_MODEL_CELLS
+
+    step = choose_model_step(-97.0, 19.0, -81.0, 41.0)
+    nlat = int(22.0 / step) + 1
+    nlon = int(16.0 / step) + 1
+    assert nlat * nlon <= _MAX_MODEL_CELLS
+    assert step == 1.25
+
+
 def test_model_step_stays_half_degree_on_a_small_box():
     assert choose_model_step(-90.0, 24.0, -84.0, 30.0) == 0.5
 
@@ -158,9 +170,10 @@ def test_failed_model_chunk_is_a_gap_not_calm(monkeypatch):
 
     wf._GRID_CACHE.clear()
     wf._bulk_cache.clear()
+    wf._location_events.clear()
     monkeypatch.setattr(wf, "_CHUNK_SIZE", 2)
 
-    def fake(lat_str, lon_str, model_key, refresh=False):
+    def fake(lat_str, lon_str, model_key, refresh=False, **_kwargs):
         lats = [float(x) for x in lat_str.split(",") if x]
         if lats and abs(lats[0] - 24.0) < 1e-6:
             raise TimeoutError("chunk died")
@@ -181,9 +194,10 @@ def test_empty_model_grid_is_not_cached(monkeypatch):
 
     wf._GRID_CACHE.clear()
     wf._bulk_cache.clear()
+    wf._location_events.clear()
     calls = {"n": 0}
 
-    def fake(lat_str, lon_str, model_key, refresh=False):
+    def fake(lat_str, lon_str, model_key, refresh=False, **_kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             return ()
@@ -192,6 +206,52 @@ def test_empty_model_grid_is_not_cached(monkeypatch):
     monkeypatch.setattr(wf, "_fetch_bulk_chunk", fake)
     first = wf.fetch_model_wind_grid(-80.0, 25.0, -79.5, 25.5, "ecmwf")
     assert not any(kt > 0 for frame in first.frames for kt in frame.wind_kt)
+    assert not first.rate_limited
     second = wf.fetch_model_wind_grid(-80.0, 25.0, -79.5, 25.5, "ecmwf")
     assert any(kt > 0 for frame in second.frames for kt in frame.wind_kt)
     assert calls["n"] >= 2
+
+
+def test_upstream_429_is_rate_limited_and_not_cached(monkeypatch):
+    import app.services.wind_forecast as wf
+
+    wf._GRID_CACHE.clear()
+    wf._bulk_cache.clear()
+    wf._location_events.clear()
+    calls = {"n": 0}
+
+    def fake(*_args, **_kwargs):
+        calls["n"] += 1
+        raise wf.OpenMeteoRateLimited()
+
+    monkeypatch.setattr(wf, "_fetch_bulk_chunk", fake)
+    grid = wf.fetch_model_wind_grid(-80.0, 25.0, -79.5, 25.5, "ecmwf")
+    assert grid.rate_limited
+    assert grid.cells == []
+    seen = calls["n"]
+    again = wf.fetch_model_wind_grid(-80.0, 25.0, -79.5, 25.5, "ecmwf")
+    assert again.rate_limited
+    assert calls["n"] > seen
+
+
+def test_location_budget_refuses_the_next_grid_without_a_request(monkeypatch):
+    import app.services.wind_forecast as wf
+
+    wf._GRID_CACHE.clear()
+    wf._bulk_cache.clear()
+    wf._location_events.clear()
+    monkeypatch.setattr(wf, "_LOCATION_BUDGET", 6)
+    calls = {"n": 0}
+
+    def fake(lat_str, lon_str, model_key, refresh=False, **_kwargs):
+        calls["n"] += 1
+        return tuple(_hourly(8.0) for _ in lat_str.split(",") if _)
+
+    monkeypatch.setattr(wf, "_fetch_bulk_chunk", fake)
+    first = wf.fetch_model_wind_grid(-80.0, 25.0, -79.5, 25.5, "gfs")
+    assert any(kt > 0 for frame in first.frames for kt in frame.wind_kt)
+    second = wf.fetch_model_wind_grid(-70.0, 25.0, -69.5, 25.5, "ecmwf")
+    assert second.rate_limited
+    assert second.cells == []
+    assert calls["n"] == 1
+    wf._location_events.clear()

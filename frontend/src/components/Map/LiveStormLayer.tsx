@@ -17,7 +17,9 @@
 import type { GeoJSONSource, Map as MbMap } from "mapbox-gl";
 import { useEffect, useRef } from "react";
 import { shearViewActive, useLiveStormStore } from "../../state/liveStorm";
+import type { JmaOverlay } from "../../api/live";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
+import { segmentsAvoidingAntimeridian } from "./trackSplit";
 
 // SSHWS-palette `step` expression for wind speed (kt) → category color.
 // Single source of truth for any line/marker keyed on observed wind speed.
@@ -51,6 +53,9 @@ const SRC_FCST_RINGS = "live-fcst-outer-rings";
 const SRC_NHC_CONE = "live-nhc-cone";
 const SRC_SURGE = "live-surge";
 const SRC_WIND_MAP = "live-wind-map";
+const SRC_JMA_FILL = "live-jma-fill";
+const SRC_JMA_LINE = "live-jma-line";
+const SRC_JMA_LABEL = "live-jma-label";
 
 const LAYER_OBSERVED = "live-observed-line";
 const LAYER_FORECAST_LATEST = "live-forecast-latest-line";
@@ -85,6 +90,12 @@ const LAYER_WIND_MAP_FILL = "live-wind-map-fill";
 const LAYER_WIND_SHEAR_ARROW = "live-wind-shear-arrow";
 const SRC_WIND_OBS = "live-wind-obs";
 const LAYER_WIND_OBS = "live-wind-obs-circle";
+const LAYER_JMA_GALE = "live-jma-gale";
+const LAYER_JMA_STORM = "live-jma-storm";
+const LAYER_JMA_CIRCLE = "live-jma-circle";
+const LAYER_JMA_TANGENT = "live-jma-tangent";
+const LAYER_JMA_WARN = "live-jma-warn";
+const LAYER_JMA_LABEL = "live-jma-label";
 
 // SSHWS-inspired palette for the interpolated wind heatmap. Not a step
 // expression — we interpolate for a smooth field. Anchor points chosen to
@@ -168,20 +179,74 @@ interface Props {
 
 function buildLineFC(coords: { lat: number; lon: number; windKt?: number }[], windFallback = 64) {
   const features: GeoJSON.Feature[] = [];
-  if (coords.length < 2) return { type: "FeatureCollection" as const, features };
-  for (let i = 0; i < coords.length - 1; i++) {
-    const a = coords[i]!;
-    const b = coords[i + 1]!;
-    features.push({
-      type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: [[a.lon, a.lat], [b.lon, b.lat]],
-      },
-      properties: { windKt: Math.max(a.windKt ?? windFallback, b.windKt ?? windFallback) },
-    });
+  // A step across ±180° is a few miles on the globe. Drawing it raw paints
+  // a line across the whole Pacific.
+  for (const piece of segmentsAvoidingAntimeridian(coords)) {
+    for (let i = 0; i < piece.length - 1; i++) {
+      const a = piece[i]!;
+      const b = piece[i + 1]!;
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: [[a.lon, a.lat], [b.lon, b.lat]],
+        },
+        properties: { windKt: Math.max(a.windKt ?? windFallback, b.windKt ?? windFallback) },
+      });
+    }
   }
   return { type: "FeatureCollection" as const, features };
+}
+
+function emptyFC(): GeoJSON.FeatureCollection {
+  return { type: "FeatureCollection", features: [] };
+}
+
+function buildJmaFC(jma: JmaOverlay | null | undefined): {
+  fill: GeoJSON.FeatureCollection;
+  line: GeoJSON.FeatureCollection;
+  label: GeoJSON.FeatureCollection;
+} {
+  if (!jma) return { fill: emptyFC(), line: emptyFC(), label: emptyFC() };
+  const fill: GeoJSON.Feature[] = [];
+  const line: GeoJSON.Feature[] = [];
+  const label: GeoJSON.Feature[] = [];
+  for (const circle of jma.circles) {
+    if (circle.ring.length < 2) continue;
+    if (circle.kind === "gale" || circle.kind === "storm") {
+      fill.push({
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [circle.ring] },
+        properties: { kind: circle.kind },
+      });
+    } else {
+      line.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: circle.ring },
+        properties: { kind: "probability" },
+      });
+    }
+    if (circle.label) {
+      label.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [circle.centerLon, circle.centerLat] },
+        properties: { label: circle.label },
+      });
+    }
+  }
+  for (const path of jma.paths) {
+    if (path.coordinates.length < 2) continue;
+    line.push({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: path.coordinates },
+      properties: { kind: path.kind },
+    });
+  }
+  return {
+    fill: { type: "FeatureCollection", features: fill },
+    line: { type: "FeatureCollection", features: line },
+    label: { type: "FeatureCollection", features: label },
+  };
 }
 
 function buildForecastHistoryFC(advisories: import("../../api/live").ForecastAdvisory[]) {
@@ -324,10 +389,14 @@ function ensureWindArrow(map: MbMap): void {
   g.clearRect(0, 0, size, size);
   g.fillStyle = "#ffffff";
   g.beginPath();
-  g.moveTo(16, 2);
-  g.lineTo(28, 30);
-  g.lineTo(16, 22);
-  g.lineTo(4, 30);
+  // Shaft plus a wide head, so the heading still reads when the icon is small.
+  g.moveTo(16, 1);
+  g.lineTo(31, 20);
+  g.lineTo(21, 20);
+  g.lineTo(21, 31);
+  g.lineTo(11, 31);
+  g.lineTo(11, 20);
+  g.lineTo(1, 20);
   g.closePath();
   g.fill();
   const image = g.getImageData(0, 0, size, size);
@@ -732,6 +801,10 @@ export function LiveStormLayer({ map }: Props) {
       setSource(map, SRC_FCST_INNER, buildConeQuadFC(data?.forecastWindField.innerCone));
       setSource(map, SRC_NHC_CONE, buildNHCConeFC(data?.forecastCone));
       setSource(map, SRC_SURGE, buildSurgeFC(data?.peakSurge));
+      const jmaGeo = buildJmaFC(data?.jma);
+      setSource(map, SRC_JMA_FILL, jmaGeo.fill);
+      setSource(map, SRC_JMA_LINE, jmaGeo.line);
+      setSource(map, SRC_JMA_LABEL, jmaGeo.label);
       // Compute the current wind-map view data based on mode. Observed grid
       // is always the baseline; model + diff modes replace or subtract it.
       const obsStep = data?.windMapMeta?.stepDeg ?? 0.25;
@@ -973,24 +1046,37 @@ export function LiveStormLayer({ map }: Props) {
       // Same north-pointing glyph as the hunter arrows. Direction is
       // meteorological FROM, so +180 points downshear.
       ensureWindArrow(map);
+      const shearArrowSize = [
+        "interpolate", ["linear"], ["zoom"],
+        4, 0.85,
+        6, 1.15,
+        8, 1.45,
+      ] as unknown as never;
       ensureLayer(map, LAYER_WIND_SHEAR_ARROW, {
         id: LAYER_WIND_SHEAR_ARROW, type: "symbol", source: SRC_WIND_MAP,
         filter: ["==", ["get", "hasArrow"], 1] as unknown as never,
         layout: {
           "icon-image": "hunter-wind-arrow",
-          "icon-size": 0.55,
+          "icon-size": shearArrowSize,
           "icon-rotate": ["%", ["+", ["get", "windDirDeg"], 180], 360] as unknown as never,
           "icon-rotation-alignment": "map",
           "icon-allow-overlap": true,
           "icon-ignore-placement": true,
         },
         paint: {
-          "icon-color": "#0f172a",
+          "icon-color": "#020617",
           "icon-halo-color": "#ffffff",
-          "icon-halo-width": 1,
-          "icon-opacity": 0.9,
+          "icon-halo-width": 1.8,
+          "icon-opacity": 1,
         },
       });
+      if (map.getLayer(LAYER_WIND_SHEAR_ARROW)) {
+        map.setLayoutProperty(LAYER_WIND_SHEAR_ARROW, "icon-size", shearArrowSize);
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-color", "#020617");
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-halo-color", "#ffffff");
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-halo-width", 1.8);
+        map.setPaintProperty(LAYER_WIND_SHEAR_ARROW, "icon-opacity", 1);
+      }
 
       // Contributor observation points. Completely invisible unless the
       // user has drilled into a cell via the "N sources" link — then only
@@ -1017,6 +1103,55 @@ export function LiveStormLayer({ map }: Props) {
             "case",
             ["==", ["get", "highlighted"], 1], 0.95, 0,
           ] as unknown as never,
+        },
+      });
+
+      // JMA bulletin: yellow gale circle, red storm circle, navy forecast
+      // circles. These are not an NHC cone. Empty sources draw nothing, so
+      // an Atlantic storm leaves the layers in place and invisible.
+      ensureLayer(map, LAYER_JMA_GALE, {
+        id: LAYER_JMA_GALE, type: "fill", source: SRC_JMA_FILL,
+        filter: ["==", ["get", "kind"], "gale"] as unknown as never,
+        paint: { "fill-color": "#eab308", "fill-opacity": 0.16 },
+      });
+      ensureLayer(map, LAYER_JMA_STORM, {
+        id: LAYER_JMA_STORM, type: "fill", source: SRC_JMA_FILL,
+        filter: ["==", ["get", "kind"], "storm"] as unknown as never,
+        paint: { "fill-color": "#dc2626", "fill-opacity": 0.22 },
+      });
+      ensureLayer(map, LAYER_JMA_CIRCLE, {
+        id: LAYER_JMA_CIRCLE, type: "line", source: SRC_JMA_LINE,
+        filter: ["==", ["get", "kind"], "probability"] as unknown as never,
+        paint: {
+          "line-color": "#1e3a8a",
+          "line-width": 1.5,
+          "line-opacity": 0.9,
+          "line-dasharray": [2, 2] as unknown as never,
+        },
+      });
+      ensureLayer(map, LAYER_JMA_TANGENT, {
+        id: LAYER_JMA_TANGENT, type: "line", source: SRC_JMA_LINE,
+        filter: ["==", ["get", "kind"], "tangent"] as unknown as never,
+        paint: { "line-color": "#1e3a8a", "line-width": 1.2, "line-opacity": 0.85 },
+      });
+      ensureLayer(map, LAYER_JMA_WARN, {
+        id: LAYER_JMA_WARN, type: "line", source: SRC_JMA_LINE,
+        filter: ["in", ["get", "kind"], ["literal", ["storm-arc", "storm-line"]]] as unknown as never,
+        paint: { "line-color": "#b91c1c", "line-width": 1.6, "line-opacity": 0.9 },
+      });
+      ensureLayer(map, LAYER_JMA_LABEL, {
+        id: LAYER_JMA_LABEL, type: "symbol", source: SRC_JMA_LABEL,
+        layout: {
+          "text-field": ["get", "label"] as unknown as never,
+          "text-size": 11,
+          "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+          "text-anchor": "center",
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#0f172a",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.4,
         },
       });
 
@@ -1109,13 +1244,23 @@ export function LiveStormLayer({ map }: Props) {
         paint: {
           // Same SSHWS swatch palette as the legend at top of the map, so
           // the observed track reads consistently with what users see in the
-          // historical IBTrACS overlay.
+          // historical IBTrACS overlay. A JMA track is one colour: the
+          // bulletin wind is 10-minute, not a Saffir-Simpson category.
           "line-color": ["step", ["get", "windKt"], ...SSHWS_STEP_COLOR] as unknown as never,
           "line-width": 3.5,
           "line-opacity": 0.95,
         },
         layout: { "line-cap": "round", "line-join": "round" },
       });
+      if (map.getLayer(LAYER_OBSERVED)) {
+        map.setPaintProperty(
+          LAYER_OBSERVED,
+          "line-color",
+          (data?.jma
+            ? "#0f766e"
+            : ["step", ["get", "windKt"], ...SSHWS_STEP_COLOR]) as never,
+        );
+      }
 
       ensureLayer(map, LAYER_BUOYS, {
         id: LAYER_BUOYS, type: "circle", source: SRC_BUOYS,
@@ -1310,6 +1455,12 @@ export function LiveStormLayer({ map }: Props) {
       moveToTop(map, LAYER_SURGE_LINE);
       moveToTop(map, LAYER_WW_FILL);
       moveToTop(map, LAYER_WW_LINE);
+      moveToTop(map, LAYER_JMA_GALE);
+      moveToTop(map, LAYER_JMA_STORM);
+      moveToTop(map, LAYER_JMA_CIRCLE);
+      moveToTop(map, LAYER_JMA_TANGENT);
+      moveToTop(map, LAYER_JMA_WARN);
+      moveToTop(map, LAYER_JMA_LABEL);
       moveToTop(map, LAYER_FORECAST_HISTORY);
       moveToTop(map, LAYER_FORECAST_LATEST);
       moveToTop(map, LAYER_OBSERVED);
@@ -1353,6 +1504,13 @@ export function LiveStormLayer({ map }: Props) {
       setVis(map, LAYER_WIND_MAP_FILL, showWindMap);
       setVis(map, LAYER_WIND_SHEAR_ARROW, showWindMap);
       setVis(map, LAYER_WIND_OBS, showWindMap);
+      const showJma = !!data?.jma;
+      setVis(map, LAYER_JMA_GALE, showJma);
+      setVis(map, LAYER_JMA_STORM, showJma);
+      setVis(map, LAYER_JMA_CIRCLE, showJma);
+      setVis(map, LAYER_JMA_TANGENT, showJma);
+      setVis(map, LAYER_JMA_WARN, showJma);
+      setVis(map, LAYER_JMA_LABEL, showJma);
     };
 
     if (map.isStyleLoaded()) apply();
