@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildImageryLoop,
   formatGibsTime,
   formatStamp,
   gibsProbeUrl,
+  gibsTilesAt,
   glmCovers,
   isRealEarthNotice,
+  loopHasMotion,
+  pickStamp,
+  productTimes,
   realEarthProviderModule,
   sampleNoticePixels,
   satelliteFor,
@@ -126,5 +131,88 @@ describe("RealEarth size-limit notice", () => {
     expect(source).toContain("export default class RealEarthTileProvider");
     expect(source).toContain("return { data: null }");
     expect(source).toContain("function isRealEarthNotice");
+  });
+});
+
+describe("imagery loop", () => {
+  it("puts a GIBS scan time in the template and keeps y-then-x", () => {
+    const tiles = satelliteFor(-75).tiles ?? "";
+    const stamped = gibsTilesAt(tiles, "2026-10-08T00:30:00Z");
+    expect(stamped).toContain("GOES-East_ABI_GeoColor/default/2026-10-08T00:30:00Z/");
+    expect(stamped).not.toContain("/default/default/");
+    expect(stamped).toContain("{z}/{y}/{x}.jpg");
+    expect(stamped).not.toContain("{z}/{x}/{y}");
+    expect(stamped).not.toContain("?r=");
+  });
+
+  it("steps a GIBS hour every 10 minutes through the latest scan", () => {
+    const frames = buildImageryLoop({
+      mode: "gibs",
+      gibsLatestIso: "2026-10-08T01:30:00Z",
+      satStamps: [],
+      glmStamps: [],
+    });
+    expect(frames).toHaveLength(7);
+    expect(frames[0]?.gibsIso).toBe("2026-10-08T00:30:00Z");
+    expect(frames[6]?.gibsIso).toBe("2026-10-08T01:30:00Z");
+    const ms = frames.map((f) => Date.parse(f.gibsIso ?? ""));
+    for (let i = 1; i < ms.length; i += 1) {
+      expect(ms[i] - ms[i - 1]).toBe(10 * 60 * 1000);
+    }
+    expect(loopHasMotion(frames)).toBe(true);
+  });
+
+  it("subsamples one-minute lightning onto the 10 minute clock", () => {
+    const stamps: string[] = [];
+    for (let minute = 0; minute <= 60; minute += 1) {
+      const hh = 1 + Math.floor(minute / 60);
+      const mm = minute % 60;
+      const stamp = `20261008.${String(hh).padStart(2, "0")}${String(mm).padStart(2, "0")}00`;
+      if (stamp !== "20261008.012200") stamps.push(stamp);
+    }
+    const frames = buildImageryLoop({
+      mode: "lightning-only",
+      gibsLatestIso: null,
+      satStamps: [],
+      glmStamps: stamps,
+    });
+    expect(frames).toHaveLength(7);
+    expect(frames.length).toBeLessThan(20);
+    expect(frames[frames.length - 1]?.glmStamp).toBe("20261008.020000");
+    expect(frames.every((f) => stamps.includes(f.glmStamp ?? ""))).toBe(true);
+    expect(new Set(frames.map((f) => f.glmStamp)).size).toBeGreaterThanOrEqual(6);
+    expect(loopHasMotion(frames)).toBe(true);
+  });
+
+  it("holds hourly Meteosat scans and does not invent times", () => {
+    const stamps = ["20261008.010000", "20261008.020000"];
+    const frames = buildImageryLoop({
+      mode: "realearth",
+      gibsLatestIso: null,
+      satStamps: stamps,
+      glmStamps: [],
+    });
+    expect(frames).toHaveLength(7);
+    expect(frames.every((f) => stamps.includes(f.satStamp ?? ""))).toBe(true);
+    expect(new Set(frames.map((f) => f.satStamp))).toEqual(new Set(stamps));
+    expect(loopHasMotion(frames)).toBe(true);
+    const one = buildImageryLoop({
+      mode: "realearth",
+      gibsLatestIso: null,
+      satStamps: ["20261008.020000"],
+      glmStamps: [],
+    });
+    expect(loopHasMotion(one)).toBe(false);
+  });
+
+  it("reads product times and does not pick a future stamp", () => {
+    expect(productTimes([
+      { times: ["20261008.013900", "nope", 12, "20261008.014000"] },
+    ])).toEqual(["20261008.013900", "20261008.014000"]);
+    expect(productTimes({})).toEqual([]);
+    expect(pickStamp(
+      ["20261008.013000", "20261008.014000", "20261008.015000"],
+      Date.parse("2026-10-08T01:40:00Z"),
+    )).toBe("20261008.014000");
   });
 });

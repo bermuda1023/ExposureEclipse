@@ -764,6 +764,13 @@ export function Methodology() {
             latest scan, refreshed about every 10 minutes, not a forecast.
           </li>
           <li>
+            Loop last hour replays that hour instead of holding the latest
+            scan. GOES and Himawari step every 10 minutes. Meteosat is
+            about hourly, so that hour may be one image or two. One scan
+            does not animate. Turning the loop off returns to the latest
+            scan, still refreshed about every 10 minutes.
+          </li>
+          <li>
             Tiles stop at zoom 7, or zoom 6 for Himawari, and are stretched
             past that. They sit under the track and the wind grid.
           </li>
@@ -777,7 +784,14 @@ export function Methodology() {
             </a>
             . These are optical flashes from the satellite (in-cloud and
             cloud-to-ground). They are not confirmed ground strikes and
-            they are not a commercial lightning network.
+            they are not a commercial lightning network. The latest frame
+            refreshes about every 10 minutes while the chip is on.
+          </li>
+          <li>
+            Loop last hour replays that hour in about 10 minute steps, on
+            the same clock as the satellite when both are on. The native
+            product is about one minute, and the loop does not play every
+            minute.
           </li>
           <li>
             The disk covers the Americas and the Atlantic. A storm in

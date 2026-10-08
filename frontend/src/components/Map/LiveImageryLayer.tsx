@@ -8,20 +8,25 @@
  * or the map center when no storm is selected.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import mapboxgl, { type Map as MbMap } from "mapbox-gl";
 import type { LiveStormBundle } from "../../api/live";
 import { useLiveStormStore } from "../../state/liveStorm";
 import {
   GLM_PRODUCT,
   LATEST_URL,
+  buildImageryLoop,
   formatGibsTime,
   formatStamp,
   gibsProbeUrl,
+  gibsTilesAt,
   glmCovers,
+  loopHasMotion,
+  productTimes,
   realEarthProviderModule,
   satelliteFor,
   tileTemplate,
+  type ImageryLoopFrame,
   type SatChoice,
 } from "./satelliteChoice";
 
@@ -32,6 +37,9 @@ const GLM_LAYER = "live-lightning";
 /** First live-storm layer. Imagery is inserted under it when it exists. */
 const UNDER = "live-wind-map-fill";
 const REAL_EARTH_PROVIDER = "realearth";
+const PRODUCTS_URL = "https://realearth.ssec.wisc.edu/api/products";
+/** Long enough to read a frame, short enough that six steps finish in a few seconds. */
+const LOOP_DWELL_MS = 800;
 
 const placed = new Map<string, string>();
 let providerReady = false;
@@ -69,6 +77,18 @@ async function fetchStamp(product: string): Promise<string | null> {
     return typeof stamp === "string" ? stamp : null;
   } catch {
     return null;
+  }
+}
+
+async function fetchProductTimes(product: string): Promise<string[]> {
+  try {
+    const res = await fetch(
+      `${PRODUCTS_URL}?products=${encodeURIComponent(product)}&timespan=-2h`,
+    );
+    if (!res.ok) return [];
+    return productTimes(await res.json());
+  } catch {
+    return [];
   }
 }
 
@@ -144,14 +164,24 @@ function satelliteTiles(sat: SatChoice, stamp: string | null, tick: number): str
   return tileTemplate(sat.product ?? "", stamp);
 }
 
+function loopSatelliteTiles(sat: SatChoice, frame: ImageryLoopFrame): string | null {
+  if (sat.host === "gibs" && sat.tiles && frame.gibsIso) return gibsTilesAt(sat.tiles, frame.gibsIso);
+  if (sat.host === "realearth" && sat.product && frame.satStamp) return tileTemplate(sat.product, frame.satStamp);
+  return null;
+}
+
 export function LiveImageryLayer({ map }: { map: MbMap | null }) {
   const showSat = useLiveStormStore((s) => s.showSatellite);
   const showLight = useLiveStormStore((s) => s.showLightning);
+  const imageryLoop = useLiveStormStore((s) => s.imageryLoop);
   const data = useLiveStormStore((s) => s.data);
   const [stampSat, setStampSat] = useState<string | null>(null);
   const [stampGlm, setStampGlm] = useState<string | null>(null);
   const [gibsTime, setGibsTime] = useState<string | null>(null);
+  const [satTimes, setSatTimes] = useState<string[]>([]);
+  const [glmTimes, setGlmTimes] = useState<string[]>([]);
   const [tick, setTick] = useState(0);
+  const [frameIdx, setFrameIdx] = useState(0);
   const [view, setView] = useState<{ lat: number; lon: number } | null>(null);
 
   useEffect(() => {
@@ -223,21 +253,77 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
   }, [showLight, covered, tick]);
 
   useEffect(() => {
+    if (!imageryLoop) {
+      setSatTimes((prev) => (prev.length ? [] : prev));
+      setGlmTimes((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    let cancel = false;
+    if (showSat && sat.host === "realearth" && sat.product) {
+      void fetchProductTimes(sat.product).then((times) => {
+        if (!cancel) setSatTimes(times);
+      });
+    } else {
+      setSatTimes([]);
+    }
+    if (showLight && covered) {
+      void fetchProductTimes(GLM_PRODUCT).then((times) => {
+        if (!cancel) setGlmTimes(times);
+      });
+    } else {
+      setGlmTimes([]);
+    }
+    return () => {
+      cancel = true;
+    };
+  }, [imageryLoop, showSat, showLight, covered, sat.host, sat.product, tick]);
+
+  const frames = useMemo(() => {
+    if (!imageryLoop || (!showSat && !showLight)) return [];
+    const mode = showSat && sat.host === "gibs"
+      ? "gibs"
+      : showSat && sat.host === "realearth"
+        ? "realearth"
+        : "lightning-only";
+    return buildImageryLoop({
+      mode,
+      gibsLatestIso: gibsTime,
+      satStamps: satTimes,
+      glmStamps: showLight && covered ? glmTimes : [],
+    });
+  }, [imageryLoop, showSat, showLight, covered, sat.host, gibsTime, satTimes, glmTimes]);
+  const playing = imageryLoop && loopHasMotion(frames);
+  const frame = playing ? frames[frameIdx % frames.length] : null;
+  const satTiles = (frame && loopSatelliteTiles(sat, frame)) || satelliteTiles(sat, stampSat, tick);
+  const glmTiles = tileTemplate(GLM_PRODUCT, frame?.glmStamp ?? stampGlm);
+  const satMaxzoom = sat.maxzoom;
+  const satAttribution = sat.attribution;
+  const filterSatNotices = sat.host === "realearth";
+
+  useEffect(() => {
+    if (!playing) return;
+    const id = window.setInterval(() => {
+      setFrameIdx((i) => i + 1);
+    }, LOOP_DWELL_MS);
+    return () => window.clearInterval(id);
+  }, [playing, frames.length]);
+
+  useEffect(() => {
     if (!map) return;
     const apply = () => {
       if (showSat) {
         upsert(map, SAT_SRC, SAT_LAYER, {
-          tiles: satelliteTiles(sat, stampSat, tick),
-          maxzoom: sat.maxzoom,
-          attribution: sat.attribution,
-          filterNotices: sat.host === "realearth",
+          tiles: satTiles,
+          maxzoom: satMaxzoom,
+          attribution: satAttribution,
+          filterNotices: filterSatNotices,
         });
       } else {
         drop(map, SAT_SRC, SAT_LAYER);
       }
       if (showLight && covered) {
         upsert(map, GLM_SRC, GLM_LAYER, {
-          tiles: tileTemplate(GLM_PRODUCT, stampGlm),
+          tiles: glmTiles,
           maxzoom: 7,
           attribution: "SSEC RealEarth",
           filterNotices: true,
@@ -257,14 +343,11 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
     showSat,
     showLight,
     covered,
-    sat.host,
-    sat.tiles,
-    sat.product,
-    sat.maxzoom,
-    sat.attribution,
-    stampSat,
-    stampGlm,
-    tick,
+    satTiles,
+    satMaxzoom,
+    satAttribution,
+    filterSatNotices,
+    glmTiles,
   ]);
 
   useEffect(() => {
@@ -274,19 +357,34 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       }
       return;
     }
-    const when = sat.host === "gibs"
-      ? (formatGibsTime(gibsTime) ?? "latest")
-      : (formatStamp(stampSat) ?? "latest");
-    const satellite = showSat ? `${sat.label} · ${when}. ${sat.note}` : null;
+    const loopNote = !imageryLoop
+      ? ""
+      : playing
+        ? " Looping the last hour."
+        : frames.length > 0
+          ? " One scan in the last hour."
+          : "";
+    const satWhen = frame
+      ? (sat.host === "gibs"
+        ? (formatGibsTime(frame.gibsIso) ?? "latest")
+        : (formatStamp(frame.satStamp) ?? "latest"))
+      : (sat.host === "gibs"
+        ? (formatGibsTime(gibsTime) ?? "latest")
+        : (formatStamp(stampSat) ?? "latest"));
+    const glmWhen = formatStamp(frame?.glmStamp ?? stampGlm) ?? "latest";
+    const satellite = showSat ? `${sat.label} · ${satWhen}.${loopNote} ${sat.note}` : null;
     const lightning = !showLight
       ? null
       : covered
-        ? `GOES-East GLM · ${formatStamp(stampGlm) ?? "latest"}. Optical flashes, not confirmed ground strikes.`
+        ? `GOES-East GLM · ${glmWhen}.${loopNote} Optical flashes, not confirmed ground strikes.`
         : "GOES-East GLM does not cover this location. No lightning is drawn.";
     const cur = useLiveStormStore.getState().imageryStatus;
     if (cur?.satellite === satellite && cur?.lightning === lightning) return;
     useLiveStormStore.getState().setImageryStatus({ satellite, lightning });
-  }, [showSat, showLight, sat.host, sat.label, sat.note, stampSat, stampGlm, gibsTime, covered]);
+  }, [
+    showSat, showLight, imageryLoop, playing, frames.length, frame,
+    sat.host, sat.label, sat.note, stampSat, stampGlm, gibsTime, covered,
+  ]);
 
   useEffect(() => {
     return () => {

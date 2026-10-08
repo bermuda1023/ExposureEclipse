@@ -784,8 +784,9 @@ export function LiveStormPanel() {
             </ChipGroup>
 
             <ChipGroup label="Imagery">
-              <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image. GOES is true color. Himawari and Meteosat are infrared. Off until turned on." color="#0369a1" />
-              <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes. Does not cover Japan or Europe. A size-limit tile is left blank. Off until turned on." color="#ca8a04" />
+              <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image, refreshed about every 10 minutes. Loop last hour replays that hour. GOES is true color. Himawari and Meteosat are infrared. Off until turned on." color="#0369a1" />
+              <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes, refreshed about every 10 minutes. Loop last hour uses the same 10 minute steps. Does not cover Japan or Europe. A size-limit tile is left blank. Off until turned on." color="#ca8a04" />
+              <ImageryLoopButton />
               <ImageryStatusLine />
             </ChipGroup>
           </div>
@@ -1069,6 +1070,35 @@ function useChipAvailability(
   }
 
   return out;
+}
+
+function ImageryLoopButton() {
+  const showSat = useLiveStormStore((s) => s.showSatellite);
+  const showLight = useLiveStormStore((s) => s.showLightning);
+  const on = useLiveStormStore((s) => s.imageryLoop);
+  if (!showSat && !showLight) return null;
+  return (
+    <button
+      type="button"
+      title="Replay the last hour in about 10 minute steps. Off keeps the latest scan and refreshes it about every 10 minutes. Satellite and lightning share one clock when both are on. A single scan does not animate."
+      onClick={() => useLiveStormStore.getState().setImageryLoop(!on)}
+      style={{
+        all: "unset",
+        cursor: "pointer",
+        gridColumn: "span 2",
+        padding: "3px 5px",
+        borderRadius: 3,
+        fontSize: "0.66rem",
+        textAlign: "center",
+        border: `1px solid ${on ? "#0369a1" : "var(--ink-200)"}`,
+        background: on ? "#e0f2fe" : "transparent",
+        color: on ? "#0c4a6e" : "var(--ink-600)",
+        fontWeight: on ? 700 : 400,
+      }}
+    >
+      {on ? "Looping last hour" : "Loop last hour"}
+    </button>
+  );
 }
 
 function ImageryStatusLine() {

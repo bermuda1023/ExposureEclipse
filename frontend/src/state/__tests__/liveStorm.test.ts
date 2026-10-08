@@ -21,8 +21,16 @@ describe("live storm reload", () => {
     expect(s.showStrikeProbability).toBe(false);
     expect(s.showSatellite).toBe(false);
     expect(s.showLightning).toBe(false);
+    expect(s.imageryLoop).toBe(false);
     expect(s.showMyLocation).toBe(false);
     expect(s.hideExposures).toBe(false);
+  });
+
+  it("turns the imagery loop off when the storm is cleared", () => {
+    useLiveStormStore.getState().setImageryLoop(true);
+    expect(useLiveStormStore.getState().imageryLoop).toBe(true);
+    useLiveStormStore.getState().clear();
+    expect(useLiveStormStore.getState().imageryLoop).toBe(false);
   });
 
   it("hides exposure fills only while live-storm mode is on and asked", () => {

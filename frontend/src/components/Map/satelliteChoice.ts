@@ -177,6 +177,107 @@ export function formatGibsTime(iso: string | null | undefined): string | null {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
+/** Put a scan time in the GIBS template. The style stays `default`. */
+export function gibsTilesAt(tiles: string, iso: string): string {
+  return tiles.replace("/default/default/", `/default/${iso}/`);
+}
+
+const LOOP_SPAN_MS = 60 * 60 * 1000;
+const LOOP_STEP_MS = 10 * 60 * 1000;
+
+/** `2026-10-08T01:30:00.000Z` → `2026-10-08T01:30:00Z`. */
+export function gibsIso(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** Inclusive 10-minute steps from one hour before `endMs` through `endMs`. */
+export function hourSteps(endMs: number): number[] {
+  if (!Number.isFinite(endMs)) return [];
+  const start = endMs - LOOP_SPAN_MS;
+  const out: number[] = [];
+  for (let t = start; t <= endMs + 500; t += LOOP_STEP_MS) {
+    const clamped = Math.min(t, endMs);
+    if (out[out.length - 1] !== clamped) out.push(clamped);
+  }
+  return out;
+}
+
+/** `20261008.013900` → epoch ms. Null when the stamp is not a RealEarth time. */
+export function stampToMs(stamp: string | null | undefined): number | null {
+  if (!stamp || !/^\d{8}\.\d{6}$/.test(stamp)) return null;
+  const iso = `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(9, 11)}:${stamp.slice(11, 13)}:${stamp.slice(13, 15)}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Latest stamp at or before the clock. The earliest stamp if none is yet. */
+export function pickStamp(stamps: readonly string[], clockMs: number): string | null {
+  let best: { s: string; ms: number } | null = null;
+  let earliest: { s: string; ms: number } | null = null;
+  for (const s of stamps) {
+    const ms = stampToMs(s);
+    if (ms == null) continue;
+    if (!earliest || ms < earliest.ms) earliest = { s, ms };
+    if (ms <= clockMs + 30_000 && (!best || ms > best.ms)) best = { s, ms };
+  }
+  return (best ?? earliest)?.s ?? null;
+}
+
+export interface ImageryLoopFrame {
+  /** Set for a NASA GIBS bird. Null for Meteosat. */
+  gibsIso: string | null;
+  /** RealEarth satellite stamp. Null for GIBS and for lightning-only. */
+  satStamp: string | null;
+  /** RealEarth GLM stamp at this step. Null when lightning is not in the loop. */
+  glmStamp: string | null;
+}
+
+/**
+ * Last hour, stepped every 10 minutes.
+ * GOES and Himawari use the GIBS scan clock. Meteosat and GLM keep a real
+ * stamp at or before each step, so a 1-minute lightning product is not
+ * played back one minute at a time.
+ */
+export function buildImageryLoop(input: {
+  mode: "gibs" | "realearth" | "lightning-only";
+  gibsLatestIso: string | null;
+  satStamps: readonly string[];
+  glmStamps: readonly string[];
+}): ImageryLoopFrame[] {
+  let clocks: number[] = [];
+  if (input.mode === "gibs" && input.gibsLatestIso) {
+    const end = Date.parse(input.gibsLatestIso);
+    if (Number.isFinite(end)) clocks = hourSteps(end);
+  } else if (input.mode === "realearth") {
+    const ms = input.satStamps.map(stampToMs).filter((n): n is number => n != null);
+    if (ms.length) clocks = hourSteps(Math.max(...ms));
+  } else {
+    const ms = input.glmStamps.map(stampToMs).filter((n): n is number => n != null);
+    if (ms.length) clocks = hourSteps(Math.max(...ms));
+  }
+  if (!clocks.length) return [];
+  return clocks.map((clock) => ({
+    gibsIso: input.mode === "gibs" ? gibsIso(clock) : null,
+    satStamp: input.mode === "realearth" ? pickStamp(input.satStamps, clock) : null,
+    glmStamp: input.glmStamps.length ? pickStamp(input.glmStamps, clock) : null,
+  }));
+}
+
+/** True when the hour actually changes picture. One repeated scan does not. */
+export function loopHasMotion(frames: readonly ImageryLoopFrame[]): boolean {
+  const keys = new Set(frames.map((f) => `${f.gibsIso ?? ""}|${f.satStamp ?? ""}|${f.glmStamp ?? ""}`));
+  return keys.size >= 2;
+}
+
+/** `times` array from `GET /api/products?timespan=-2h`. */
+export function productTimes(body: unknown): string[] {
+  const row = Array.isArray(body) ? body[0] : null;
+  if (!row || typeof row !== "object") return [];
+  const times = (row as { times?: unknown }).times;
+  if (!Array.isArray(times)) return [];
+  return times.filter((t): t is string => typeof t === "string" && stampToMs(t) != null);
+}
+
 /** One low-zoom tile, used only to read the scan time. */
 export function gibsProbeUrl(tiles: string): string {
   return tiles.replace("{z}", "0").replace("{y}", "0").replace("{x}", "0");

@@ -129,6 +129,8 @@ interface LiveStormState {
   // Geostationary picture and GOES-East lightning. Both off until asked.
   showSatellite: boolean;
   showLightning: boolean;
+  /** Replay the last hour of satellite and lightning. Off keeps the latest scan. */
+  imageryLoop: boolean;
   imageryStatus: { satellite: string | null; lightning: string | null } | null;
 
   start: (stormId: string) => void;
@@ -188,6 +190,7 @@ interface LiveStormState {
   setImageryStatus: (
     s: { satellite: string | null; lightning: string | null } | null,
   ) => void;
+  setImageryLoop: (v: boolean) => void;
   setHideExposures: (v: boolean) => void;
 }
 
@@ -344,6 +347,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   myLocationFocus: 0,
   showSatellite: false,
   showLightning: false,
+  imageryLoop: false,
   imageryStatus: null,
   hideExposures: false,
 
@@ -410,6 +414,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     // up after ✕ would hide the only control that turns them off.
     showSatellite: false,
     showLightning: false,
+    imageryLoop: false,
     showMyLocation: false,
     imageryStatus: null,
   }),
@@ -495,5 +500,6 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   requestMyLocationFocus: () =>
     set({ myLocationFocus: get().myLocationFocus + 1 }),
   setImageryStatus: (s) => set({ imageryStatus: s }),
+  setImageryLoop: (v) => set({ imageryLoop: v }),
   setHideExposures: (v) => set({ hideExposures: v }),
 }));
