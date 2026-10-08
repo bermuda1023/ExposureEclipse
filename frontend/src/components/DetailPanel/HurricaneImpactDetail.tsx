@@ -365,7 +365,7 @@ function FragmentRow({
               color: isOverridden ? "#7d5400" : "var(--ink-500)",
             }}
           >
-            <span title="Extra haircut on top of the area split. 100% uses the slices as they are.">Scale</span>
+            <span title="Extra haircut on the part of the county inside the wind field. 100% keeps that split. Area outside the cone is already clear, so it is not in the loss.">Scale</span>
             <input
               type="number"
               min={0}

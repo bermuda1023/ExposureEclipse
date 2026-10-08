@@ -256,14 +256,16 @@ export function Methodology() {
             wind, or when any sample is hurricane-force. Samples are one grid
             over the whole county, sized from the county's own area, so a chain
             of islands cannot outvote the mainland and a 10 nm eyewall is not
-            one cell. The wind at each sample is the peak that point felt:
-            Vmax if the eyewall crossed it, otherwise a profile pinned to
-            Vmax at Rmax and 64 kt at the directional R64, decaying through
-            the tropical-storm skirt. Between fixes the track is filled in
+            one cell. The wind at each sample is the peak that point felt,
+            and only inside the hurricane-force field drawn on the map (out
+            to the directional 64 kt radius). Beyond that ring the sample is
+            clear, so a county that is half outside the cone is not charged
+            on the outside half. Between fixes the track is filled in
             so a 6-hour gap cannot skip the core. The county is not stamped
             with the storm's peak just because the centroid sits inside the
             outer field. The bright core on the map is the eyewall. The wide
-            ring is colored as the wind halfway out to 64 kt, not as the peak.
+            ring is the 64 kt field, colored as the wind halfway out to that
+            edge, not as the peak.
           </li>
           <li>
             Each county comes back as area fractions: clear, tropical storm,

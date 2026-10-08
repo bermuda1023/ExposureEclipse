@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from app.services.county_wind import (
-    bands_from_winds,
     experienced_wind_kt,
     include_county,
     local_wind_kt,
@@ -120,7 +119,8 @@ def test_graze_splits_the_county_instead_of_using_the_storm_peak() -> None:
     # The outer bit is TS or Cat 1. The rest is not the core.
     core = sum(by_cat.get(c, 0.0) for c in (3, 4, 5))
     assert core == 0.0
-    assert by_cat.get(-1, 0.0) + by_cat.get(0, 0.0) >= 0.5
+    # Mid and far sit outside R64, so they are clear, not a TS skirt.
+    assert by_cat.get(-1, 0.0) >= 0.8
     assert include_county(hit.wind_bands, hit.max_wind_kt)
 
 
@@ -159,13 +159,9 @@ def test_compute_impact_keeps_a_centroid_fallback(monkeypatch) -> None:
     )
     impacts, footprint, *_rest = compute_impact(storm)
     assert footprint and footprint[0].rmax_source == "nhc"
-    # Centroid is ~80 nm from the eye. Whole-county fallback, not 130 kt.
-    assert impacts
-    only = impacts[0]
-    assert only.max_wind_kt < 64
-    assert only.max_category <= 0
-    bands = bands_from_winds([only.max_wind_kt])
-    assert bands[0].category <= 0
+    # The only point is ~80 nm from the eye and R64 is 40 nm, so it is
+    # outside the drawn field and the county is not listed.
+    assert impacts == []
 
 
 def test_swath_between_fixes_catches_the_core(monkeypatch) -> None:

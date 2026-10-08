@@ -27,7 +27,6 @@ from .county_wind import (
     bands_from_winds,
     experienced_wind_kt,
     include_county,
-    outer_radius_nm,
     sample_polygons,
     severity,
     skirt_wind_kt,
@@ -588,11 +587,18 @@ def _paint_fix(
     r64_nm: float,
     r64_quads: tuple[float, float, float, float] | None,
 ) -> None:
-    """Raise the peak local wind at every sample this fix can still reach."""
-    outer = outer_radius_nm(vmax_kt, rmax, r64_quads, r64_nm)
-    # Pad so a county whose centroid is inland of a clipped coast still gets
-    # its edge samples scored.
-    reach = min(280.0, outer + 70.0)
+    """Raise the peak local wind at every sample this fix can still reach.
+
+    The field that counts is the one drawn on the map: hurricane-force wind
+    out to the directional R64. Beyond that ring a power-law skirt was
+    marking the rest of the county as tropical storm, so a county only half
+    inside the cone still carried 100% of its TIV into the loss.
+    """
+    r64_max = r64_nm
+    if r64_quads:
+        r64_max = max(r64_max, max(r64_quads))
+    # A county centroid just outside R64 can still have an edge inside.
+    reach = min(180.0, r64_max + 70.0)
     if reach <= 0:
         return
     deg = reach / 50.0
@@ -615,10 +621,11 @@ def _paint_fix(
             acc.rmax_source = rmax_source
         for i, (lat, lon) in enumerate(acc.points):
             d = haversine_nm(eye_lat, eye_lon, lat, lon)
-            if d > outer + 5.0:
-                continue
             bearing = _bearing_deg(eye_lat, eye_lon, lat, lon)
             r64_here = r64_at_bearing(r64_quads, bearing, fallback_nm=r64_nm)
+            # Outside the drawn hurricane field this sample is clear.
+            if r64_here <= 0 or d > r64_here + 0.5:
+                continue
             wind = experienced_wind_kt(d, vmax_kt, rmax, r64_here)
             if wind > acc.winds[i]:
                 acc.winds[i] = wind
