@@ -279,17 +279,9 @@ export function collapseRepeatFrames(frames: readonly ImageryLoopFrame[]): Image
   return out;
 }
 
-/**
- * Forward through the hour, then back to the frame after the oldest.
- * The newest scan does not cut straight back to the oldest.
- */
-export function pingPongOrder(count: number): number[] {
-  if (count <= 0) return [];
-  if (count === 1) return [0];
-  const order: number[] = [];
-  for (let i = 0; i < count; i += 1) order.push(i);
-  for (let i = count - 2; i > 0; i -= 1) order.push(i);
-  return order;
+/** True on the newest scan. The next picture is the oldest, shown as a cut. */
+export function loopRestarts(index: number, count: number): boolean {
+  return count > 1 && index === count - 1;
 }
 
 /** Slow at both ends so a dissolve does not pop on or off. */

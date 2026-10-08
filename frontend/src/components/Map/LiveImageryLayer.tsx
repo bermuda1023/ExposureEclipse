@@ -8,8 +8,8 @@
  * or the map center when no storm is selected.
  *
  * The hour loop cannot be a video. Those birds photograph about every
- * 10 minutes (Meteosat about hourly). Playback fades one real scan into
- * the next, forward and then back, so the hour does not cut or jump.
+ * 10 minutes (Meteosat about hourly). Playback fades forward through the
+ * real scans, then cuts back to the oldest and starts again.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,7 +29,7 @@ import {
   glmCovers,
   imageryFrameKey,
   loopHasMotion,
-  pingPongOrder,
+  loopRestarts,
   productTimes,
   realEarthProviderModule,
   satelliteFor,
@@ -551,21 +551,20 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       if (motion.cancelled) return;
       drop(map, SAT_SRC, SAT_LAYER);
       drop(map, GLM_SRC, GLM_LAYER);
-      const sequence = pingPongOrder(playSteps.length);
-      const first = sequence[0] ?? 0;
       const fadeMs = playSteps.length <= 3 ? LOOP_FEW_FADE_MS : LOOP_FADE_MS;
-      let cursor = 0;
+      let index = 0;
       let front = 0;
-      const firstStep = playSteps[first];
+      const firstStep = playSteps[0];
       if (!firstStep) return;
       paint(front, firstStep, 1);
       publish(firstStep);
       orderBottomToTop(map, loopStack(front));
       void (async () => {
         while (!motion.cancelled) {
-          const nextCursor = (cursor + 1) % sequence.length;
+          const restart = loopRestarts(index, playSteps.length);
+          const next = restart ? 0 : index + 1;
           const back = 1 - front;
-          const step = playSteps[sequence[nextCursor] ?? 0];
+          const step = playSteps[next];
           if (!step) return;
           const incoming: string[] = [];
           if (step.satTiles && SAT_LOOP[back]) incoming.push(SAT_LOOP[back].src);
@@ -575,21 +574,34 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
             orderBottomToTop(map, loopStack(front));
           });
           if (motion.cancelled) return;
+          if (restart) {
+            // Leave the latest scan up, then cut to the hour-ago picture.
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, fadeMs);
+            });
+            if (motion.cancelled) return;
+          } else {
+            const layers: string[] = [];
+            const satLayer = SAT_LOOP[back]?.layer;
+            const glmLayer = GLM_LOOP[back]?.layer;
+            if (satLayer && map.getLayer(satLayer)) layers.push(satLayer);
+            if (glmLayer && map.getLayer(glmLayer)) layers.push(glmLayer);
+            await fadeIn(layers, fadeMs);
+            if (motion.cancelled) return;
+          }
           publish(step);
-          const layers: string[] = [];
-          const satLayer = SAT_LOOP[back]?.layer;
-          const glmLayer = GLM_LOOP[back]?.layer;
-          if (satLayer && map.getLayer(satLayer)) layers.push(satLayer);
-          if (glmLayer && map.getLayer(glmLayer)) layers.push(glmLayer);
-          await fadeIn(layers, fadeMs);
-          if (motion.cancelled) return;
+          for (const slot of [SAT_LOOP[back], GLM_LOOP[back]]) {
+            if (slot && map.getLayer(slot.layer)) {
+              map.setPaintProperty(slot.layer, "raster-opacity", 1);
+            }
+          }
           for (const slot of [SAT_LOOP[front], GLM_LOOP[front]]) {
             if (slot && map.getLayer(slot.layer)) {
               map.setPaintProperty(slot.layer, "raster-opacity", 0);
             }
           }
           front = back;
-          cursor = nextCursor;
+          index = next;
         }
       })();
     };
@@ -614,7 +626,7 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
     const loopNote = !imageryLoop
       ? ""
       : playing
-        ? " Looping the last hour, forward then back."
+        ? " Looping forward through the last hour."
         : frames.length > 0
           ? " One scan in the last hour."
           : "";

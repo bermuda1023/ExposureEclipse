@@ -11,7 +11,7 @@ import {
   isRealEarthNotice,
   loopHasMotion,
   pickStamp,
-  pingPongOrder,
+  loopRestarts,
   productTimes,
   realEarthProviderModule,
   sampleNoticePixels,
@@ -208,7 +208,7 @@ describe("imagery loop", () => {
     expect(loopHasMotion(one)).toBe(false);
   });
 
-  it("dissolves forward and back without cutting to the oldest scan", () => {
+  it("plays forward and restarts only after the latest scan", () => {
     const frames = buildImageryLoop({
       mode: "gibs",
       gibsLatestIso: "2026-10-08T01:30:00Z",
@@ -216,11 +216,10 @@ describe("imagery loop", () => {
       glmStamps: [],
     });
     expect(collapseRepeatFrames(frames)).toHaveLength(7);
-    const order = pingPongOrder(7);
-    expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]);
-    expect(order[0]).not.toBe(order[order.length - 1]);
-    expect(pingPongOrder(2)).toEqual([0, 1]);
-    expect(pingPongOrder(1)).toEqual([0]);
+    expect(loopRestarts(0, 7)).toBe(false);
+    expect(loopRestarts(5, 7)).toBe(false);
+    expect(loopRestarts(6, 7)).toBe(true);
+    expect(loopRestarts(0, 1)).toBe(false);
     const hourly = collapseRepeatFrames(buildImageryLoop({
       mode: "realearth",
       gibsLatestIso: null,
