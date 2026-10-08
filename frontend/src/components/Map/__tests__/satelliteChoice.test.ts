@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildImageryLoop,
+  collapseRepeatFrames,
+  dissolveOpacity,
   formatGibsTime,
   formatStamp,
   gibsProbeUrl,
@@ -9,6 +11,7 @@ import {
   isRealEarthNotice,
   loopHasMotion,
   pickStamp,
+  pingPongOrder,
   productTimes,
   realEarthProviderModule,
   sampleNoticePixels,
@@ -203,6 +206,34 @@ describe("imagery loop", () => {
       glmStamps: [],
     });
     expect(loopHasMotion(one)).toBe(false);
+  });
+
+  it("dissolves forward and back without cutting to the oldest scan", () => {
+    const frames = buildImageryLoop({
+      mode: "gibs",
+      gibsLatestIso: "2026-10-08T01:30:00Z",
+      satStamps: [],
+      glmStamps: [],
+    });
+    expect(collapseRepeatFrames(frames)).toHaveLength(7);
+    const order = pingPongOrder(7);
+    expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]);
+    expect(order[0]).not.toBe(order[order.length - 1]);
+    expect(pingPongOrder(2)).toEqual([0, 1]);
+    expect(pingPongOrder(1)).toEqual([0]);
+    const hourly = collapseRepeatFrames(buildImageryLoop({
+      mode: "realearth",
+      gibsLatestIso: null,
+      satStamps: ["20261008.010000", "20261008.020000"],
+      glmStamps: [],
+    }));
+    expect(hourly.map((frame) => frame.satStamp)).toEqual([
+      "20261008.010000",
+      "20261008.020000",
+    ]);
+    expect(dissolveOpacity(0, 1000)).toBe(0);
+    expect(dissolveOpacity(500, 1000)).toBe(0.5);
+    expect(dissolveOpacity(1000, 1000)).toBe(1);
   });
 
   it("reads product times and does not pick a future stamp", () => {

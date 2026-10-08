@@ -784,8 +784,8 @@ export function LiveStormPanel() {
             </ChipGroup>
 
             <ChipGroup label="Imagery">
-              <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image, refreshed about every 10 minutes. Loop last hour replays that hour. GOES is true color. Himawari and Meteosat are infrared. Off until turned on." color="#0369a1" />
-              <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes, refreshed about every 10 minutes. Loop last hour uses the same 10 minute steps. Does not cover Japan or Europe. A size-limit tile is left blank. Off until turned on." color="#ca8a04" />
+              <SmartChip store={store} status={chipStatus.showSatellite} k="showSatellite" label="Satellite" hint="Latest geostationary image, refreshed about every 10 minutes. Loop last hour dissolves forward, then back. GOES is true color. Himawari and Meteosat are infrared. Off until turned on." color="#0369a1" />
+              <SmartChip store={store} status={chipStatus.showLightning} k="showLightning" label="Lightning" hint="GOES-East GLM optical flashes, refreshed about every 10 minutes. Loop last hour dissolves on the same clock as the satellite. Does not cover Japan or Europe. A size-limit tile is left blank. Off until turned on." color="#ca8a04" />
               <ImageryLoopButton />
               <ImageryStatusLine />
             </ChipGroup>
@@ -1080,7 +1080,7 @@ function ImageryLoopButton() {
   return (
     <button
       type="button"
-      title="Replay the last hour in about 10 minute steps. Off keeps the latest scan and refreshes it about every 10 minutes. Satellite and lightning share one clock when both are on. A single scan does not animate."
+      title="Dissolves from scan to scan across the last hour, forward then back. GOES and Himawari only photograph about every 10 minutes, so the loop does not invent pictures in between. Off keeps the latest scan."
       onClick={() => useLiveStormStore.getState().setImageryLoop(!on)}
       style={{
         all: "unset",

@@ -263,9 +263,45 @@ export function buildImageryLoop(input: {
   }));
 }
 
+/** Identity of one loop picture. Repeated scans share a key. */
+export function imageryFrameKey(frame: ImageryLoopFrame): string {
+  return `${frame.gibsIso ?? ""}|${frame.satStamp ?? ""}|${frame.glmStamp ?? ""}`;
+}
+
+/** Drop scans that would show the same picture as the step before. */
+export function collapseRepeatFrames(frames: readonly ImageryLoopFrame[]): ImageryLoopFrame[] {
+  const out: ImageryLoopFrame[] = [];
+  for (const frame of frames) {
+    const prev = out[out.length - 1];
+    if (prev && imageryFrameKey(prev) === imageryFrameKey(frame)) continue;
+    out.push(frame);
+  }
+  return out;
+}
+
+/**
+ * Forward through the hour, then back to the frame after the oldest.
+ * The newest scan does not cut straight back to the oldest.
+ */
+export function pingPongOrder(count: number): number[] {
+  if (count <= 0) return [];
+  if (count === 1) return [0];
+  const order: number[] = [];
+  for (let i = 0; i < count; i += 1) order.push(i);
+  for (let i = count - 2; i > 0; i -= 1) order.push(i);
+  return order;
+}
+
+/** Slow at both ends so a dissolve does not pop on or off. */
+export function dissolveOpacity(elapsedMs: number, durationMs: number): number {
+  if (!(durationMs > 0)) return 1;
+  const t = Math.min(1, Math.max(0, elapsedMs / durationMs));
+  return t * t * (3 - 2 * t);
+}
+
 /** True when the hour actually changes picture. One repeated scan does not. */
 export function loopHasMotion(frames: readonly ImageryLoopFrame[]): boolean {
-  const keys = new Set(frames.map((f) => `${f.gibsIso ?? ""}|${f.satStamp ?? ""}|${f.glmStamp ?? ""}`));
+  const keys = new Set(frames.map((frame) => imageryFrameKey(frame)));
   return keys.size >= 2;
 }
 
