@@ -1,6 +1,6 @@
 /**
- * Live hurricane endpoints — current Atlantic storms from NHC, invests,
- * and official JMA typhoons.
+ * Live hurricane endpoints — current Atlantic storms from NHC and official
+ * JMA typhoons.
  *
  * The bundle endpoint returns everything the live overlay needs in one shot:
  * observed track + forecast advisories (latest + history) + active NWS
@@ -25,10 +25,6 @@ export interface LiveStormRow {
 export interface LiveStormListResponse {
   active: LiveStormRow[];
   replay: LiveStormRow[];
-  // Invests (CY 90-99, pre-advisory systems with a-deck coverage but no
-  // NHC-issued advisory yet). Model tracks + ensemble strike probability
-  // work; NHC-issued products (cone, surge, watches/warnings) do not.
-  invests: LiveStormRow[];
   /** Official JMA typhoons. Empty when JMA is not issuing one. */
   typhoons?: LiveStormRow[];
   hasActive: boolean;

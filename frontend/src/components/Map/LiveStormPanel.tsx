@@ -1,5 +1,5 @@
 /**
- * Floating panel: pick a live storm or invest and toggle the overlay
+ * Floating panel: pick a live storm and toggle the overlay
  * layers (alerts / buoys / land stations / SST / forecast history).
  *
  * Mounts top-right of the map container — clear of the existing
@@ -727,15 +727,6 @@ export function LiveStormPanel() {
                   No active Atlantic storms right now.
                 </div>
               )}
-              {list.data.invests.length > 0 && (
-                <StormPicker
-                  label={`Invests (pre-advisory · ${list.data.invests.length})`}
-                  rows={list.data.invests}
-                  activeId={activeId}
-                  variant="invest"
-                  onPick={pickStorm}
-                />
-              )}
               {(list.data.typhoons ?? []).length > 0 && (
                 <StormPicker
                   label={`Japan (JMA · ${(list.data.typhoons ?? []).length})`}
@@ -824,7 +815,6 @@ export function LiveStormPanel() {
             || store.modelTracksStatus === "empty"
             || (
               !!store.data
-              && store.data.storm.classification !== "INVEST"
               && !store.data.jma
               && !store.data.forecastCone
             )
@@ -897,8 +887,8 @@ export function LiveStormPanel() {
  * "Available" = the underlying feed returned at least one meaningful
  * feature for this storm; "unavailable" = we know for certain the chip
  * will paint nothing (either the data came back empty or the product is
- * semantically inapplicable to the storm type — e.g. NHC cone doesn't
- * exist for invests).
+ * semantically inapplicable to the storm type — e.g. an NHC cone is not
+ * issued for a JMA typhoon).
  *
  * Availability is only defined AFTER the bundle response arrives. Before
  * that (or when no storm is selected) every chip is treated as available
@@ -912,7 +902,6 @@ function useChipAvailability(
 ): ChipMap {
   const data = store.data;
   const modelTracks = store.modelTracks;
-  const isInvest = data?.storm.classification === "INVEST";
   const isJma = !!data?.jma;
   const bundleLoaded = !!data;
   const tracksLoaded =
@@ -925,20 +914,7 @@ function useChipAvailability(
   out.showGTWO = { available: true };
 
   // Track & cone
-  if (isInvest) {
-    out.showForecastCone = {
-      available: false,
-      reason: "Invests are pre-advisory — no NHC cone product yet.",
-    };
-    out.showForecastHistory = {
-      available: false,
-      reason: "No prior NHC advisories for pre-advisory invests.",
-    };
-    out.showWindField = {
-      available: false,
-      reason: "Wind-field cones need an observed track ≥ 25 kt — invests are typically below that threshold.",
-    };
-  } else if (bundleLoaded) {
+  if (bundleLoaded) {
     out.showForecastCone = data!.forecastCone
       ? { available: true }
       : {
@@ -991,11 +967,7 @@ function useChipAvailability(
   }
 
   // Threat products
-  if (isInvest) {
-    const reason = "Pre-advisory system — no NHC-issued threat products until an advisory is issued.";
-    out.showWatchesWarnings = { available: false, reason };
-    out.showSurge = { available: false, reason };
-  } else if (bundleLoaded) {
+  if (bundleLoaded) {
     out.showWatchesWarnings = data!.watchesWarnings.length > 0
       ? { available: true }
       : {
@@ -1229,7 +1201,7 @@ function StormPicker({
   rows: LiveStormRow[];
   activeId: string | null;
   onPick: (id: string) => void;
-  variant?: "active" | "invest" | "replay" | "jma";
+  variant?: "active" | "replay" | "jma";
 }) {
   // Loading state so we can show a spinner on the active picker button
   // while the a-deck / bundle fetch is in flight — previously the button
@@ -1239,14 +1211,10 @@ function StormPicker({
   const modelTracksLoading = useLiveStormStore((s) => s.modelTracksStatus) === "loading";
   const busy = isLoading || modelTracksLoading;
 
-  // Distinct pastel per variant, with an "intensified" version for the
-  // active state so the button reads clearly as "on" without abandoning
-  // the variant colour scheme. Previously the active state used a
-  // brand-blue background regardless of variant — which read as jarring
-  // against the yellow invest bg (the "gray with yellow outline" bug the
-  // user hit was actually the brand-50 fill against the yellow border).
+  // Distinct pastel per variant. The selected row stays in that palette
+  // instead of jumping to a brand-blue fill.
   const variantStyle: Record<
-    "active" | "invest" | "replay" | "jma",
+    "active" | "replay" | "jma",
     {
       idle:   { bg: string; border: string; text: string };
       active: { bg: string; border: string; text: string; dot: string };
@@ -1258,12 +1226,6 @@ function StormPicker({
       idle:   { bg: "var(--ink-50)",  border: "var(--ink-200)",  text: "var(--ink-800)" },
       active: { bg: "var(--brand-50)", border: "var(--brand-600)", text: "var(--brand-800)", dot: "var(--brand-700)" },
       label:  "var(--ink-500)",
-    },
-    invest: {
-      idle:   { bg: "#fef3c7", border: "#fbbf24", text: "#78350f" },
-      active: { bg: "#fde68a", border: "#b45309", text: "#78350f", dot: "#b45309" },
-      label:  "#78350f",
-      hint:   "Pre-advisory invest — model tracks + strike probability available; NHC-issued products (cone, watches) start when an advisory does.",
     },
     replay: {
       idle:   { bg: "#f1f5f9", border: "#cbd5e1", text: "#475569" },
@@ -1764,7 +1726,7 @@ function LayerChip({
   hint?: string;
   color: string;
   // "Disabled" here means the underlying data returned nothing for this
-  // storm (or is semantically inapplicable, e.g. NHC cone for an invest).
+  // storm (or is semantically inapplicable, e.g. an NHC cone for a JMA typhoon).
   // The chip is still CLICKABLE — the user might want to toggle it anyway
   // to see the empty state on the map — but it's visually muted and the
   // tooltip includes the reason so users don't wonder why nothing happens.
@@ -2382,13 +2344,9 @@ function SurfaceWindScale({ maxKt }: { maxKt: number }) {
 }
 
 function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundle }) {
-  const isInvest = data.storm.classification === "INVEST";
   const jma = data.jma;
-  // Invests get a distinct pale-yellow summary card matching the picker
-  // treatment, plus an explicit note that NHC-issued products (cone, surge,
-  // watches/warnings) will be empty until an advisory is issued.
-  const bg = jma ? "#ccfbf1" : isInvest ? "#fef3c7" : "var(--brand-50)";
-  const border = jma ? "#0f766e" : isInvest ? "#fbbf24" : "var(--brand-400)";
+  const bg = jma ? "#ccfbf1" : "var(--brand-50)";
+  const border = jma ? "#0f766e" : "var(--brand-400)";
   return (
     <div
       style={{
@@ -2420,13 +2378,6 @@ function BundleSummary({ data }: { data: import("../../api/live").LiveStormBundl
             <div>Storm (25 m/s): {jma.stormRanges.join("; ")}</div>
           )}
           {jma.intensity && <div>JMA intensity: {jma.intensity}</div>}
-        </div>
-      )}
-      {isInvest && (
-        <div style={{ fontSize: "0.62rem", color: "#78350f", fontStyle: "italic" }}>
-          Pre-advisory invest — enable "Model tracks" + "Strike probability"
-          for the ensemble signal. NHC cone / watches / surge remain empty
-          until an advisory is issued.
         </div>
       )}
       {!jma && (

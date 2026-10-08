@@ -146,7 +146,6 @@ def test_live_list_keeps_nhc_when_jma_is_quiet(monkeypatch: pytest.MonkeyPatch) 
 
     jma_typhoon.clear_cache()
     monkeypatch.setattr(jma_typhoon, "_get_json", lambda url: [])
-    monkeypatch.setattr(live_api, "fetch_active_invests", lambda: [])
     monkeypatch.setattr(
         live_api,
         "fetch_active_summaries",

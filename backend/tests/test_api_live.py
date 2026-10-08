@@ -34,7 +34,8 @@ def test_storm_list_has_no_replay_candidates() -> None:
     assert r.status_code == 200
     body = r.json()
     assert body["replay"] == []
-    if body["hasActive"] is False and not body.get("invests"):
+    assert "invests" not in body
+    if body["hasActive"] is False:
         assert body["note"]
 
 

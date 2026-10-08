@@ -41,7 +41,6 @@ from ..services.atcf_adecks import (
     list_available_cycles,
 )
 from ..services.ensemble_envelope import build_envelope
-from ..services.invests import InvestSummary, fetch_active_invests
 from ..services.jma_typhoon import (
     JmaStorm,
     JmaSummary,
@@ -98,11 +97,6 @@ class LiveStormRow(CamelModel):
 class LiveStormListResponse(CamelModel):
     active: list[LiveStormRow]
     replay: list[LiveStormRow]
-    # Invests (CY 90-99) — pre-advisory systems with ATCF a-deck coverage
-    # but no NHC advisory yet. Model tracks + ensemble strike probability
-    # both work for them; NHC-issued products (cone, surge, watches/warnings)
-    # do not. Rendered as a distinct picker section.
-    invests: list[LiveStormRow]
     # Official JMA typhoons (western North Pacific). A separate list so a
     # Japan track is not mistaken for an NHC advisory: no cone, no a-deck,
     # no US county strike vote.
@@ -497,29 +491,11 @@ class LiveStormBundle(CamelModel):
     # The cleaned obs pool that fed the heatmap. Shipped so the click popup
     # can show contributor stations for any given cell.
     wind_obs: list[WindObsOut]
-    # Set only for a JMA id. Null on every NHC storm and invest.
+    # Set only for a JMA id. Null on every NHC storm.
     jma: JmaOverlayOut | None = None
 
 
 # ─────────────────────────── helpers ───────────────────────────
-
-
-def _invest_to_row(inv: InvestSummary) -> LiveStormRow:
-    """Map an :class:`InvestSummary` into the same LiveStormRow shape the
-    picker uses for active + replay entries. classification=INVEST is what
-    the frontend keys on for the distinct chip styling."""
-    return LiveStormRow(
-        storm_id=inv.atcf_id,
-        name=inv.name,
-        year=int(inv.atcf_id[-4:]),
-        classification="INVEST",
-        intensity_kt=inv.intensity_kt,
-        pressure_mb=None,
-        lat=inv.lat,
-        lon=inv.lon,
-        is_live=True,
-        label=inv.label,
-    )
 
 
 def _jma_row(s: JmaSummary) -> LiveStormRow:
@@ -797,33 +773,20 @@ def _states_in_bbox(bbox: tuple[float, float, float, float]) -> list[str]:
 
 @router.get("/storms", response_model=LiveStormListResponse)
 def list_live_storms() -> LiveStormListResponse:
-    """Active NHC storms, invests, and JMA typhoons. Replay is not offered."""
+    """Active NHC storms and JMA typhoons. Replay is not offered."""
     active = [_summary_to_row(s) for s in fetch_active_summaries()]
-    try:
-        invests = [_invest_to_row(i) for i in fetch_active_invests()]
-    except Exception:  # noqa: BLE001 — invest FTP outage → empty, not 5xx
-        invests = []
     try:
         typhoons = [_jma_row(s) for s in fetch_active_typhoons()]
     except Exception:  # noqa: BLE001 — JMA outage must not blank the NHC list
         typhoons = []
     note = None
-    if not active and not invests and not typhoons:
-        note = "No active Atlantic storms, invests, or JMA typhoons right now."
-    elif not active and not invests:
-        note = "No active Atlantic storms or invests. JMA typhoons are listed separately."
-    elif not active and invests:
-        note = (
-            "No active named/numbered storms — but "
-            f"{len(invests)} invest{'s' if len(invests) != 1 else ''} being "
-            "tracked. Model tracks + ensemble strike probability are "
-            "available for these; NHC-issued products (cone, watches) "
-            "start when an advisory does."
-        )
+    if not active and not typhoons:
+        note = "No active Atlantic storms or JMA typhoons right now."
+    elif not active:
+        note = "No active Atlantic storms. JMA typhoons are listed separately."
     return LiveStormListResponse(
         active=active,
         replay=[],
-        invests=invests,
         typhoons=typhoons,
         has_active=bool(active),
         note=note,

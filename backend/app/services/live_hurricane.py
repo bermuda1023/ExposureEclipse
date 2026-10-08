@@ -39,7 +39,7 @@ from .hurricane_impact import (
 )
 from .atcf_adecks import OfficialFix, fetch_official_fixes
 from .ibtracs import Storm, TrackPoint, fetch_storms, lookup_r64_quads_nm
-from .invests import fetch_active_invests, is_invest_id
+from .invests import is_invest_id
 from .ensemble_envelope import _convex_hull
 from .nhc_gis import (
     NHCSurgePolygon,
@@ -668,43 +668,6 @@ def _live_storm_and_forecasts(
     return live_storm, advisories
 
 
-def _invest_storm_from_summary(
-    atcf_id: str,
-) -> tuple[Storm, list[ForecastTrack], bool] | None:
-    """Synthesize a minimal Storm for an invest (CY 90-99) from the a-deck
-    -driven :func:`invests.fetch_active_invests` list.
-
-    Invests are pre-advisory: they have model tracks (surfaced via
-    ``/model-tracks`` and ``/ensemble-risk``) but no NHC-issued observed
-    track, forecast, cone, or peak-surge product. This stub gives the
-    bundle endpoint a real ``Storm`` so its bbox / SST / alerts / marine
-    -obs machinery still lights up around the invest's current position,
-    without pretending we have a full NHC advisory."""
-    target = atcf_id.upper()
-    for inv in fetch_active_invests():
-        if inv.atcf_id != target:
-            continue
-        # A single "observed fix" at the invest's current position so the
-        # bbox logic + downstream views have somewhere to anchor.
-        fix = TrackPoint(
-            datetime_utc=inv.latest_cycle,
-            record_id="",
-            status="INVEST",
-            lat=inv.lat,
-            lon=inv.lon,
-            wind_kt=inv.intensity_kt or 20,   # sub-TS wind so cones stay off
-            pressure_mb=None,
-        )
-        storm = Storm(
-            storm_id=inv.atcf_id,
-            name=inv.name,
-            year=int(inv.atcf_id[-4:]),
-            track=[fix],
-        )
-        return storm, [], True   # is_live=True — invests are live-basin data
-    return None
-
-
 def _init_plus_hours(yyyymmddhh: str, hours: int) -> str:
     try:
         dt = datetime.strptime(yyyymmddhh, "%Y%m%d%H").replace(tzinfo=timezone.utc)
@@ -729,13 +692,15 @@ def storm_for_impact(atcf_id: str) -> Storm | None:
 
     Track = OFCL/CARQ a-deck (tau 0…120) with operational RMW + R64
     quadrants. Positions prefer the NHC forecast-track KMZ when present.
-    Returns None if this is not a live/invest storm (caller should fall
-    back to IBTrACS / HURDAT).
+    Returns None if this is not a live NHC storm (caller should fall
+    back to IBTrACS / HURDAT). An invest id (cyclone number 90-99) is
+    not a live storm.
     """
     atcf_id = atcf_id.upper()
+    if is_invest_id(atcf_id):
+        return None
     live_entry = _get_live_entry(atcf_id)
-    is_live = live_entry is not None or is_invest_id(atcf_id)
-    if not is_live:
+    if live_entry is None:
         return None
     official = fetch_official_fixes(atcf_id)
     kmz_by_hour: dict[int, tuple[float, float, int]] = {}
@@ -829,20 +794,17 @@ def storm_and_forecasts(
     meaningful. Earlier "advisories" are synthesized by truncating the track
     at earlier points and laterally perturbing the forecast tail.
     """
+    # Cyclone numbers 90-99 are invest slots. They are not in the picker
+    # and must not fall through to IBTrACS replay.
+    if is_invest_id(atcf_id):
+        return None
+
     live_entry = _get_live_entry(atcf_id, refresh=refresh)
     if live_entry is not None:
         live_result = _live_storm_and_forecasts(live_entry, refresh=refresh)
         if live_result is not None:
             live_storm, live_advisories = live_result
             return live_storm, live_advisories, True
-
-    # Invest path (pre-advisory system with a-deck but no CurrentStorms
-    # entry). Must be checked BEFORE falling through to replay/IBTrACS —
-    # invests never appear in IBTrACS by definition.
-    if is_invest_id(atcf_id):
-        invest_result = _invest_storm_from_summary(atcf_id)
-        if invest_result is not None:
-            return invest_result
 
     storm = _get_replay_storm(atcf_id)
     if storm is None:

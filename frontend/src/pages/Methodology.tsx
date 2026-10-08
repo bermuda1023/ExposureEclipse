@@ -255,11 +255,6 @@ export function Methodology() {
             Active storms: <code>https://www.nhc.noaa.gov/CurrentStorms.json</code>{" "}
             — free, no auth. Center, motion, intensity, GIS product URLs.
           </li>
-          <li>
-            Invests (CY 90–99): probed from ATCF a-decks in parallel.
-            Model tracks and ensemble strike probability work; NHC cone /
-            watches / surge do not until an advisory exists.
-          </li>
         </ul>
         <SubHead>Japan typhoons</SubHead>
         <ul>
