@@ -7,8 +7,10 @@ from app.services.county_wind import (
     experienced_wind_kt,
     include_county,
     local_wind_kt,
+    mph_band,
     sample_polygons,
     skirt_wind_kt,
+    speed_bins_from_winds,
 )
 from app.services.hurricane_impact import (
     CountyMeta,
@@ -17,6 +19,20 @@ from app.services.hurricane_impact import (
     compute_impact,
 )
 from app.services.ibtracs import Storm, TrackPoint
+
+
+def test_speed_bins_match_form_v1_edges() -> None:
+    # 115 kt is about 132 mph: the 131–140 row, and it is Cat 4.
+    one = speed_bins_from_winds([115])
+    assert one[0].mph_lo == 131 and one[0].mph_hi == 140
+    assert one[0].category == 4
+    assert mph_band(115) == (131, 140)
+    # Clear samples stay out of the bins. The rest keep their share of the county.
+    mixed = speed_bins_from_winds([50, 50, 0, 0])
+    assert len(mixed) == 1
+    assert mixed[0].mph_lo == 51
+    assert mixed[0].category == 0
+    assert abs(mixed[0].area_fraction - 0.5) < 1e-9
 
 
 def test_skirt_is_not_painted_as_the_eyewall() -> None:

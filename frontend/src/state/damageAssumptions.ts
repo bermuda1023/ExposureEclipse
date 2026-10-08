@@ -26,9 +26,48 @@ export interface CategoryAssumption {
 
 export interface DamageAssumptionsState {
   byCategory: Record<Sshws, CategoryAssumption>;
+  /** custom = the numbers below. Otherwise a Form V-1 vendor curve. */
+  model: DamageModel;
   set: (cat: Sshws, partial: Partial<CategoryAssumption>) => void;
+  setModel: (model: DamageModel) => void;
   reset: () => void;
 }
+
+export type DamageModel = "custom" | "air" | "kcc" | "rms";
+
+/** Florida Commission Form V-1 Part A, building damage / building exposure.
+ *  1-minute sustained mph. Unmitigated reference structures (wood, masonry,
+ *  manufactured, concrete), surge off. AIR 2019, KCC 2023, RMS 21.0. */
+export const FORM_V1: readonly {
+  lo: number;
+  hi: number;
+  air: number;
+  kcc: number;
+  rms: number;
+}[] = [
+  { lo: 41, hi: 50, air: 0.05, kcc: 0.11, rms: 0.13 },
+  { lo: 51, hi: 60, air: 0.12, kcc: 0.26, rms: 0.33 },
+  { lo: 61, hi: 70, air: 0.46, kcc: 0.73, rms: 1.43 },
+  { lo: 71, hi: 80, air: 0.96, kcc: 1.68, rms: 3.22 },
+  { lo: 81, hi: 90, air: 1.89, kcc: 3.79, rms: 6.97 },
+  { lo: 91, hi: 100, air: 3.55, kcc: 7.66, rms: 14.7 },
+  { lo: 101, hi: 110, air: 7.34, kcc: 14.6, rms: 25.4 },
+  { lo: 111, hi: 120, air: 20.6, kcc: 26.1, rms: 44.6 },
+  { lo: 121, hi: 130, air: 32.8, kcc: 32.6, rms: 57.5 },
+  { lo: 131, hi: 140, air: 42.1, kcc: 43.5, rms: 76.6 },
+  { lo: 141, hi: 150, air: 54.2, kcc: 52.4, rms: 85.5 },
+  { lo: 151, hi: 160, air: 61.8, kcc: 60.8, rms: 90.0 },
+  { lo: 161, hi: 170, air: 71.7, kcc: 72.1, rms: 93.9 },
+];
+
+const KT_TO_MPH = 1.15078;
+
+export const DAMAGE_MODEL_LABEL: Record<DamageModel, string> = {
+  custom: "Custom",
+  air: "AIR",
+  kcc: "KCC",
+  rms: "RMS",
+};
 
 // Sensible starting values — order-of-magnitude industry shape so the panel
 // has SOMETHING to show on first load. The user is expected to overwrite.
@@ -46,6 +85,7 @@ export const useDamageAssumptionsStore = create<DamageAssumptionsState>()(
   persist(
     (set) => ({
       byCategory: { ...DEFAULTS },
+      model: "custom",
       set: (cat, partial) =>
         set((state) => ({
           byCategory: {
@@ -53,7 +93,8 @@ export const useDamageAssumptionsStore = create<DamageAssumptionsState>()(
             [cat]: { ...state.byCategory[cat], ...partial },
           },
         })),
-      reset: () => set({ byCategory: { ...DEFAULTS } }),
+      setModel: (model) => set({ model }),
+      reset: () => set({ byCategory: { ...DEFAULTS }, model: "custom" }),
     }),
     {
       name: "ee-damage-assumptions",
@@ -73,6 +114,56 @@ export function categoryForWind(windKt: number): Sshws {
   if (windKt >= 64) return 1;
   if (windKt >= 34) return 0;
   return -1;
+}
+
+export interface SpeedBin {
+  mphLo: number;
+  mphHi: number;
+  category: number;
+  areaFraction: number;
+  maxWindKt?: number;
+}
+
+/** Damage ratio (%) from a Form V-1 row. Below 41 mph the table is silent. */
+export function formV1Percent(model: Exclude<DamageModel, "custom">, mphLo: number): number {
+  if (mphLo < 41) return 0;
+  const row = FORM_V1.find((r) => r.lo === mphLo) ?? (mphLo > 161 ? FORM_V1[FORM_V1.length - 1] : undefined);
+  return row ? row[model] : 0;
+}
+
+/** Unweighted mean of the Form V-1 rows whose midpoint sits in this category.
+ *  The county loss uses the county's own mix, not this average. */
+export function categoryCurveMean(model: DamageModel, cat: Sshws): number {
+  if (model === "custom") return 0;
+  const rows = FORM_V1.filter(
+    (r) => categoryForWind(Math.round(((r.lo + r.hi) / 2) / KT_TO_MPH)) === cat,
+  );
+  if (rows.length === 0) return 0;
+  return rows.reduce((s, r) => s + r[model], 0) / rows.length;
+}
+
+/**
+ * Means the loss should use. Custom keeps the typed numbers. A vendor curve
+ * uses the 10 mph mix inside each category when the impact sent speed bins,
+ * otherwise the category average of the published table. SD stays the user's.
+ */
+export function effectiveAssumptions(
+  model: DamageModel | undefined,
+  byCategory: Record<Sshws, CategoryAssumption>,
+  speedBins?: SpeedBin[] | null,
+): Record<Sshws, CategoryAssumption> {
+  if (!model || model === "custom") return byCategory;
+  const vendor = model;
+  const out: Record<Sshws, CategoryAssumption> = { ...byCategory };
+  for (const cat of CATEGORY_ORDER) {
+    const mine = (speedBins ?? []).filter((b) => b.category === cat && b.areaFraction > 0);
+    const weight = mine.reduce((s, b) => s + b.areaFraction, 0);
+    const mean = weight > 0
+      ? mine.reduce((s, b) => s + b.areaFraction * formV1Percent(vendor, b.mphLo), 0) / weight
+      : categoryCurveMean(vendor, cat);
+    out[cat] = { mean, sd: byCategory[cat]?.sd ?? 0 };
+  }
+  return out;
 }
 
 export interface LossBand {

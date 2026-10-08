@@ -22,6 +22,7 @@ from functools import lru_cache
 from ..brand import USER_AGENT
 from .hurdat2 import category_for_wind
 from .county_wind import (
+    SpeedBin,
     WindBand,
     bands_from_winds,
     experienced_wind_kt,
@@ -30,6 +31,7 @@ from .county_wind import (
     sample_polygons,
     severity,
     skirt_wind_kt,
+    speed_bins_from_winds,
 )
 from .ibtracs import (
     Storm,
@@ -324,6 +326,8 @@ class CountyImpact:
     # is NOT applied to the whole county. Empty when the caller built a
     # centroid-only impact (tests).
     wind_bands: list[WindBand] = None  # type: ignore[assignment]
+    # Same samples, cut into the 10 mph bands Form V-1 publishes.
+    speed_bins: list[SpeedBin] = None  # type: ignore[assignment]
     # Parametric damage ratio + projected ground-up loss for the user's
     # in-scope TIV. The router leaves these at 0; the UI applies the
     # underwriter's per-category ratios to ``wind_bands``.
@@ -336,6 +340,8 @@ class CountyImpact:
             self.by_programme = []
         if self.wind_bands is None:
             self.wind_bands = []
+        if self.speed_bins is None:
+            self.speed_bins = []
 
 
 @dataclass(slots=True, frozen=True)
@@ -622,6 +628,7 @@ def _impacts_from_paint(painted: dict[str, _Paint]) -> list[CountyImpact]:
     impacts: list[CountyImpact] = []
     for acc in painted.values():
         bands = bands_from_winds(acc.winds)
+        bins = speed_bins_from_winds(acc.winds)
         peak = max(acc.winds) if acc.winds else 0
         if not include_county(bands, peak):
             continue
@@ -642,6 +649,7 @@ def _impacts_from_paint(painted: dict[str, _Paint]) -> list[CountyImpact]:
                 location_count=0,
                 has_data=False,
                 wind_bands=bands,
+                speed_bins=bins,
             )
         )
     impacts.sort(key=lambda i: (-severity(i.wind_bands), -i.max_wind_kt))

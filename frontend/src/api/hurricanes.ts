@@ -75,6 +75,15 @@ export interface WindBand {
   maxWindKt: number;
 }
 
+/** 10 mph slice of the same samples, aligned to Florida Form V-1. */
+export interface SpeedBin {
+  mphLo: number;
+  mphHi: number;
+  category: number;
+  areaFraction: number;
+  maxWindKt: number;
+}
+
 export interface ImpactedCounty {
   geographyId: string;        // "US-FL-12086"
   geoid: string;              // "12086"
@@ -91,6 +100,8 @@ export interface ImpactedCounty {
   rmaxSource: "ibtracs" | "willoughby" | "nhc";
   /** Local-wind slices. Loss is the sum of TIV × areaFraction × that category's damage ratio. */
   windBands?: WindBand[];
+  /** Same samples in 10 mph bands. Vendor curves use these; custom uses windBands. */
+  speedBins?: SpeedBin[];
   tiv: number;
   /** Informational split. The loss band uses tiv, not these fields. */
   residentialTiv?: number;

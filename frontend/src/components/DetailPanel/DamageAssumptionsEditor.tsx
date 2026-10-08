@@ -7,7 +7,10 @@
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
+  DAMAGE_MODEL_LABEL,
+  categoryCurveMean,
   useDamageAssumptionsStore,
+  type DamageModel,
   type Sshws,
 } from "../../state/damageAssumptions";
 
@@ -17,8 +20,11 @@ interface Props {
 
 export function DamageAssumptionsEditor({ compact = false }: Props) {
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
+  const model = useDamageAssumptionsStore((s) => s.model) ?? "custom";
   const set = useDamageAssumptionsStore((s) => s.set);
+  const setModel = useDamageAssumptionsStore((s) => s.setModel);
   const reset = useDamageAssumptionsStore((s) => s.reset);
+  const vendor = model !== "custom";
 
   return (
     <section
@@ -40,16 +46,17 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
               letterSpacing: "0.06em",
             }}
           >
-            Damage assumptions (your inputs)
+            Damage assumptions
           </div>
           <div style={{ fontSize: "0.66rem", color: "var(--ink-500)", marginTop: 1 }}>
-            Mean ± SD damage ratio per category — drives the loss band on every
-            impacted county.
+            {vendor
+              ? "Form V-1 building damage by 10 mph of 1-minute wind, on unmitigated reference structures. Each county uses its own mix. SD is still yours. Applied to bundled TIV."
+              : "Mean ± SD damage ratio per category — drives the loss band on every impacted county."}
           </div>
         </div>
         <button
           onClick={reset}
-          title="Reset to industry-shape defaults"
+          title="Reset to your custom defaults"
           style={{
             all: "unset",
             cursor: "pointer",
@@ -61,6 +68,34 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
           reset
         </button>
       </header>
+      <div style={{ display: "flex", gap: 4, marginBottom: 6, flexWrap: "wrap" }}>
+        {(Object.keys(DAMAGE_MODEL_LABEL) as DamageModel[]).map((id) => {
+          const on = model === id;
+          return (
+            <button
+              key={id}
+              onClick={() => setModel(id)}
+              title={
+                id === "custom"
+                  ? "Your typed damage ratios, one number per category"
+                  : `${DAMAGE_MODEL_LABEL[id]} Form V-1 curve, 10 mph bands`
+              }
+              style={{
+                border: `1px solid ${on ? "var(--ink-800)" : "var(--ink-300)"}`,
+                background: on ? "var(--ink-900)" : "white",
+                color: on ? "white" : "var(--ink-700)",
+                borderRadius: 999,
+                padding: "2px 8px",
+                fontSize: "0.62rem",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {DAMAGE_MODEL_LABEL[id]}
+            </button>
+          );
+        })}
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.72rem" }}>
         <thead>
           <tr style={{ color: "var(--ink-500)", textAlign: "left" }}>
@@ -73,16 +108,23 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
         <tbody>
           {CATEGORY_ORDER.map((cat) => {
             const a = byCategory[cat];
-            const lo = Math.max(0, a.mean - a.sd).toFixed(1);
-            const hi = Math.min(100, a.mean + a.sd).toFixed(1);
+            const mean = vendor ? categoryCurveMean(model, cat) : a.mean;
+            const lo = Math.max(0, mean - a.sd).toFixed(1);
+            const hi = Math.min(100, mean + a.sd).toFixed(1);
             return (
               <tr key={cat} style={{ borderTop: "1px solid var(--ink-100)" }}>
                 <td style={{ ...td, fontWeight: 600 }}>{CATEGORY_LABELS[cat]}</td>
                 <td style={{ ...td, textAlign: "right" }}>
-                  <Input
-                    value={a.mean}
-                    onChange={(n) => set(cat, { mean: n })}
-                  />
+                  {vendor ? (
+                    <span title="Average of the 10 mph rows in this category. The county loss uses its own wind mix.">
+                      {mean.toFixed(1)}
+                    </span>
+                  ) : (
+                    <Input
+                      value={a.mean}
+                      onChange={(n) => set(cat, { mean: n })}
+                    />
+                  )}
                 </td>
                 <td style={{ ...td, textAlign: "right" }}>
                   <Input

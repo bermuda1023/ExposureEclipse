@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
   applyWindBands,
+  effectiveAssumptions,
   representativeBand,
   resolveBandFractions,
   useDamageAssumptionsStore,
@@ -33,6 +34,7 @@ export function HurricaneImpactPanel() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
+  const damageModel = useDamageAssumptionsStore((s) => s.model);
   const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
   const stormOverrides = data ? (overridesByStorm[data.stormId] ?? {}) : {};
 
@@ -44,14 +46,15 @@ export function HurricaneImpactPanel() {
     for (const c of data.counties) {
       if (!c.hasData) continue;
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
+      const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins);
       const b = applyWindBands(
-        c.tiv, c.windBands, exp, byCategory, c.maxWindKt,
+        c.tiv, c.windBands, exp, assumptions, c.maxWindKt,
         stormOverrides[c.geoid]?.bandPercent,
       );
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high };
-  }, [data, byCategory, stormOverrides]);
+  }, [data, byCategory, damageModel, stormOverrides]);
 
   // When the impact has been pushed to the right-rail detail panel, hide the
   // floating panel — the detail view shows the same content + per-programme
@@ -269,7 +272,7 @@ export function HurricaneImpactPanel() {
                         bands={c.windBands}
                         tiv={c.tiv}
                         scale={stormOverrides[c.geoid]?.exposedFraction ?? 1.0}
-                        byCategory={byCategory}
+                        byCategory={effectiveAssumptions(damageModel, byCategory, c.speedBins)}
                         currency={data.currency}
                         bandPercent={stormOverrides[c.geoid]?.bandPercent}
                         compact
@@ -317,7 +320,9 @@ export function HurricaneImpactPanel() {
                       {c.hasData && (() => {
                         const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
                         const b = applyWindBands(
-                          c.tiv, c.windBands, exp, byCategory, c.maxWindKt,
+                          c.tiv, c.windBands, exp,
+                          effectiveAssumptions(damageModel, byCategory, c.speedBins),
+                          c.maxWindKt,
                           stormOverrides[c.geoid]?.bandPercent,
                         );
                         return (

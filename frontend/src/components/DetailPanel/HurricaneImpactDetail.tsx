@@ -12,6 +12,7 @@ import { useCedents } from "../../api/hooks";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
   applyWindBands,
+  effectiveAssumptions,
   representativeBand,
   resolveBandFractions,
   useDamageAssumptionsStore,
@@ -29,6 +30,7 @@ export function HurricaneImpactDetail() {
   const focusedGeoid = useHurricaneImpactStore((s) => s.focusedGeoid);
   const cedents = useCedents();
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
+  const damageModel = useDamageAssumptionsStore((s) => s.model);
   const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
   const setOverride = useCountyOverridesStore((s) => s.set);
   const setBandPercent = useCountyOverridesStore((s) => s.setBandPercent);
@@ -48,11 +50,12 @@ export function HurricaneImpactDetail() {
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
       const bands = stormOverrides[c.geoid]?.bandPercent;
       if (exp !== 1.0 || (bands && Object.keys(bands).length > 0)) anyOverride = true;
-      const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt, bands);
+      const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins);
+      const b = applyWindBands(c.tiv, c.windBands, exp, assumptions, c.maxWindKt, bands);
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high, anyOverride };
-  }, [data, byCategory, stormOverrides]);
+  }, [data, byCategory, damageModel, stormOverrides]);
 
   // dataset_id → human-friendly programme label.
   const programmeLabel = useMemo(() => {
@@ -211,8 +214,9 @@ export function HurricaneImpactDetail() {
               const isFocused = focusedGeoid === c.geoid;
               const exposed = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
               const bandPercent = stormOverrides[c.geoid]?.bandPercent;
+              const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins);
               const band = c.hasData
-                ? applyWindBands(c.tiv, c.windBands, exposed, byCategory, c.maxWindKt, bandPercent)
+                ? applyWindBands(c.tiv, c.windBands, exposed, assumptions, c.maxWindKt, bandPercent)
                 : null;
               return (
                 <FragmentRow
@@ -221,7 +225,7 @@ export function HurricaneImpactDetail() {
                   isOpen={isOpen}
                   isFocused={isFocused}
                   band={band}
-                  byCategory={byCategory}
+                  byCategory={assumptions}
                   exposedFraction={exposed}
                   bandPercent={bandPercent}
                   onBandPercent={(cat, pct) => setBandPercent(data.stormId, c.geoid, cat, pct)}

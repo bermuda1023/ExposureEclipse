@@ -319,6 +319,17 @@ def _compute_impact_payload(
                     for b in i.wind_bands
                     if b.area_fraction > 0
                 ],
+                "speedBins": [
+                    {
+                        "mphLo": b.mph_lo,
+                        "mphHi": b.mph_hi,
+                        "category": b.category,
+                        "areaFraction": round(b.area_fraction, 4),
+                        "maxWindKt": b.max_wind_kt,
+                    }
+                    for b in i.speed_bins
+                    if b.area_fraction > 0
+                ],
                 "tiv": i.tiv,
                 "residentialTiv": i.residential_tiv,
                 "commercialTiv": i.commercial_tiv,

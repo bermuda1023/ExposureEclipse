@@ -259,6 +259,64 @@ def sample_polygons(
     return pts
 
 
+# 1-minute knots → 1-minute mph. Form V-1 bands are published in mph.
+KT_TO_MPH = 1.15078
+
+
+@dataclass(slots=True, frozen=True)
+class SpeedBin:
+    """Share of the county inside one 10 mph Form V-1 wind band.
+
+    ``category`` is the Saffir-Simpson bin of the same samples, so the bins
+    inside one category sum to that category's area fraction.
+    """
+
+    mph_lo: int
+    mph_hi: int
+    category: int
+    area_fraction: float
+    max_wind_kt: int
+
+
+def mph_band(wind_kt: int) -> tuple[int, int]:
+    """10 mph band matching Florida Commission Form V-1 (41–50, 51–60, …).
+
+    Winds below 41 mph (still tropical-storm in knots) land in (0, 40),
+    which has no published damage ratio. Above 170 mph clamps to the top row.
+    """
+    mph = wind_kt * KT_TO_MPH
+    if mph < 41:
+        return (0, 40)
+    if mph >= 171:
+        return (161, 170)
+    lo = 41 + 10 * int((mph - 41) // 10)
+    return (lo, lo + 9)
+
+
+def speed_bins_from_winds(winds: list[int]) -> list[SpeedBin]:
+    """10 mph slices of the same samples ``bands_from_winds`` uses."""
+    if not winds:
+        return []
+    grouped: dict[tuple[int, int, int], list[int]] = {}
+    for wind in winds:
+        if wind < TS_KT:
+            continue
+        lo, hi = mph_band(wind)
+        cat = category_for_wind(wind)
+        grouped.setdefault((lo, hi, cat), []).append(wind)
+    n = len(winds)
+    return [
+        SpeedBin(
+            mph_lo=lo,
+            mph_hi=hi,
+            category=cat,
+            area_fraction=len(samples) / n,
+            max_wind_kt=max(samples),
+        )
+        for (lo, hi, cat), samples in sorted(grouped.items())
+    ]
+
+
 def bands_from_winds(winds: list[int]) -> list[WindBand]:
     """Area fractions from per-sample peak sustained wind. Empty input → []."""
     if not winds:
