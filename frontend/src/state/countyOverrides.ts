@@ -1,22 +1,16 @@
 /**
- * Per-county exposed-fraction override.
+ * Per-county judgment scale.
  *
- * Captures the human judgement that a county was only PARTIALLY inside the
- * wind field — e.g. the western half of Charlotte County got hurricane
- * winds, the rest didn't. The exposed fraction multiplies the county's TIV
- * BEFORE the category damage ratio is applied:
+ * The storm impact already splits each county into local-wind slices
+ * (clear, tropical storm, Cat 1–5) and applies the category damage ratio
+ * to each slice. This scale is an extra haircut on top of that split:
  *
- *     effective_tiv   = tiv × exposedFraction
- *     loss_mean       = effective_tiv × DR_mean
- *     loss_low / high = effective_tiv × (DR_mean ∓ DR_sd)
+ *     slice_tiv = county_tiv × areaFraction × scale
+ *     loss      = Σ slice_tiv × DR(category)
  *
- * Keyed by (storm_id, geoid) since the same county can be partially-vs-
- * fully exposed depending on which storm hit it. Persisted to
- * localStorage so the user's overrides survive a reload.
- *
- * The same machinery would extend naturally to a per-county DR override
- * later (different mean+sd than the category default) if the category
- * picker proves too coarse for some counties.
+ * 100% means "use the area split as-is". It is not a substitute for the
+ * split. Keyed by (storm_id, geoid). Persisted under a v2 key so haircuts
+ * typed against the old whole-county wind stamp are not applied twice.
  */
 
 import { create } from "zustand";
@@ -74,7 +68,7 @@ export const useCountyOverridesStore = create<CountyOverridesState>()(
         get().byStorm[stormId]?.[geoid] ?? DEFAULT,
     }),
     {
-      name: "ee-county-overrides",
+      name: "ee-county-overrides-v2",
       storage: createJSONStorage(() => localStorage),
     },
   ),

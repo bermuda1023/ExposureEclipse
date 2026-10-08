@@ -90,13 +90,67 @@ export function applyAssumption(
   byCategory: Record<Sshws, CategoryAssumption>,
 ): LossBand {
   const cat = categoryForWind(windKt);
-  const a = byCategory[cat] ?? { mean: 0, sd: 0 };
+  return applyCategory(tiv, cat, byCategory);
+}
+
+/** Same band, but the category is already known (a county wind slice). */
+export function applyCategory(
+  tiv: number,
+  category: number,
+  byCategory: Record<Sshws, CategoryAssumption>,
+): LossBand {
+  const a = byCategory[category as Sshws] ?? { mean: 0, sd: 0 };
   const drMean = Math.max(0, Math.min(1, a.mean / 100));
   const drSd = Math.max(0, a.sd / 100);
   const meanLoss = tiv * drMean;
   const low = tiv * Math.max(0, drMean - drSd);
   const high = tiv * Math.min(1, drMean + drSd);
   return { mean: meanLoss, low, high, drMean, drSd };
+}
+
+export interface WindSlice {
+  category: number;
+  areaFraction: number;
+}
+
+/**
+ * Loss for a county split by local wind. Each slice uses that category's
+ * damage ratio. ``exposedFraction`` is an extra judgment scale on top of
+ * the area split (1 = take the slices as they are). When the API didn't
+ * send bands, fall back to one ratio on the whole county.
+ *
+ * ``drMean`` / ``drSd`` are on the full county TIV, so a county that is
+ * 90% untouched shows a small effective ratio, not the eyewall ratio.
+ */
+export function applyWindBands(
+  tiv: number,
+  bands: WindSlice[] | undefined,
+  exposedFraction: number,
+  byCategory: Record<Sshws, CategoryAssumption>,
+  fallbackWindKt: number,
+): LossBand {
+  const scale = Math.max(0, Math.min(1, exposedFraction));
+  const live = (bands ?? []).filter((b) => b.category >= 0 && b.areaFraction > 0);
+  if (live.length === 0) {
+    return applyAssumption(tiv * scale, fallbackWindKt, byCategory);
+  }
+  let mean = 0;
+  let low = 0;
+  let high = 0;
+  for (const band of live) {
+    const slice = applyCategory(tiv * band.areaFraction * scale, band.category, byCategory);
+    mean += slice.mean;
+    low += slice.low;
+    high += slice.high;
+  }
+  const base = tiv * scale;
+  return {
+    mean,
+    low,
+    high,
+    drMean: base > 0 ? mean / base : 0,
+    drSd: base > 0 ? Math.max(0, (high - mean) / base) : 0,
+  };
 }
 
 export const CATEGORY_LABELS: Record<Sshws, string> = {

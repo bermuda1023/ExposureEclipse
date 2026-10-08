@@ -11,13 +11,14 @@ import { useMemo, useState } from "react";
 import { useCedents } from "../../api/hooks";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
-  applyAssumption,
+  applyWindBands,
   useDamageAssumptionsStore,
   type LossBand,
 } from "../../state/damageAssumptions";
 import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
-import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "../Map/hurricaneColors";
+import { SAFFIR_SIMPSON_COLORS } from "../Map/hurricaneColors";
+import { CountyWindSlices } from "../Map/CountyWindSlices";
 import { CountyReferenceSection } from "./CountyReferenceSection";
 import { DamageAssumptionsEditor } from "./DamageAssumptionsEditor";
 
@@ -32,9 +33,8 @@ export function HurricaneImpactDetail() {
   const resetStorm = useCountyOverridesStore((s) => s.resetStorm);
   const [openGeoid, setOpenGeoid] = useState<string | null>(null);
 
-  // Loss uses county TIV, already the bundled residential + commercial
-  // total. Segment fields are display-only and must not be applied again.
-  // Exposed-fraction override defaults to 100%.
+  // Loss is the sum of each local-wind slice × that category's damage ratio.
+  // The scale toggle is an extra haircut on top of the area split.
   const stormOverrides = data ? (overridesByStorm[data.stormId] ?? {}) : {};
   const totals = useMemo(() => {
     if (!data) return { mean: 0, low: 0, high: 0, anyOverride: false };
@@ -44,7 +44,7 @@ export function HurricaneImpactDetail() {
       if (!c.hasData) continue;
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
       if (exp !== 1.0) anyOverride = true;
-      const b = applyAssumption(c.tiv * exp, c.maxWindKt, byCategory);
+      const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt);
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high, anyOverride };
@@ -207,7 +207,7 @@ export function HurricaneImpactDetail() {
               const isFocused = focusedGeoid === c.geoid;
               const exposed = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
               const band = c.hasData
-                ? applyAssumption(c.tiv * exposed, c.maxWindKt, byCategory)
+                ? applyWindBands(c.tiv, c.windBands, exposed, byCategory, c.maxWindKt)
                 : null;
               return (
                 <FragmentRow
@@ -323,8 +323,14 @@ function FragmentRow({
               ({c.rmaxSource === "nhc" ? "NHC advisory" : c.rmaxSource === "ibtracs" ? "IBTrACS" : "Willoughby est."})
             </span>
           </div>
-          {/* Exposed-fraction override — stops event bubbling so editing
-              the field doesn't toggle the row's expansion. */}
+          <CountyWindSlices
+            bands={c.windBands}
+            tiv={c.tiv}
+            scale={exposedFraction}
+            byCategory={byCategory}
+            currency={currency}
+          />
+          {/* Judgment scale on top of the area split. 100% uses the slices as-is. */}
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
@@ -336,7 +342,7 @@ function FragmentRow({
               color: isOverridden ? "#7d5400" : "var(--ink-500)",
             }}
           >
-            <span>Exposed</span>
+            <span title="Extra haircut on top of the area split. 100% uses the slices as they are.">Scale</span>
             <input
               type="number"
               min={0}
@@ -389,7 +395,7 @@ function FragmentRow({
               fontSize: "0.66rem",
               whiteSpace: "nowrap",
             }}
-            title={SAFFIR_SIMPSON_LABEL[c.maxCategory] ?? ""}
+            title="Strongest wind anywhere in the county. The slices below are the rest of the county."
           >
             {c.maxWindKt} kt
           </span>
@@ -411,7 +417,7 @@ function FragmentRow({
                   marginTop: 1,
                 }}
               >
-                {`DR ${(band.drMean * 100).toFixed(1)}% · ${formatMoneyCompact(band.mean, currency)}`}
+                {`eff DR ${(band.drMean * 100).toFixed(1)}% · ${formatMoneyCompact(band.mean, currency)}`}
               </div>
               <div style={{ fontSize: "0.58rem", color: "var(--ink-500)" }}>
                 ± {formatMoneyCompact(band.high - band.mean, currency)} (±{(band.drSd * 100).toFixed(1)}%)
@@ -443,7 +449,7 @@ function FragmentRow({
                     // total — programme TIV inside the wind field is the
                     // county fraction × programme TIV (assumes uniform
                     // distribution of programme TIV across the county).
-                    const pb = applyAssumption(p.tiv * exposedFraction, c.maxWindKt, byCategory);
+                    const pb = applyWindBands(p.tiv, c.windBands, exposedFraction, byCategory, c.maxWindKt);
                     return (
                       <tr key={p.datasetId}>
                         <td style={subTd}>

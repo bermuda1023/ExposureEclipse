@@ -1,0 +1,205 @@
+"""Local sustained wind inside a county, and the share of the county in each band.
+
+The impact list used to stamp a county with the storm's peak intensity
+whenever the 64 kt field reached the county centroid. That labels Miami-Dade
+as a major hurricane when only a corner of the county is in the tropical-storm
+skirt. This module estimates the wind at a point from Vmax, Rmax and the
+directional R64, then rolls sample points up into area fractions.
+
+Bands match the Saffir-Simpson toggles the underwriter already edits:
+
+  -1  clear     wind < 34 kt   (not in the storm)
+   0  TS        34–63 kt
+   1..5         Cat 1–5
+
+Loss is the sum across bands of (county TIV × area fraction × that band's
+damage ratio). The instantaneous eye is calm, but the loss uses the peak
+the point actually felt: Vmax if the eyewall crossed it (closest approach
+inside Rmax), otherwise the profile at that distance, pinned so V(R64) = 64 kt.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from .hurdat2 import category_for_wind
+
+# A county is listed when at least this share of its area sees tropical-storm
+# wind, or when any sample is hurricane-force (a thin eyewall clip still counts).
+# One sample in an 80-point grid is 1.25%, so the floor sits just under that.
+MIN_AFFECTED_FRACTION = 0.01
+TS_KT = 34
+
+
+@dataclass(slots=True, frozen=True)
+class WindBand:
+    """Share of county area whose strongest local wind falls in one bin."""
+
+    category: int          # -1 clear, 0 TS, 1..5
+    area_fraction: float   # 0..1, sums to 1 across bands
+    max_wind_kt: int       # strongest sample inside the band
+
+
+def local_wind_kt(
+    distance_nm: float,
+    vmax_kt: int,
+    rmax: float,
+    r64_nm: float,
+) -> int:
+    """Sustained wind (kt) at ``distance_nm`` from the eye.
+
+    ``r64_nm`` is the 64 kt radius on the bearing from the eye to the point.
+    Pass 0 when that quadrant has no hurricane-force wind. Inside Rmax the
+    eye is calm and the speed ramps to Vmax at the eyewall. Outside, the
+    profile is a power law pinned so V(R64) = 64 kt, and it keeps decaying
+    through the tropical-storm skirt. Below 34 kt the point is not in the
+    storm.
+    """
+    if vmax_kt < TS_KT or rmax <= 0 or distance_nm < 0:
+        return 0
+    if distance_nm <= rmax:
+        return int(round(vmax_kt * (distance_nm / rmax)))
+    no_hurricane_quadrant = r64_nm <= rmax * 1.05
+    if vmax_kt <= 64 or no_hurricane_quadrant:
+        v = vmax_kt * (rmax / distance_nm) ** 0.5
+        if vmax_kt > 64 and no_hurricane_quadrant:
+            v = min(v, 63.0)
+        return int(round(v)) if v >= TS_KT else 0
+    exponent = math.log(vmax_kt / 64.0) / math.log(r64_nm / rmax)
+    exponent = max(0.2, min(exponent, 2.5))
+    v = vmax_kt * (rmax / distance_nm) ** exponent
+    return int(round(v)) if v >= TS_KT else 0
+
+
+def experienced_wind_kt(
+    distance_nm: float,
+    vmax_kt: int,
+    rmax: float,
+    r64_nm: float,
+) -> int:
+    """Peak sustained wind (kt) a point feels as this fix passes.
+
+    ``local_wind_kt`` is the instantaneous profile, calm in the eye. A point
+    whose closest approach is inside Rmax has already been through the
+    eyewall, so the peak — what the damage ratio should see — is Vmax.
+    """
+    if vmax_kt < TS_KT or rmax <= 0 or distance_nm < 0:
+        return 0
+    if distance_nm <= rmax:
+        return int(vmax_kt)
+    return local_wind_kt(distance_nm, vmax_kt, rmax, r64_nm)
+
+
+def outer_radius_nm(
+    vmax_kt: int,
+    rmax: float,
+    r64_quads: tuple[float, float, float, float] | None,
+    r64_fallback_nm: float,
+) -> float:
+    """Distance at which the profile falls through 34 kt. Capped so one
+    fix cannot sweep half the country."""
+    if vmax_kt < TS_KT or rmax <= 0:
+        return 0.0
+    r64_max = r64_fallback_nm
+    if r64_quads:
+        r64_max = max(r64_max, max(r64_quads))
+    if vmax_kt <= 64 or r64_max <= rmax * 1.05:
+        radius = rmax * (vmax_kt / TS_KT) ** (1.0 / 0.5)
+    else:
+        exponent = math.log(vmax_kt / 64.0) / math.log(r64_max / rmax)
+        exponent = max(0.2, min(exponent, 2.5))
+        radius = rmax * (vmax_kt / TS_KT) ** (1.0 / exponent)
+    return min(220.0, max(radius, rmax))
+
+
+def point_in_ring(lon: float, lat: float, ring: list[tuple[float, float]]) -> bool:
+    """Ray-cast. ``ring`` is (lon, lat)."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if (yi > lat) != (yj > lat):
+            x_cross = (xj - xi) * (lat - yi) / (yj - yi) + xi
+            if lon < x_cross:
+                inside = not inside
+        j = i
+    return inside
+
+
+def sample_polygon_rings(rings: list[list[tuple[float, float]]]) -> list[tuple[float, float]]:
+    """Equal-ish (lat, lon) samples inside a polygon. Outer ring is rings[0],
+    the rest are holes. Returns an empty list for a degenerate ring.
+    """
+    if not rings or len(rings[0]) < 3:
+        return []
+    outer = rings[0]
+    holes = rings[1:]
+    lons = [p[0] for p in outer]
+    lats = [p[1] for p in outer]
+    min_lon, max_lon = min(lons), max(lons)
+    min_lat, max_lat = min(lats), max(lats)
+    width = max_lon - min_lon
+    height = max_lat - min_lat
+    if width < 1e-6 or height < 1e-6:
+        return []
+    # Aim for ~36 bbox cells. Floor the step so a small county still gets a
+    # few points; cap it so a huge county stays near that count.
+    step = math.sqrt((width * height) / 36.0)
+    step = max(0.04, min(step, 0.28))
+    pts: list[tuple[float, float]] = []
+    y = min_lat + step * 0.5
+    while y < max_lat:
+        x = min_lon + step * 0.5
+        while x < max_lon:
+            if point_in_ring(x, y, outer) and not any(
+                point_in_ring(x, y, hole) for hole in holes if len(hole) >= 3
+            ):
+                pts.append((y, x))  # (lat, lon)
+            x += step
+        y += step
+    if len(pts) >= 4:
+        if len(pts) > 80:
+            stride = len(pts) / 80.0
+            pts = [pts[int(i * stride)] for i in range(80)]
+        return pts
+    # Island or sliver the grid missed: centroid stand-in is added by the caller.
+    return pts
+
+
+def bands_from_winds(winds: list[int]) -> list[WindBand]:
+    """Area fractions from per-sample peak sustained wind. Empty input → []."""
+    if not winds:
+        return []
+    counts = {cat: 0 for cat in (-1, 0, 1, 2, 3, 4, 5)}
+    peak = {cat: 0 for cat in counts}
+    for wind in winds:
+        cat = category_for_wind(wind) if wind >= TS_KT else -1
+        used = wind if cat >= 0 else 0
+        counts[cat] += 1
+        if used > peak[cat]:
+            peak[cat] = used
+    n = len(winds)
+    return [
+        WindBand(category=cat, area_fraction=counts[cat] / n, max_wind_kt=peak[cat])
+        for cat in (-1, 0, 1, 2, 3, 4, 5)
+        if counts[cat] > 0
+    ]
+
+
+def affected_fraction(bands: list[WindBand]) -> float:
+    return sum(b.area_fraction for b in bands if b.category >= 0)
+
+
+def include_county(bands: list[WindBand], max_wind_kt: int) -> bool:
+    if max_wind_kt >= 64:
+        return True
+    return affected_fraction(bands) >= MIN_AFFECTED_FRACTION
+
+
+def severity(bands: list[WindBand]) -> float:
+    """Sort key. Core area outranks a large tropical-storm skirt."""
+    weight = {-1: 0.0, 0: 1.0, 1: 4.0, 2: 10.0, 3: 25.0, 4: 50.0, 5: 80.0}
+    return sum(b.area_fraction * weight.get(b.category, 0.0) for b in bands)

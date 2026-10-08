@@ -66,6 +66,15 @@ export interface ImpactProgrammeContribution {
   locationCount: number;
 }
 
+export interface WindBand {
+  /** -1 clear (under 34 kt), 0 tropical storm, 1..5 Saffir-Simpson. */
+  category: number;
+  /** Share of the county polygon whose strongest local wind is in this band. */
+  areaFraction: number;
+  /** Strongest sample inside the band, knots. 0 for the clear share. */
+  maxWindKt: number;
+}
+
 export interface ImpactedCounty {
   geographyId: string;        // "US-FL-12086"
   geoid: string;              // "12086"
@@ -80,6 +89,8 @@ export interface ImpactedCounty {
   /** Provenance of the Rmax used at closest approach: IBTrACS recon
    * measurement or the Willoughby parametric fallback. */
   rmaxSource: "ibtracs" | "willoughby" | "nhc";
+  /** Local-wind slices. Loss is the sum of TIV × areaFraction × that category's damage ratio. */
+  windBands?: WindBand[];
   tiv: number;
   /** Informational split. The loss band uses tiv, not these fields. */
   residentialTiv?: number;

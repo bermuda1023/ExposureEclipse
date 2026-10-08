@@ -252,35 +252,38 @@ export function Methodology() {
         <SubHead>County capture</SubHead>
         <ul>
           <li>
-            A county is captured under a storm if its centroid falls inside
-            the interpolated R64 polygon at any fix along the track.
+            A county is listed when at least 1% of its area sees tropical-storm
+            wind, or when any sample is hurricane-force. The wind at each
+            sample is the peak that point felt: Vmax if the eyewall crossed
+            it, otherwise a profile pinned to Vmax at Rmax and 64 kt at the
+            directional R64, decaying through the tropical-storm skirt.
+            Between fixes the track is filled in so a 6-hour gap cannot skip
+            the core. The county is not stamped with the storm's peak just
+            because the centroid sits inside the outer field.
           </li>
           <li>
-            Minimum wind for the impact set is{" "}
-            <code>MIN_IMPACT_WIND_KT = 85 kt</code> (inside Cat 2). Below
-            that the storm's wind is treated as noise — the visual footprint
-            still draws down to TS strength but counties don't count as
-            impacted.
+            Each county comes back as area fractions: clear, tropical storm,
+            and Cat 1 through Cat 5. Those are the subsections under the
+            county name.
           </li>
           <li>
-            The visualization footprint spans the entire cyclone lifecycle
-            (including post-landfall while still ≥ Cat 1) so the user can
-            see how the field grew and shrank.
+            The visualization footprint still draws every hurricane-strength
+            fix (including post-landfall while the storm is at least Cat 1).
           </li>
         </ul>
         <SubHead>Loss modelling</SubHead>
         <ul>
           <li>
-            User-editable per-SSHWS-category damage-ratio inputs (mean +
-            SD) live in the <code>damageAssumptions</code> Zustand store.
-            Together they produce a probabilistic loss band per storm.
-            The band multiplies the bundled county TIV. Residential and
-            commercial figures on the same screen are information only.
+            Loss is the sum across those slices of county TIV × area fraction
+            × the damage ratio for that category. The ratios (mean and SD)
+            stay editable. Residential and commercial figures are information
+            only; the loss uses the bundled county TIV, spread evenly across
+            the polygon because the book is not location-level.
           </li>
           <li>
-            Per-county <b>exposed-fraction overrides</b>{" "}
-            (<code>countyOverrides</code>) let the underwriter override
-            partial-county exposure. Both stores persist to localStorage.
+            The per-county <b>scale</b> is an extra haircut on top of the
+            area split. 100% means use the slices as they are. It is not how
+            the outer fringe is removed — that is already in the slices.
           </li>
         </ul>
         <Sources>

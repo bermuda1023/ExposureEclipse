@@ -1,18 +1,13 @@
 """Hurricane wind-field impact analysis.
 
-Given a HURDAT2 storm, walk its on-land track points, compute the radius of
-maximum winds (Rmax) for each via the Willoughby et al. (2006) approximation,
-inflate to a "damaging-winds" radius (default 2.5× Rmax), and intersect that
-swath against US county centroids. Returns the impacted county set joined to
-the user's currently-selected portfolio TIV.
+Given a storm, walk its track and estimate the local sustained wind across
+each county, not just at the centroid. Sample points from the county polygon
+are scored with a profile pinned to Vmax at Rmax and 64 kt at the directional
+R64. The county comes back split into clear / tropical-storm / Cat 1–5 area
+fractions so a corner clip does not stamp the whole county with the storm's
+peak intensity.
 
-We use centroids rather than full polygon-in-radius because (a) it's >100×
-faster, (b) centroid-in-radius is a good approximation for ~50 km county
-diameters relative to ~50–200 km damaging-winds radii.
-
-County centroids are computed once per cold-start from the us-atlas
-topojson source (~3140 counties); the parser is self-contained here so this
-module has no dependency on `backend/scripts/build_geo.py`.
+County polygons are the us-atlas 10m topojson, fetched once per process.
 """
 
 from __future__ import annotations
@@ -26,6 +21,15 @@ from functools import lru_cache
 
 from ..brand import USER_AGENT
 from .hurdat2 import category_for_wind
+from .county_wind import (
+    WindBand,
+    bands_from_winds,
+    experienced_wind_kt,
+    include_county,
+    outer_radius_nm,
+    sample_polygon_rings,
+    severity,
+)
 from .ibtracs import (
     Storm,
     TrackPoint,
@@ -38,15 +42,14 @@ COUNTIES_TOPO_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json"
 FETCH_TIMEOUT_S = 30
 DAMAGING_WIND_MULTIPLIER = 2.5  # radius of damaging winds = multiplier × Rmax
 
-# Counties only count as impacted if exposed to at least this sustained wind
-# (knots). 85 kt sits inside Cat 2 — anything below is treated as noise.
+# Counties are listed from the area split (see county_wind.include_county),
+# not from this threshold. Kept so older callers still import it.
 MIN_IMPACT_WIND_KT = 85
 
 # The wind-footprint VISUALISATION (translucent buffer on the map) spans the
 # entire hurricane-strength lifecycle, including post-landfall track when the
-# storm is still ≥ Cat 1. Counties only show in the impact set above
-# MIN_IMPACT_WIND_KT, but the user wants to see how the wind field grew/shrank
-# across the whole hurricane life.
+# storm is still ≥ Cat 1. County loss uses the local wind at each sample,
+# not this gate.
 MIN_FOOTPRINT_WIND_KT = 64  # Saffir-Simpson Cat 1 threshold
 
 # Conterminous US + PR bounding box. Track points outside this never touch
@@ -81,7 +84,8 @@ class CountyMeta:
     centroid_lon: float
 
 
-# ─────────────────────────── topojson → centroids ───────────────────────────
+# geoid → (lat, lon) samples. Filled by county_centroids from the same download.
+_AREA_SAMPLES: dict[str, list[tuple[float, float]]] = {}
 
 
 def _decode_arcs(topology: dict) -> list[list[tuple[float, float]]]:
@@ -179,6 +183,7 @@ def county_centroids() -> dict[str, CountyMeta]:
     arcs = _decode_arcs(topo)
     obj = topo["objects"]["counties"]
     out: dict[str, CountyMeta] = {}
+    _AREA_SAMPLES.clear()
     for g in obj["geometries"]:
         if g.get("type") not in {"Polygon", "MultiPolygon"}:
             continue
@@ -192,6 +197,7 @@ def county_centroids() -> dict[str, CountyMeta]:
             continue
         lat, lon = c
         name = (g.get("properties") or {}).get("name", "")
+        _AREA_SAMPLES[geoid] = _samples_for_geom(g, arcs, (lat, lon))
         out[geoid] = CountyMeta(
             geoid=geoid,
             geography_id=f"US-{usps}-{geoid}",
@@ -201,6 +207,32 @@ def county_centroids() -> dict[str, CountyMeta]:
             centroid_lon=lon,
         )
     return out
+
+
+def county_area_samples() -> dict[str, list[tuple[float, float]]]:
+    """Sample points per county. Empty when centroids were stubbed in tests."""
+    county_centroids()
+    return _AREA_SAMPLES
+
+
+def _samples_for_geom(
+    geom: dict,
+    arcs: list,
+    centroid: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Grid samples inside the county. Always includes the centroid so a
+    sliver that the grid misses still has one point.
+    """
+    polys = [geom["arcs"]] if geom.get("type") == "Polygon" else list(geom.get("arcs") or [])
+    pts: list[tuple[float, float]] = []
+    for poly in polys:
+        rings = [_resolve_ring(r, arcs) for r in poly]
+        pts.extend(sample_polygon_rings(rings))
+    if not any(
+        abs(p[0] - centroid[0]) < 1e-4 and abs(p[1] - centroid[1]) < 1e-4 for p in pts
+    ):
+        pts.append(centroid)
+    return pts
 
 
 # ─────────────────────────── geometry helpers ───────────────────────────
@@ -278,8 +310,8 @@ class CountyImpact:
     state_usps: str
     centroid_lat: float
     centroid_lon: float
-    max_wind_kt: int          # strongest wind any nearby track-point carried
-    max_category: int          # Saffir-Simpson of max_wind_kt
+    max_wind_kt: int          # strongest LOCAL wind at any sample in the county
+    max_category: int          # Saffir-Simpson of that local wind
     closest_distance_nm: float  # closest approach of the storm's eye
     rmax_at_closest_nm: float   # the Rmax we used for that point
     rmax_source: str            # 'ibtracs' (recon) | 'willoughby' (formula)
@@ -289,9 +321,13 @@ class CountyImpact:
     # Informational split. Loss calcs use ``tiv``, which already bundles these.
     residential_tiv: float = 0.0
     commercial_tiv: float = 0.0
+    # Area of the county in each local-wind band. The peak storm intensity
+    # is NOT applied to the whole county. Empty when the caller built a
+    # centroid-only impact (tests).
+    wind_bands: list[WindBand] = None  # type: ignore[assignment]
     # Parametric damage ratio + projected ground-up loss for the user's
-    # in-scope TIV, computed from the county's max sustained wind. See
-    # services/damage_ratio.py for the curve.
+    # in-scope TIV. The router leaves these at 0; the UI applies the
+    # underwriter's per-category ratios to ``wind_bands``.
     damage_ratio: float = 0.0
     projected_loss: float = 0.0
     by_programme: list[ProgrammeContribution] = None  # type: ignore[assignment]
@@ -299,6 +335,8 @@ class CountyImpact:
     def __post_init__(self) -> None:
         if self.by_programme is None:
             self.by_programme = []
+        if self.wind_bands is None:
+            self.wind_bands = []
 
 
 @dataclass(slots=True, frozen=True)
@@ -515,21 +553,175 @@ def _build_cones(
     return inner, outer
 
 
+@dataclass
+class _Paint:
+    """Running local-wind samples for one county across the track."""
+
+    meta: CountyMeta
+    points: list[tuple[float, float]]
+    winds: list[int]
+    closest_nm: float = 1e9
+    rmax_nm: float = 0.0
+    rmax_source: str = ""
+
+
+def _paint_fix(
+    painted: dict[str, _Paint],
+    centroids: dict[str, CountyMeta],
+    samples: dict[str, list[tuple[float, float]]],
+    *,
+    eye_lat: float,
+    eye_lon: float,
+    vmax_kt: int,
+    rmax: float,
+    rmax_source: str,
+    r64_nm: float,
+    r64_quads: tuple[float, float, float, float] | None,
+) -> None:
+    """Raise the peak local wind at every sample this fix can still reach."""
+    outer = outer_radius_nm(vmax_kt, rmax, r64_quads, r64_nm)
+    # Pad so a county whose centroid is inland of a clipped coast still gets
+    # its edge samples scored.
+    reach = min(280.0, outer + 70.0)
+    if reach <= 0:
+        return
+    deg = reach / 50.0
+    lat_lo, lat_hi = eye_lat - deg, eye_lat + deg
+    lon_lo, lon_hi = eye_lon - deg, eye_lon + deg
+    for meta in centroids.values():
+        if not (lat_lo <= meta.centroid_lat <= lat_hi and lon_lo <= meta.centroid_lon <= lon_hi):
+            continue
+        d_cent = haversine_nm(eye_lat, eye_lon, meta.centroid_lat, meta.centroid_lon)
+        if d_cent > reach:
+            continue
+        acc = painted.get(meta.geoid)
+        if acc is None:
+            pts = samples.get(meta.geoid) or [(meta.centroid_lat, meta.centroid_lon)]
+            acc = _Paint(meta=meta, points=pts, winds=[0] * len(pts))
+            painted[meta.geoid] = acc
+        if d_cent < acc.closest_nm:
+            acc.closest_nm = d_cent
+            acc.rmax_nm = rmax
+            acc.rmax_source = rmax_source
+        for i, (lat, lon) in enumerate(acc.points):
+            d = haversine_nm(eye_lat, eye_lon, lat, lon)
+            if d > outer + 5.0:
+                continue
+            bearing = _bearing_deg(eye_lat, eye_lon, lat, lon)
+            r64_here = r64_at_bearing(r64_quads, bearing, fallback_nm=r64_nm)
+            wind = experienced_wind_kt(d, vmax_kt, rmax, r64_here)
+            if wind > acc.winds[i]:
+                acc.winds[i] = wind
+
+
+def _impacts_from_paint(painted: dict[str, _Paint]) -> list[CountyImpact]:
+    impacts: list[CountyImpact] = []
+    for acc in painted.values():
+        bands = bands_from_winds(acc.winds)
+        peak = max(acc.winds) if acc.winds else 0
+        if not include_county(bands, peak):
+            continue
+        impacts.append(
+            CountyImpact(
+                geoid=acc.meta.geoid,
+                geography_id=acc.meta.geography_id,
+                name=acc.meta.name,
+                state_usps=acc.meta.state_usps,
+                centroid_lat=acc.meta.centroid_lat,
+                centroid_lon=acc.meta.centroid_lon,
+                max_wind_kt=peak,
+                max_category=category_for_wind(peak) if peak >= 34 else -1,
+                closest_distance_nm=acc.closest_nm if acc.closest_nm < 1e8 else 0.0,
+                rmax_at_closest_nm=acc.rmax_nm,
+                rmax_source=acc.rmax_source,
+                tiv=0.0,
+                location_count=0,
+                has_data=False,
+                wind_bands=bands,
+            )
+        )
+    impacts.sort(key=lambda i: (-severity(i.wind_bands), -i.max_wind_kt))
+    return impacts
+
+
+@dataclass
+class _Stamp:
+    """One position along the track that paints county samples."""
+
+    lat: float
+    lon: float
+    vmax_kt: int
+    rmax: float
+    rmax_source: str
+    r64_nm: float
+    r64_quads: tuple[float, float, float, float] | None
+
+
+def _densify_track(stamps: list[_Stamp], step_nm: float = 12.0) -> list[_Stamp]:
+    """Fill gaps between 6-hour fixes so the eyewall swath is continuous.
+
+    A point the eye crosses between two fixes would otherwise be scored at
+    whichever vertex is closer, and a 15 nm Rmax can miss it entirely.
+    The drawn footprint stays on the original fixes.
+    """
+    if len(stamps) < 2:
+        return list(stamps)
+    out: list[_Stamp] = [stamps[0]]
+    for a, b in zip(stamps, stamps[1:]):
+        dist = haversine_nm(a.lat, a.lon, b.lat, b.lon)
+        n = int(dist // step_nm) if step_nm > 0 else 0
+        if dist > 300 or n < 2:
+            out.append(b)
+            continue
+        for i in range(1, n):
+            t = i / n
+            if a.r64_quads is not None and b.r64_quads is not None:
+                quads: tuple[float, float, float, float] | None = (
+                    a.r64_quads[0] * (1 - t) + b.r64_quads[0] * t,
+                    a.r64_quads[1] * (1 - t) + b.r64_quads[1] * t,
+                    a.r64_quads[2] * (1 - t) + b.r64_quads[2] * t,
+                    a.r64_quads[3] * (1 - t) + b.r64_quads[3] * t,
+                )
+            else:
+                quads = a.r64_quads if t < 0.5 else b.r64_quads
+            out.append(
+                _Stamp(
+                    lat=a.lat + (b.lat - a.lat) * t,
+                    lon=a.lon + (b.lon - a.lon) * t,
+                    vmax_kt=int(round(a.vmax_kt + (b.vmax_kt - a.vmax_kt) * t)),
+                    rmax=a.rmax + (b.rmax - a.rmax) * t,
+                    rmax_source=a.rmax_source if t < 0.5 else b.rmax_source,
+                    r64_nm=a.r64_nm + (b.r64_nm - a.r64_nm) * t,
+                    r64_quads=quads,
+                )
+            )
+        out.append(b)
+    return out
+
+
 def compute_impact(
     storm: Storm,
     *,
     multiplier: float = DAMAGING_WIND_MULTIPLIER,
-) -> tuple[list[CountyImpact], list[FootprintPoint], list[ConeQuad], list[ConeQuad]]:
-    """Walk the storm's track and return every US county whose centroid falls
-    within ``multiplier × Rmax`` of any on-land point, plus the list of
-    contributing footprint points (one per >=85kt track fix in the US bbox).
+) -> tuple[
+    list[CountyImpact],
+    list[FootprintPoint],
+    list[ConeQuad],
+    list[ConeQuad],
+    list[dict],
+]:
+    """Walk the storm and return counties that actually sit in its wind field.
 
-    Returned counties carry NO TIV yet — that's joined in by the router from
-    the user's current selection.
+    Each county is split by the local wind at sample points across its
+    polygon (core, hurricane fringe, tropical-storm skirt, untouched).
+    The map footprint is unchanged: it still draws every hurricane-strength
+    fix. Returned counties carry no TIV yet.
     """
     centroids = county_centroids()
-    impacts: dict[str, CountyImpact] = {}
+    samples = county_area_samples()
+    painted: dict[str, _Paint] = {}
     footprint: list[FootprintPoint] = []
+    stamps: list[_Stamp] = []
 
     for pt in storm.track:
         if not _within_us_bbox(pt):
@@ -594,60 +786,36 @@ def compute_impact(
                 r64_quads_nm=measured_quads,
             )
         )
-        # County membership: only the more intense subset triggers a county hit.
-        # The weaker hurricane points still appear in the visible footprint so
-        # the user can see the full hurricane lifecycle.
-        if pt.wind_kt < MIN_IMPACT_WIND_KT:
-            continue
-        # Bounding-box pre-filter uses the max possible R64 (any quadrant) so
-        # we never miss a county in the storm's strongest direction.
-        max_quad_r = (
-            max(measured_quads) if measured_quads else r64
-        )
-        deg = max_quad_r / 50.0  # over-generous so we never miss border counties
-        lat_lo, lat_hi = pt.lat - deg, pt.lat + deg
-        lon_lo, lon_hi = pt.lon - deg, pt.lon + deg
-        for c in centroids.values():
-            if not (lat_lo <= c.centroid_lat <= lat_hi and lon_lo <= c.centroid_lon <= lon_hi):
-                continue
-            d = haversine_nm(pt.lat, pt.lon, c.centroid_lat, c.centroid_lon)
-            # Asymmetric capture: the threshold is R64 in the direction OF
-            # the county. If the storm's wind field doesn't reach hurricane
-            # strength in that direction, the county isn't captured even
-            # when it's inside the storm's average R64.
-            bearing_to_county = _bearing_deg(pt.lat, pt.lon, c.centroid_lat, c.centroid_lon)
-            capture_radius = r64_at_bearing(
-                measured_quads, bearing_to_county, fallback_nm=r64
+        stamps.append(
+            _Stamp(
+                lat=pt.lat,
+                lon=pt.lon,
+                vmax_kt=pt.wind_kt,
+                rmax=rmax,
+                rmax_source=rmax_src,
+                r64_nm=r64,
+                r64_quads=measured_quads,
             )
-            if d > capture_radius:
-                continue
-            existing = impacts.get(c.geoid)
-            if existing is None:
-                impacts[c.geoid] = CountyImpact(
-                    geoid=c.geoid,
-                    geography_id=c.geography_id,
-                    name=c.name,
-                    state_usps=c.state_usps,
-                    centroid_lat=c.centroid_lat,
-                    centroid_lon=c.centroid_lon,
-                    max_wind_kt=pt.wind_kt,
-                    max_category=category_for_wind(pt.wind_kt),
-                    closest_distance_nm=d,
-                    rmax_at_closest_nm=rmax,
-                    rmax_source=rmax_src,
-                    tiv=0.0,
-                    location_count=0,
-                    has_data=False,
-                )
-            else:
-                if pt.wind_kt > existing.max_wind_kt:
-                    existing.max_wind_kt = pt.wind_kt
-                    existing.max_category = category_for_wind(pt.wind_kt)
-                if d < existing.closest_distance_nm:
-                    existing.closest_distance_nm = d
-                    existing.rmax_at_closest_nm = rmax
-                    existing.rmax_source = rmax_src
+        )
 
+    # Score the swath, not just the 6-hour vertices. A corner of a county can
+    # sit in the tropical-storm skirt of a compact major while the centroid
+    # never sees the storm's peak.
+    for stamp in _densify_track(stamps):
+        _paint_fix(
+            painted,
+            centroids,
+            samples,
+            eye_lat=stamp.lat,
+            eye_lon=stamp.lon,
+            vmax_kt=stamp.vmax_kt,
+            rmax=stamp.rmax,
+            rmax_source=stamp.rmax_source,
+            r64_nm=stamp.r64_nm,
+            r64_quads=stamp.r64_quads,
+        )
+
+    impacts = _impacts_from_paint(painted)
     inner_cone, outer_cone = _build_cones(footprint)
     # Asymmetric "egg" polygons around each footprint point — the caps that
     # blend with the asymmetric cone quads into a seamless wind field.
@@ -663,7 +831,7 @@ def compute_impact(
             }
         )
     return (
-        sorted(impacts.values(), key=lambda i: -i.max_wind_kt),
+        impacts,
         footprint,
         inner_cone,
         outer_cone,

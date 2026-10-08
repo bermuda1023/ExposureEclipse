@@ -8,12 +8,13 @@
 import { useMemo, useState } from "react";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
-  applyAssumption,
+  applyWindBands,
   useDamageAssumptionsStore,
 } from "../../state/damageAssumptions";
 import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
-import { SAFFIR_SIMPSON_COLORS, SAFFIR_SIMPSON_LABEL } from "./hurricaneColors";
+import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
+import { CountyWindSlices } from "./CountyWindSlices";
 import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
 
 export function HurricaneImpactPanel() {
@@ -41,7 +42,7 @@ export function HurricaneImpactPanel() {
     for (const c of data.counties) {
       if (!c.hasData) continue;
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
-      const b = applyAssumption(c.tiv * exp, c.maxWindKt, byCategory);
+      const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt);
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high };
@@ -233,7 +234,7 @@ export function HurricaneImpactPanel() {
                 marginTop: 2,
               }}
             >
-              Per-county breakdown (top by wind)
+              Per-county breakdown (core first)
             </div>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.74rem" }}>
               <thead>
@@ -244,7 +245,7 @@ export function HurricaneImpactPanel() {
                 </tr>
               </thead>
               <tbody>
-                {data.counties.slice(0, 60).map((c) => (
+                {data.counties.slice(0, 80).map((c) => (
                   <tr
                     key={c.geographyId}
                     style={{
@@ -259,6 +260,14 @@ export function HurricaneImpactPanel() {
                       <div style={{ fontSize: "0.66rem", color: "var(--ink-500)" }}>
                         eye {c.closestDistanceNm.toFixed(1)} nm · Rmax {c.rmaxAtClosestNm.toFixed(0)} nm
                       </div>
+                      <CountyWindSlices
+                        bands={c.windBands}
+                        tiv={c.tiv}
+                        scale={stormOverrides[c.geoid]?.exposedFraction ?? 1.0}
+                        byCategory={byCategory}
+                        currency={data.currency}
+                        compact
+                      />
                     </td>
                     <td style={{ ...td, textAlign: "center" }}>
                       <span
@@ -272,7 +281,7 @@ export function HurricaneImpactPanel() {
                           fontSize: "0.66rem",
                           whiteSpace: "nowrap",
                         }}
-                        title={SAFFIR_SIMPSON_LABEL[c.maxCategory] ?? ""}
+                        title="Strongest wind anywhere in the county, not the storm peak. The line under the name is the rest of the county."
                       >
                         {c.maxWindKt} kt
                       </span>
@@ -286,7 +295,7 @@ export function HurricaneImpactPanel() {
                       )}
                       {c.hasData && (() => {
                         const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
-                        const b = applyAssumption(c.tiv * exp, c.maxWindKt, byCategory);
+                        const b = applyWindBands(c.tiv, c.windBands, exp, byCategory, c.maxWindKt);
                         return (
                           <>
                             <div
@@ -302,7 +311,7 @@ export function HurricaneImpactPanel() {
                             </div>
                             {exp !== 1.0 && (
                               <div style={{ fontSize: "0.56rem", color: "#7d5400" }}>
-                                exposed {Math.round(exp * 100)}%
+                                scale {Math.round(exp * 100)}%
                               </div>
                             )}
                           </>
@@ -317,9 +326,9 @@ export function HurricaneImpactPanel() {
                 ))}
               </tbody>
             </table>
-            {data.counties.length > 60 && (
+            {data.counties.length > 80 && (
               <div style={{ fontSize: "0.7rem", color: "var(--ink-500)" }}>
-                Showing top 60 of {data.counties.length} impacted counties.
+                Showing top 80 of {data.counties.length} impacted counties.
               </div>
             )}
           </>
