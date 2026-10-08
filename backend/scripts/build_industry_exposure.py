@@ -43,6 +43,10 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT_FACTS = ROOT / "mockdata" / "exposure_facts" / "ds-industry-ws.json"
 OUT_CSV = ROOT / "mockdata" / "industry_exposure_counties.csv"
 OUT_SUMMARY = ROOT / "mockdata" / "industry_exposure_summary.json"
+OUT_IED = ROOT / "mockdata" / "ied_industry.csv"
+# Miami-Dade stays out of the county denominator so the missing-IED warning
+# still has a live example. State and country rows keep it.
+IED_COUNTY_GAP = {"US-FL-12086"}
 
 USER_AGENT = "PerilVista/1.0 (industry exposure build)"
 ACS_YEAR = 2023
@@ -628,6 +632,46 @@ def sum_buckets(buckets: list[dict[str, int]]) -> dict[str, int]:
     return out
 
 
+def write_ied(csv_rows: list[dict]) -> None:
+    """Market-share denominator. Same dollars as the Industry client."""
+    state_res: dict[str, int] = defaultdict(int)
+    state_com: dict[str, int] = defaultdict(int)
+    country_res = 0
+    country_com = 0
+    county_out: list[tuple[str, str, int]] = []
+    for row in csv_rows:
+        gid = row["geographyId"]
+        res = int(row["residentialTiv"])
+        com = int(row["commercialTiv"])
+        state = row["state"]
+        state_res[state] += res
+        state_com[state] += com
+        country_res += res
+        country_com += com
+        if gid not in IED_COUNTY_GAP:
+            county_out.append((gid, "RESIDENTIAL", res))
+            county_out.append((gid, "COMMERCIAL", com))
+
+    lines = [
+        "# Industry TIV proxy for client market share. Same book as the Industry client.",
+        "# Not an RMS or AIR industry database. Built from Census housing and CBECS floorspace.",
+        "# US-FL-12086 is omitted on purpose. State and country rows still include it.",
+        "geographyLevel,geographyId,occupancySegment,industryTIV,currency,sourceYear",
+    ]
+    def emit(level: str, gid: str, segment: str, tiv: int) -> None:
+        lines.append(f"{level},{gid},{segment},{tiv},USD,2026")
+
+    emit("COUNTRY", "US", "RESIDENTIAL", country_res)
+    emit("COUNTRY", "US", "COMMERCIAL", country_com)
+    for state in sorted(state_res):
+        emit("STATE", f"US-{state}", "RESIDENTIAL", state_res[state])
+        emit("STATE", f"US-{state}", "COMMERCIAL", state_com[state])
+    for gid, segment, tiv in county_out:
+        emit("COUNTY", gid, segment, tiv)
+    OUT_IED.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Wrote {OUT_IED} ({len(lines) - 4} rows)")
+
+
 def main() -> None:
     acs = load_acs()
     names = load_names()
@@ -820,6 +864,7 @@ def main() -> None:
         ),
     }
     OUT_SUMMARY.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    write_ied(csv_rows)
     print(f"Wrote {OUT_FACTS} ({OUT_FACTS.stat().st_size / 1_000_000:.1f} MB)")
     print(f"Wrote {OUT_CSV}")
     print(f"Wrote {OUT_SUMMARY}")

@@ -24,12 +24,15 @@ interface ViewState {
   yoyMode: boolean;
   /** Top-of-page peril multi-select. Empty = all perils. */
   perils: Peril[];
+  /** Bumped when the user opens the Industry client, so the map drops to counties. */
+  countyFocusToken: number;
   setAggregationLevel: (level: Level) => void;
   setMetric: (metric: Metric) => void;
   setSelectedGeographyId: (id: string | null) => void;
   setYoyMode: (yoyMode: boolean) => void;
   setPerils: (perils: Peril[]) => void;
   togglePeril: (peril: Peril) => void;
+  focusCounties: () => void;
 }
 
 export const useViewStore = create<ViewState>((set, get) => ({
@@ -38,6 +41,7 @@ export const useViewStore = create<ViewState>((set, get) => ({
   selectedGeographyId: null,
   yoyMode: false,
   perils: [],
+  countyFocusToken: 0,
   setAggregationLevel: (level) => set({ aggregationLevel: level, selectedGeographyId: null }),
   setMetric: (metric) => set({ metric }),
   setSelectedGeographyId: (id) => set({ selectedGeographyId: id }),
@@ -51,4 +55,10 @@ export const useViewStore = create<ViewState>((set, get) => ({
         : [...current, peril],
     });
   },
+  focusCounties: () =>
+    set((state) => ({
+      countyFocusToken: state.countyFocusToken + 1,
+      aggregationLevel: AggregationLevel.COUNTY,
+      selectedGeographyId: null,
+    })),
 }));

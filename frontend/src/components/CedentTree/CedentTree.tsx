@@ -16,6 +16,7 @@
 import { useMemo, useState } from "react";
 import { useCedents, useProgrammeStatus } from "../../api/hooks";
 import { useSelectionStore } from "../../state/selection";
+import { useViewStore } from "../../state/view";
 import { useScopeFiltersStore } from "../../state/scopeFilters";
 import type { Cedent, Programme, ProgrammeChain } from "../../api/cedents";
 import { ErtBadge } from "./ErtBadge";
@@ -157,6 +158,14 @@ export function CedentTree() {
       });
   }, [data, search, offices, regions, underwriters]);
 
+  const ordered = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      if (a.cedentId === "ced-industry") return -1;
+      if (b.cedentId === "ced-industry") return 1;
+      return a.cedentName.localeCompare(b.cedentName);
+    });
+  }, [filtered]);
+
   return (
     <aside
       style={{
@@ -178,7 +187,7 @@ export function CedentTree() {
           color: "var(--ink-500)",
         }}
       >
-        Cedents
+        Clients
       </h2>
 
       <div style={{ display: "grid", gap: 6, fontSize: "0.72rem", color: "var(--ink-600)" }}>
@@ -251,15 +260,15 @@ export function CedentTree() {
       {data && (
         <>
           <div style={{ fontSize: "0.7rem", color: "var(--ink-500)" }}>
-            {filtered.length} / {data.cedents.length} cedents
+            {ordered.length} / {data.cedents.length} clients
           </div>
           <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 10 }}>
-            {filtered.map((c) => (
+            {ordered.map((c) => (
               <CedentItem key={c.cedentId} cedent={c} />
             ))}
-            {filtered.length === 0 && (
+            {ordered.length === 0 && (
               <li style={{ color: "var(--ink-500)", fontSize: "0.78rem" }}>
-                No cedents match these filters.
+                No clients match these filters.
               </li>
             )}
           </ul>
@@ -272,7 +281,9 @@ export function CedentTree() {
 function CedentItem({ cedent }: { cedent: Cedent }) {
   const selectedCedent = useSelectionStore((s) => s.cedentId);
   const selectCedent = useSelectionStore((s) => s.selectCedent);
+  const focusCounties = useViewStore((s) => s.focusCounties);
   const isSelected = selectedCedent === cedent.cedentId;
+  const isIndustry = cedent.cedentId === "ced-industry";
   const offices = useMemo(() => groupByOffice(cedent.chains), [cedent.chains]);
 
   return (
@@ -289,9 +300,19 @@ function CedentItem({ cedent }: { cedent: Cedent }) {
     >
       <button
         type="button"
-        onClick={() => selectCedent(isSelected ? null : cedent.cedentId)}
+        onClick={() => {
+          const next = isSelected ? null : cedent.cedentId;
+          selectCedent(next);
+          if (next === "ced-industry") focusCounties();
+        }}
         style={{ all: "unset", cursor: "pointer", display: "grid", gap: 2, padding: 2 }}
-        title={isSelected ? "Deselect cedent" : "Select cedent — unions all offices and chains"}
+        title={
+          isIndustry
+            ? "Industry client — US property TIV by county"
+            : isSelected
+              ? "Deselect client"
+              : "Select client — unions all offices and chains"
+        }
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
           <strong style={{ fontSize: "0.85rem", color: "var(--ink-900)" }}>
@@ -318,6 +339,11 @@ function CedentItem({ cedent }: { cedent: Cedent }) {
             }}
           >
             {cedent.region}
+          </span>
+        )}
+        {isIndustry && (
+          <span style={{ fontSize: "0.68rem", color: "var(--ink-500)", lineHeight: 1.35 }}>
+            US property TIV by county. Residential and commercial add to one total.
           </span>
         )}
       </button>

@@ -150,7 +150,9 @@ export function Methodology() {
             industrial buildings out, and that industrial piece is included
             in commercial. The national result is about $33 trillion
             residential and about $45 trillion commercial, in early 2026
-            dollars. Rebuild it with{" "}
+            dollars. Client market share uses this same book. Miami-Dade
+            is left off the county denominator so a missing industry
+            number still warns. Rebuild it with{" "}
             <code>backend/scripts/build_industry_exposure.py</code>.
           </li>
         </ul>

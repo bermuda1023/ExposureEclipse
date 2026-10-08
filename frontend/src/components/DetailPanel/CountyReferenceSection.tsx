@@ -21,6 +21,9 @@ export interface CountyReference {
   coastalExposurePct: number;
   source: "curated" | "synthetic";
   currency: string;
+  industryResidentialTiv?: number | null;
+  industryCommercialTiv?: number | null;
+  industryTiv?: number | null;
 }
 
 const fetchReference = (geographyId: string) =>
@@ -55,7 +58,7 @@ export function CountyReferenceSection({
     >
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h4 style={{ margin: "0 0 6px", fontSize: "0.78rem", color: "#333" }}>
-          County reference (industry baseline)
+          County reference
         </h4>
         {data && (
           <span style={{ fontSize: "0.62rem", color: "#888" }}>
@@ -83,16 +86,25 @@ export function CountyReferenceSection({
           <Row
             label="Avg insured value (home)"
             value={formatMoneyCompact(data.avgInsuredValue, data.currency)}
-            tip="Replacement cost × 0.85 typical limit factor."
+            tip="Per-home sense check only. It is not the Industry client."
           />
-          <Row
-            label="Industry housing TIV (est.)"
-            value={formatMoneyCompact(
-              data.avgInsuredValue * data.households,
-              data.currency,
-            )}
-            tip="avg insured value × households — back-of-envelope industry residential TIV in this county."
-          />
+          {data.industryTiv != null && (
+            <>
+              <Row
+                label="Industry TIV"
+                value={formatMoneyCompact(data.industryTiv, data.currency)}
+                tip="Bundled residential plus commercial from the Industry client. Census housing and build-cost proxy, not RMS or AIR."
+              />
+              <Row
+                label="Residential"
+                value={formatMoneyCompact(data.industryResidentialTiv ?? 0, data.currency)}
+              />
+              <Row
+                label="Commercial"
+                value={formatMoneyCompact(data.industryCommercialTiv ?? 0, data.currency)}
+              />
+            </>
+          )}
           {data.coastalExposurePct > 0 && (
             <Row
               label="Coastal housing share"

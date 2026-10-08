@@ -97,9 +97,12 @@ drift surfaces on first request for that EDM, not necessarily at process start.
 `mockdata/ied_industry.csv` — columns:
 `geographyLevel,geographyId,occupancySegment,industryTIV,currency,sourceYear`
 
-The file is hand-tuned to include realistic state-level totals plus
-intentional gaps (e.g. `US-FL-12086` omitted) to keep the
-`WARN_IED_DENOMINATOR_MISSING` scenario live.
+The rows are the Industry client book (`ds-industry-ws`), written by
+`backend/scripts/build_industry_exposure.py`. Country totals are about
+$33 trillion residential and $45 trillion commercial. State rows roll up
+from the counties. `US-FL-12086` (Miami-Dade) is omitted at county grain
+so `WARN_IED_DENOMINATOR_MISSING` still fires. State and country rows
+include that county. This is a census and build-cost proxy, not RMS or AIR.
 
 ## Treaty metadata + EDM linkage
 

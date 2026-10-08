@@ -109,7 +109,11 @@ export function Shell() {
   const mapQuery = useMapData(mapRequest);
   const featureWarnings = mapQuery.data?.features.flatMap((f) => f.warnings) ?? [];
   const allWarnings = [...(mapQuery.data?.warnings ?? []), ...featureWarnings];
+  const cedentId = useSelectionStore((s) => s.cedentId);
   const hasSelection = true; // portfolio mode is always a valid view
+  useEffect(() => {
+    if (cedentId === "ced-industry") setPivotOpen(true);
+  }, [cedentId]);
 
   // Anything the user actively navigated to (a clicked geography or a
   // pushed hurricane-impact view) counts as detail content worth peeking
@@ -129,7 +133,7 @@ export function Shell() {
       <Header />
       <div style={{ display: "flex", minHeight: 0, minWidth: 0 }}>
         {!leftOpen && (
-          <CollapsedSidebar side="left" onOpen={() => setLeftOpen(true)} label="Cedents" />
+          <CollapsedSidebar side="left" onOpen={() => setLeftOpen(true)} label="Clients" />
         )}
 
         <PanelGroup

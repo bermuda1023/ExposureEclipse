@@ -6,7 +6,7 @@
  * computed at that grain (CONTRACTS.md §13).
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePivotData } from "../../api/hooks";
 import { useFiltersStore } from "../../state/filters";
 import { useSelectionStore } from "../../state/selection";
@@ -29,6 +29,7 @@ const DIMENSIONS = [
   AggregationLevel.CRESTA,
   "PERIL",
   "OCCUPANCY",
+  "OCCUPANCY_SEGMENT",
   "CONSTRUCTION",
   "DISTANCE_TO_COAST",
   "GEOCODING",
@@ -64,6 +65,7 @@ const MONEY_MEASURES: ReadonlySet<MeasureType> = new Set([
 
 export function Pivot() {
   const scope = useEffectiveScope();
+  const cedentId = useSelectionStore((s) => s.cedentId);
   const comparisonProgrammeId = useSelectionStore((s) => s.comparisonProgrammeId);
   const perils = useViewStore((s) => s.perils);
   const filters = useFiltersStore();
@@ -71,6 +73,13 @@ export function Pivot() {
   const [rows, setRows] = useState<string[]>([AggregationLevel.STATE]);
   const [columns, setColumns] = useState<string[]>(["PERIL"]);
   const [measures, setMeasures] = useState<MeasureType[]>([Measure.TIV, Measure.LOCATION_COUNT]);
+
+  useEffect(() => {
+    if (cedentId !== "ced-industry") return;
+    setRows([AggregationLevel.STATE, AggregationLevel.COUNTY]);
+    setColumns(["OCCUPANCY_SEGMENT"]);
+    setMeasures([Measure.TIV]);
+  }, [cedentId]);
 
   // Pivot fires for any scope the map fires for, including portfolio mode.
   const request = useMemo<PivotRequest | null>(() => {
@@ -152,6 +161,22 @@ export function Pivot() {
     return m;
   }, [data]);
 
+  const sortedRowKeys = useMemo(() => {
+    const score = (rk: string[]) => {
+      let total = 0;
+      for (const ck of colKeys) {
+        const values = cellMap.get(`${JSON.stringify(rk)}|${JSON.stringify(ck)}`);
+        for (const measure of measures) {
+          if (!MONEY_MEASURES.has(measure)) continue;
+          const raw = values?.[measure];
+          if (typeof raw === "number") total += raw;
+        }
+      }
+      return total;
+    };
+    return [...rowKeys].sort((a, b) => score(b) - score(a) || a.join().localeCompare(b.join()));
+  }, [rowKeys, colKeys, cellMap, measures]);
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
@@ -162,6 +187,12 @@ export function Pivot() {
       <p style={{ margin: 0, fontSize: "0.72rem", color: "#666" }}>
         View grain (CONTRACTS.md §13) = <code>{[...rows, ...columns].join(" × ")}</code> · max-
         across-perils for groups is computed at this grain.
+        {cedentId === "ced-industry" && (
+          <>
+            {" "}
+            Industry client: county TIV. Residential and commercial are separate columns and add to the county total.
+          </>
+        )}
       </p>
       {!request && (
         <p style={{ color: "#666", fontSize: "0.85rem" }}>
@@ -214,7 +245,7 @@ export function Pivot() {
               </tr>
             </thead>
             <tbody>
-              {rowKeys.map((rk) => (
+              {sortedRowKeys.map((rk) => (
                 <tr key={JSON.stringify(rk)} style={{ borderTop: "1px solid #f3f3f3" }}>
                   {rk.map((part, i) => (
                     <td key={i} style={body}>

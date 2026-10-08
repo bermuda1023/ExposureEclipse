@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ..services.county_reference import get_reference_by_geography_id
+from ..services.industry_book import county_industry_tiv
 
 router = APIRouter(prefix="/counties", tags=["counties"])
 
@@ -29,6 +30,7 @@ def county_reference(geography_id: str) -> dict:
                 "details": {"geographyId": geography_id},
             },
         )
+    book = county_industry_tiv(geography_id)
     return {
         "geoid": ref.geoid,
         "state": ref.state_usps,
@@ -39,4 +41,9 @@ def county_reference(geography_id: str) -> dict:
         "coastalExposurePct": ref.coastal_exposure_pct,
         "source": ref.source,
         "currency": "USD",
+        # Same dollars as the Industry client. Null only if the county is
+        # outside the US book. Not an RMS or AIR extract.
+        "industryResidentialTiv": None if book is None else book[0],
+        "industryCommercialTiv": None if book is None else book[1],
+        "industryTiv": None if book is None else book[2],
     }

@@ -99,6 +99,7 @@ export function MapView({ data, isLoading, error }: Props) {
   const setLevel = useViewStore((s) => s.setAggregationLevel);
   const setSelected = useViewStore((s) => s.setSelectedGeographyId);
   const selected = useViewStore((s) => s.selectedGeographyId);
+  const countyFocusToken = useViewStore((s) => s.countyFocusToken);
   const aggregationLevel = useViewStore((s) => s.aggregationLevel);
   const metric = useViewStore((s) => s.metric);
   const yoyMode = useViewStore((s) => s.yoyMode);
@@ -378,6 +379,16 @@ export function MapView({ data, isLoading, error }: Props) {
       cancelAnimationFrame(frame);
     };
   }, [setLevel, hasToken]);
+
+  // Industry client asks for county grain even if the map is still at country zoom.
+  useEffect(() => {
+    if (!countyFocusToken) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (map.getZoom() < COUNTY_THRESHOLD) {
+      map.easeTo({ zoom: COUNTY_THRESHOLD + 0.2, duration: 700 });
+    }
+  }, [countyFocusToken, mapInstance]);
 
   // ── Hover + click handlers ──
   useEffect(() => {

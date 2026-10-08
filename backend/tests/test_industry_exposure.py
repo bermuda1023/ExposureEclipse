@@ -295,6 +295,86 @@ def test_join_tiv_bundles_segments_and_ignores_state_rows() -> None:
     assert impact.by_programme[0].tiv == residential + commercial
 
 
+def test_ied_denominator_matches_industry_book_and_stays_sane(
+    provider: MockExposureDataProvider,
+) -> None:
+    """Market share uses the Industry client, not the old trillion-scale fixture."""
+    summary = json.loads(
+        (Path(get_settings().mock_data_dir) / "industry_exposure_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ied = provider.get_ied_industry()
+
+    def total(level: str, gid: str, segment: str | None = None) -> float:
+        matched = [
+            row.industry_tiv
+            for row in ied
+            if _value(row.geography_level) == level
+            and row.geography_id == gid
+            and (segment is None or _value(row.occupancy_segment) == segment)
+        ]
+        assert matched, f"missing IED {level} {gid} {segment}"
+        return sum(matched)
+
+    assert total("COUNTRY", "US", "RESIDENTIAL") == summary["residentialTiv"]
+    assert total("COUNTRY", "US", "COMMERCIAL") == summary["commercialTiv"]
+    assert total("COUNTRY", "US") == summary["totalTiv"]
+    # No UNKNOWN row. Summing every segment must not double-count the country.
+    assert {_value(row.occupancy_segment) for row in ied} == {"RESIDENTIAL", "COMMERCIAL"}
+
+    facts = provider.get_facts_for_dataset("ds-industry-ws")
+    fl_facts = [
+        fact.tiv
+        for fact in facts
+        if _value(fact.aggregation) == AggregationLevel.COUNTY.value and fact.statecode == "FL"
+    ]
+    assert round(total("STATE", "US-FL"), 2) == round(sum(fl_facts), 2)
+    assert total("STATE", "US-AK", "RESIDENTIAL") < 500e9
+    assert total("STATE", "US-CA", "RESIDENTIAL") < 15e12
+
+    county_ids = {
+        row.geography_id
+        for row in ied
+        if _value(row.geography_level) == AggregationLevel.COUNTY.value
+    }
+    assert "US-FL-12086" not in county_ids
+    assert "US-FL-12011" in county_ids
+    assert total("COUNTY", "US-AL-01001") < 50e9
+
+
+def test_county_reference_reports_industry_book_tiv() -> None:
+    ref = client.get("/api/counties/US-FL-12086/reference")
+    assert ref.status_code == 200, ref.text
+    body = ref.json()
+    assert body["industryResidentialTiv"] > 100e9
+    assert body["industryCommercialTiv"] > 100e9
+    assert body["industryTiv"] == body["industryResidentialTiv"] + body["industryCommercialTiv"]
+
+
+def test_industry_pivot_is_tiv_by_county() -> None:
+    pivoted = client.post(
+        "/api/exposures/pivot",
+        json={
+            "cedentId": "ced-industry",
+            "rows": ["STATE", "COUNTY"],
+            "columns": ["OCCUPANCY_SEGMENT"],
+            "measures": ["TIV"],
+        },
+    )
+    assert pivoted.status_code == 200, pivoted.text
+    cells = pivoted.json()["cells"]
+    miami = [
+        cell
+        for cell in cells
+        if cell["rowKey"][0] == "FL" and cell["rowKey"][1] == "Miami-Dade, FL"
+    ]
+    assert {cell["colKey"][0] for cell in miami} == {"RESIDENTIAL", "COMMERCIAL"}
+    bundled = sum(cell["values"]["TIV"] for cell in miami)
+    assert bundled > 400e9
+    assert pivoted.json()["grandTotal"]["TIV"] > 70e12
+
+
 def test_join_tiv_on_industry_county_matches_both_segments(
     provider: MockExposureDataProvider,
 ) -> None:
