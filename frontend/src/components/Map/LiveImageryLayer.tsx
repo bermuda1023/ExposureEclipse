@@ -8,8 +8,9 @@
  * or the map center when no storm is selected.
  *
  * The hour loop cannot be a video. Those birds photograph about every
- * 10 minutes (Meteosat about hourly). Playback fades forward through the
- * real scans, then cuts back to the oldest and starts again.
+ * 10 minutes (Meteosat about hourly). The next scan is drawn while the
+ * current one stays fully opaque, then it fades in. Playback runs
+ * forward and cuts back to the oldest scan.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -59,9 +60,11 @@ const PRODUCTS_URL = "https://realearth.ssec.wisc.edu/api/products";
 const LOOP_FADE_MS = 1300;
 const LOOP_FEW_FADE_MS = 1800;
 /** Do not freeze the reel if a tile is slow. The fade still starts. */
-const LOOP_PRELOAD_MS = 900;
+const LOOP_PRELOAD_MS = 1600;
 
 const placed = new Map<string, string>();
+/** Layers whose opacity is owned by the loop, not by Mapbox's 300ms default. */
+const opacityPinned = new Set<string>();
 let providerReady = false;
 
 function ensureRealEarthProvider(): void {
@@ -124,8 +127,28 @@ async function fetchGibsTime(tiles: string): Promise<string | null> {
 
 function drop(map: MbMap, src: string, layer: string): void {
   placed.delete(src);
+  opacityPinned.delete(layer);
   if (map.getLayer(layer)) map.removeLayer(layer);
   if (map.getSource(src)) map.removeSource(src);
+}
+
+function rasterPaint(opacity: number): mapboxgl.RasterPaint {
+  return {
+    "raster-opacity": opacity,
+    "raster-opacity-transition": { duration: 0, delay: 0 },
+    "raster-fade-duration": 0,
+  };
+}
+
+/** Instant opacity. A style transition here restarts every frame and flashes the map. */
+function setRasterOpacity(map: MbMap, layer: string, opacity: number): void {
+  if (!map.getLayer(layer)) return;
+  if (!opacityPinned.has(layer)) {
+    map.setPaintProperty(layer, "raster-opacity-transition", { duration: 0, delay: 0 });
+    map.setPaintProperty(layer, "raster-fade-duration", 0);
+    opacityPinned.add(layer);
+  }
+  map.setPaintProperty(layer, "raster-opacity", opacity);
 }
 
 interface RasterSpec {
@@ -154,8 +177,9 @@ function addRaster(map: MbMap, src: string, layer: string, spec: RasterSpec, opa
     id: layer,
     type: "raster",
     source: src,
-    paint: { "raster-opacity": opacity, "raster-fade-duration": 0 },
+    paint: rasterPaint(opacity),
   });
+  opacityPinned.add(layer);
 }
 
 function upsert(map: MbMap, src: string, layer: string, spec: RasterSpec): void {
@@ -172,19 +196,23 @@ function upsert(map: MbMap, src: string, layer: string, spec: RasterSpec): void 
       id: layer,
       type: "raster",
       source: src,
-      paint: { "raster-opacity": 1, "raster-fade-duration": 0 },
+      paint: rasterPaint(1),
     });
+    opacityPinned.add(layer);
   }
 }
 
-/** Swap the tile URL without removing the layer, so a hidden buffer can preload. */
-function retile(map: MbMap, src: string, layer: string, spec: RasterSpec, opacity: number): void {
+/**
+ * Swap the tile URL without removing the layer.
+ * Returns true when the layer was created and still needs stacking.
+ */
+function retile(map: MbMap, src: string, layer: string, spec: RasterSpec, opacity: number): boolean {
   const key = specKey(spec);
   const existing = map.getSource(src);
   const prev = placed.get(src);
   const sameKind = !!prev && prev.slice(prev.indexOf("|") + 1) === key.slice(key.indexOf("|") + 1);
   if (existing && existing.type === "raster" && sameKind) {
-    if (map.getLayer(layer)) map.setPaintProperty(layer, "raster-opacity", opacity);
+    if (map.getLayer(layer)) setRasterOpacity(map, layer, opacity);
     if (prev !== key) {
       (existing as RasterTileSource).setTiles([spec.tiles]);
       placed.set(src, key);
@@ -194,14 +222,17 @@ function retile(map: MbMap, src: string, layer: string, spec: RasterSpec, opacit
         id: layer,
         type: "raster",
         source: src,
-        paint: { "raster-opacity": opacity, "raster-fade-duration": 0 },
+        paint: rasterPaint(opacity),
       });
+      opacityPinned.add(layer);
+      return true;
     }
-    return;
+    return false;
   }
   drop(map, src, layer);
   addRaster(map, src, layer, spec, opacity);
   placed.set(src, key);
+  return true;
 }
 
 function dropLoop(map: MbMap): void {
@@ -228,13 +259,13 @@ function orderImagery(map: MbMap): void {
   orderBottomToTop(map, [SAT_LAYER, GLM_LAYER]);
 }
 
-function loopStack(front: number): string[] {
-  const back = 1 - front;
+/** Fixed stack. The top slot fades; the bottom slot stays put, so nothing is reordered mid-loop. */
+function loopLayerOrder(): string[] {
   return [
-    SAT_LOOP[front]?.layer ?? "",
-    SAT_LOOP[back]?.layer ?? "",
-    GLM_LOOP[front]?.layer ?? "",
-    GLM_LOOP[back]?.layer ?? "",
+    SAT_LOOP[0]?.layer ?? "",
+    SAT_LOOP[1]?.layer ?? "",
+    GLM_LOOP[0]?.layer ?? "",
+    GLM_LOOP[1]?.layer ?? "",
   ];
 }
 
@@ -257,24 +288,64 @@ function waitForSources(
   }
   return new Promise((resolve) => {
     let settled = false;
-    const dirty = new Set<string>();
+    const sawReload = new Set<string>();
+    const ready = new Set<string>();
+    let sawEvent = false;
+    let poll = 0;
     const finish = () => {
       if (settled) return;
       settled = true;
-      window.clearTimeout(timer);
+      window.clearTimeout(poll);
       map.off("sourcedata", onData);
-      resolve();
+      // One frame so the texture is on the map before it becomes visible.
+      requestAnimationFrame(() => resolve());
     };
-    const ready = () => sourceIds.every((id) => dirty.has(id) && map.isSourceLoaded(id));
+    const note = (id: string) => {
+      if (!map.getSource(id)) {
+        ready.add(id);
+        return;
+      }
+      if (!map.isSourceLoaded(id)) sawReload.add(id);
+      else if (sawReload.has(id)) ready.add(id);
+    };
+    const allReady = () => sourceIds.every((id) => ready.has(id));
     const onData = (event: mapboxgl.MapSourceDataEvent) => {
-      const id = event.sourceId;
-      if (!id || !sourceIds.includes(id)) return;
-      if (event.sourceDataType === "content") dirty.add(id);
-      if (ready()) finish();
+      if (!event.sourceId || !sourceIds.includes(event.sourceId)) return;
+      sawEvent = true;
+      note(event.sourceId);
+      if (allReady()) finish();
     };
-    const timer = window.setTimeout(finish, timeoutMs);
     map.on("sourcedata", onData);
     begin();
+    for (const id of sourceIds) note(id);
+    if (allReady()) {
+      finish();
+      return;
+    }
+    const started = performance.now();
+    const tick = () => {
+      if (settled) return;
+      if (cancelled()) {
+        finish();
+        return;
+      }
+      for (const id of sourceIds) note(id);
+      if (allReady()) {
+        finish();
+        return;
+      }
+      const elapsed = performance.now() - started;
+      const cacheHit = elapsed > 48
+        && sawEvent
+        && sawReload.size === 0
+        && sourceIds.every((id) => !map.getSource(id) || map.isSourceLoaded(id));
+      if (cacheHit || elapsed >= timeoutMs) {
+        finish();
+        return;
+      }
+      poll = window.setTimeout(tick, 32);
+    };
+    poll = window.setTimeout(tick, 32);
   });
 }
 
@@ -499,43 +570,59 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
     const motion = { cancelled: false, raf: 0 };
     const cancelled = () => motion.cancelled;
 
-    const paint = (slot: number, step: PlayStep, opacity: number): void => {
+    const BOTTOM = 0;
+    const TOP = 1;
+
+    const paint = (slot: number, step: PlayStep, opacity: number): boolean => {
+      let created = false;
       const satSlot = SAT_LOOP[slot];
       const glmSlot = GLM_LOOP[slot];
       if (satSlot && step.satTiles) {
-        retile(map, satSlot.src, satSlot.layer, {
+        created = retile(map, satSlot.src, satSlot.layer, {
           tiles: step.satTiles,
           maxzoom: satMaxzoom,
           attribution: satAttribution,
           filterNotices: filterSatNotices,
-        }, opacity);
+        }, opacity) || created;
       } else if (satSlot) {
         drop(map, satSlot.src, satSlot.layer);
       }
       if (glmSlot && step.glmTiles) {
-        retile(map, glmSlot.src, glmSlot.layer, {
+        created = retile(map, glmSlot.src, glmSlot.layer, {
           tiles: step.glmTiles,
           maxzoom: 7,
           attribution: "SSEC RealEarth",
           filterNotices: true,
-        }, opacity);
+        }, opacity) || created;
       } else if (glmSlot) {
         drop(map, glmSlot.src, glmSlot.layer);
       }
+      return created;
     };
 
-    const fadeIn = (layers: string[], durationMs: number) => new Promise<void>((resolve) => {
+    const topLayers = (): string[] => {
+      const out: string[] = [];
+      const sat = SAT_LOOP[TOP]?.layer;
+      const glm = GLM_LOOP[TOP]?.layer;
+      if (sat && map.getLayer(sat)) out.push(sat);
+      if (glm && map.getLayer(glm)) out.push(glm);
+      return out;
+    };
+
+    /** Fade only the top slot. The other scan stays fully opaque underneath. */
+    const fadeTop = (from: number, to: number, durationMs: number) => new Promise<void>((resolve) => {
+      const layers = topLayers();
+      for (const layer of layers) setRasterOpacity(map, layer, from);
       const started = performance.now();
       const tickFrame = (now: number) => {
         if (motion.cancelled) {
           resolve();
           return;
         }
-        const opacity = dissolveOpacity(now - started, durationMs);
-        for (const layer of layers) {
-          if (map.getLayer(layer)) map.setPaintProperty(layer, "raster-opacity", opacity);
-        }
-        if (opacity < 1) motion.raf = requestAnimationFrame(tickFrame);
+        const t = dissolveOpacity(now - started, durationMs);
+        const opacity = from + (to - from) * t;
+        for (const layer of layers) setRasterOpacity(map, layer, opacity);
+        if (t < 1) motion.raf = requestAnimationFrame(tickFrame);
         else resolve();
       };
       motion.raf = requestAnimationFrame(tickFrame);
@@ -553,54 +640,42 @@ export function LiveImageryLayer({ map }: { map: MbMap | null }) {
       drop(map, GLM_SRC, GLM_LAYER);
       const fadeMs = playSteps.length <= 3 ? LOOP_FEW_FADE_MS : LOOP_FADE_MS;
       let index = 0;
-      let front = 0;
+      let onTop = false;
       const firstStep = playSteps[0];
       if (!firstStep) return;
-      paint(front, firstStep, 1);
+      if (paint(BOTTOM, firstStep, 1)) orderBottomToTop(map, loopLayerOrder());
       publish(firstStep);
-      orderBottomToTop(map, loopStack(front));
       void (async () => {
         while (!motion.cancelled) {
           const restart = loopRestarts(index, playSteps.length);
           const next = restart ? 0 : index + 1;
-          const back = 1 - front;
+          const slot: 0 | 1 = onTop ? BOTTOM : TOP;
           const step = playSteps[next];
           if (!step) return;
           const incoming: string[] = [];
-          if (step.satTiles && SAT_LOOP[back]) incoming.push(SAT_LOOP[back].src);
-          if (step.glmTiles && GLM_LOOP[back]) incoming.push(GLM_LOOP[back].src);
+          if (step.satTiles && SAT_LOOP[slot]) incoming.push(SAT_LOOP[slot].src);
+          if (step.glmTiles && GLM_LOOP[slot]) incoming.push(GLM_LOOP[slot].src);
           await waitForSources(map, incoming, LOOP_PRELOAD_MS, cancelled, () => {
-            paint(back, step, 0);
-            orderBottomToTop(map, loopStack(front));
+            // The top slot is invisible. The bottom slot is covered while the top is opaque.
+            const created = paint(slot, step, slot === TOP ? 0 : 1);
+            if (created) orderBottomToTop(map, loopLayerOrder());
           });
           if (motion.cancelled) return;
           if (restart) {
-            // Leave the latest scan up, then cut to the hour-ago picture.
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, fadeMs);
             });
             if (motion.cancelled) return;
+            for (const layer of topLayers()) setRasterOpacity(map, layer, slot === TOP ? 1 : 0);
+          } else if (slot === TOP) {
+            await fadeTop(0, 1, fadeMs);
+            if (motion.cancelled) return;
           } else {
-            const layers: string[] = [];
-            const satLayer = SAT_LOOP[back]?.layer;
-            const glmLayer = GLM_LOOP[back]?.layer;
-            if (satLayer && map.getLayer(satLayer)) layers.push(satLayer);
-            if (glmLayer && map.getLayer(glmLayer)) layers.push(glmLayer);
-            await fadeIn(layers, fadeMs);
+            await fadeTop(1, 0, fadeMs);
             if (motion.cancelled) return;
           }
           publish(step);
-          for (const slot of [SAT_LOOP[back], GLM_LOOP[back]]) {
-            if (slot && map.getLayer(slot.layer)) {
-              map.setPaintProperty(slot.layer, "raster-opacity", 1);
-            }
-          }
-          for (const slot of [SAT_LOOP[front], GLM_LOOP[front]]) {
-            if (slot && map.getLayer(slot.layer)) {
-              map.setPaintProperty(slot.layer, "raster-opacity", 0);
-            }
-          }
-          front = back;
+          onTop = slot === TOP;
           index = next;
         }
       })();

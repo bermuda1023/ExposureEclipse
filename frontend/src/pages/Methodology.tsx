@@ -764,9 +764,11 @@ export function Methodology() {
             latest scan, refreshed about every 10 minutes, not a forecast.
           </li>
           <li>
-            Loop last hour plays that hour forward. Each real scan fades
-            into the next newer one. At the latest scan the picture jumps
-            back to an hour ago and plays forward again. It does not step
+            Loop last hour plays that hour forward. The next scan is
+            drawn before it is shown, then it fades in while the current
+            scan stays underneath, so the picture does not flash empty
+            between scans. At the latest scan the picture jumps back to
+            an hour ago and plays forward again. It does not step
             backward. GOES and Himawari only photograph about every 10
             minutes, and Meteosat about hourly, so the loop does not draw
             clouds that were never photographed. One scan does not
