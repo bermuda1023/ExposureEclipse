@@ -139,6 +139,7 @@ const FAMILY_MATCH_WIDTH: unknown[] = [
 ];
 
 export function ModelTrackLayer({ map }: Props) {
+  const stormId = useLiveStormStore((s) => s.activeStormId);
   const showTracks = useLiveStormStore((s) => s.showModelTracks);
   const modelTracks = useLiveStormStore((s) => s.modelTracks);
   const visibleFamilies = useLiveStormStore((s) => s.visibleFamilies);
@@ -151,8 +152,8 @@ export function ModelTrackLayer({ map }: Props) {
       // The strike circles are a vote of GEFS / ECMWF ensemble / AI.
       // Those members are off the spaghetti by default, which left the
       // circles sitting beside the official line with nothing under them.
-      const drawn = new Set(showTracks ? visibleFamilies : []);
-      if (showStrike) {
+      const drawn = new Set(stormId && showTracks ? visibleFamilies : []);
+      if (stormId && showStrike) {
         drawn.add("gefs_ens");
         drawn.add("ecmwf_ens");
         drawn.add("ai");
@@ -207,13 +208,13 @@ export function ModelTrackLayer({ map }: Props) {
       moveToTop(map, LAYER_TRACKS);
       moveToTop(map, LAYER_TRACK_END_LABELS);
 
-      setVis(map, LAYER_TRACKS, showTracks || showStrike);
-      setVis(map, LAYER_TRACK_END_LABELS, showTracks);
+      setVis(map, LAYER_TRACKS, !!stormId && (showTracks || showStrike));
+      setVis(map, LAYER_TRACK_END_LABELS, !!stormId && showTracks);
     };
 
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, modelTracks, visibleFamilies, showTracks, showStrike]);
+  }, [map, stormId, modelTracks, visibleFamilies, showTracks, showStrike]);
 
   // Hover popup — read "this line is X" without clicking.
   useEffect(() => {

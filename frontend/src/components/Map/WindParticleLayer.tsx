@@ -337,7 +337,7 @@ export function WindParticleLayer({ map }: Props) {
 
   useEffect(() => {
     if (!map) return;
-    if (!showWindMap || !showWindParticles || !mode || mode.startsWith("diff-")) {
+    if (!data || !showWindMap || !showWindParticles || !mode || mode.startsWith("diff-")) {
       try {
         if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
       } catch { /* */ }

@@ -54,6 +54,7 @@ function buildFC(counties: CountyStrikeProb[]): GeoJSON.FeatureCollection {
 }
 
 export function StrikeProbabilityLayer({ map }: Props) {
+  const stormId = useLiveStormStore((s) => s.activeStormId);
   const show = useLiveStormStore((s) => s.showStrikeProbability);
   const risk = useLiveStormStore((s) => s.ensembleRisk);
 
@@ -105,12 +106,12 @@ export function StrikeProbabilityLayer({ map }: Props) {
 
       moveToTop(map, LAYER_FILL);
       moveToTop(map, LAYER_LABEL);
-      setVis(map, LAYER_FILL, show);
-      setVis(map, LAYER_LABEL, show);
+      setVis(map, LAYER_FILL, !!stormId && show);
+      setVis(map, LAYER_LABEL, !!stormId && show);
     };
     if (map.isStyleLoaded()) apply();
     else map.once("style.load", apply);
-  }, [map, risk, show]);
+  }, [map, stormId, risk, show]);
 
   // Hover popup: full context (member count, threshold, max intensity).
   useEffect(() => {

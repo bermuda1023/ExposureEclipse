@@ -836,6 +836,10 @@ export function LiveStormLayer({ map }: Props) {
   useEffect(() => {
     if (!map) return;
     const apply = () => {
+      if (!data) {
+        for (const popup of [...liveStormPopups]) popup.remove();
+        document.querySelectorAll(".mapboxgl-popup").forEach((el) => el.remove());
+      }
       // ── Sources (data) — always set, even empty (no features = no draw). ──
       setSource(map, SRC_SST, buildSstFC(data?.sst ?? [], data?.sstMeta?.stepDeg ?? 0.1));
       setSource(map, SRC_ALERTS, buildAlertsFC(data?.alerts ?? []));
@@ -1569,36 +1573,37 @@ export function LiveStormLayer({ map }: Props) {
       raiseStateBoundaries(map, LAYER_FORECAST_HISTORY);
 
       // ── Visibility — driven purely by the panel toggles. ──
-      setVis(map, LAYER_SST, showSst);
-      setVis(map, LAYER_ALERTS_FILL, showAlerts);
-      setVis(map, LAYER_ALERTS_LINE, showAlerts);
-      setVis(map, LAYER_WW_FILL, showWatchesWarnings);
-      setVis(map, LAYER_WW_LINE, showWatchesWarnings);
-      setVis(map, LAYER_FORECAST_HISTORY, showForecastHistory);
-      // Latest forecast + observed track always visible when a storm is loaded.
-      setVis(map, LAYER_FORECAST_LATEST, true);
-      setVis(map, LAYER_OBSERVED, true);
-      setVis(map, LAYER_BUOYS, showBuoys);
-      setVis(map, LAYER_BUOYS_TEXT, showBuoys);
-      setVis(map, LAYER_RECON, showRecon);
-      setVis(map, LAYER_RECON_NODIR, showRecon);
-      setVis(map, LAYER_RECON_TRACK, showRecon);
-      setVis(map, LAYER_RECON_TEXT, showRecon);
-      setVis(map, LAYER_VORTEX, showRecon);
-      setVis(map, LAYER_VORTEX_TEXT, showRecon);
-      setVis(map, LAYER_LAND, showLand);
-      setVis(map, LAYER_LAND_TEXT, showLand);
-      setVis(map, LAYER_OBS_OUTER, showWindField);
-      setVis(map, LAYER_OBS_RINGS, showWindField);
-      setVis(map, LAYER_OBS_INNER, showWindField);
-      setVis(map, LAYER_FCST_OUTER, showWindField);
-      setVis(map, LAYER_FCST_RINGS, showWindField);
-      setVis(map, LAYER_FCST_INNER, showWindField);
-      setVis(map, LAYER_NHC_CONE_FILL, showForecastCone);
-      setVis(map, LAYER_NHC_CONE_LINE, showForecastCone);
-      setVis(map, LAYER_SURGE_FILL, showSurge);
-      setVis(map, LAYER_SURGE_LINE, showSurge);
-      const windPaint = showWindMap && windMapMode != null;
+      setVis(map, LAYER_SST, !!data && showSst);
+      setVis(map, LAYER_ALERTS_FILL, !!data && showAlerts);
+      setVis(map, LAYER_ALERTS_LINE, !!data && showAlerts);
+      setVis(map, LAYER_WW_FILL, !!data && showWatchesWarnings);
+      setVis(map, LAYER_WW_LINE, !!data && showWatchesWarnings);
+      setVis(map, LAYER_FORECAST_HISTORY, !!data && showForecastHistory);
+      // No storm selected: nothing from this layer stays on the map.
+      // The track used to stay visible even after the panel was closed.
+      setVis(map, LAYER_FORECAST_LATEST, !!data);
+      setVis(map, LAYER_OBSERVED, !!data);
+      setVis(map, LAYER_BUOYS, !!data && showBuoys);
+      setVis(map, LAYER_BUOYS_TEXT, !!data && showBuoys);
+      setVis(map, LAYER_RECON, !!data && showRecon);
+      setVis(map, LAYER_RECON_NODIR, !!data && showRecon);
+      setVis(map, LAYER_RECON_TRACK, !!data && showRecon);
+      setVis(map, LAYER_RECON_TEXT, !!data && showRecon);
+      setVis(map, LAYER_VORTEX, !!data && showRecon);
+      setVis(map, LAYER_VORTEX_TEXT, !!data && showRecon);
+      setVis(map, LAYER_LAND, !!data && showLand);
+      setVis(map, LAYER_LAND_TEXT, !!data && showLand);
+      setVis(map, LAYER_OBS_OUTER, !!data && showWindField);
+      setVis(map, LAYER_OBS_RINGS, !!data && showWindField);
+      setVis(map, LAYER_OBS_INNER, !!data && showWindField);
+      setVis(map, LAYER_FCST_OUTER, !!data && showWindField);
+      setVis(map, LAYER_FCST_RINGS, !!data && showWindField);
+      setVis(map, LAYER_FCST_INNER, !!data && showWindField);
+      setVis(map, LAYER_NHC_CONE_FILL, !!data && showForecastCone);
+      setVis(map, LAYER_NHC_CONE_LINE, !!data && showForecastCone);
+      setVis(map, LAYER_SURGE_FILL, !!data && showSurge);
+      setVis(map, LAYER_SURGE_LINE, !!data && showSurge);
+      const windPaint = !!data && showWindMap && windMapMode != null;
       setVis(map, LAYER_WIND_MAP_FILL, windPaint);
       setVis(map, LAYER_WIND_SHEAR_ARROW, windPaint);
       setVis(map, LAYER_WIND_OBS, windPaint);
@@ -2249,6 +2254,10 @@ export function LiveStormLayer({ map }: Props) {
  * usage (open / setContent / isOpen / remove / event 'close') so the
  * calling code changes minimally.
  */
+// Open inspection popups. Closing the storm has to drop the leader lines
+// too — they are DOM, not a map layer, so emptying the GeoJSON leaves them.
+const liveStormPopups = new Set<DraggablePopup>();
+
 class DraggablePopup {
   private map: MbMap;
   private anchor: { lng: number; lat: number };
@@ -2270,6 +2279,7 @@ class DraggablePopup {
     // line comes in from the lower-left. Matches how Mapbox popups
     // usually float.
     this.offset = { dx: 24, dy: -140 };
+    liveStormPopups.add(this);
 
     const wrapper = document.createElement("div");
     wrapper.style.cssText = [
@@ -2462,6 +2472,7 @@ class DraggablePopup {
   }
 
   remove(): void {
+    liveStormPopups.delete(this);
     if (this.removed) return;
     this.removed = true;
     this.map.off("move", this.mapMoveHandler);
