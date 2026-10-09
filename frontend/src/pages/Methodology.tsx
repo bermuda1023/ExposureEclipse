@@ -256,11 +256,12 @@ export function Methodology() {
             wind, or when any sample is hurricane-force. Samples are one grid
             over the whole county, sized from the county's own area, so a chain
             of islands cannot outvote the mainland and a 10 nm eyewall is not
-            one cell. The wind at each sample is the peak that point felt,
-            and only inside the hurricane-force field drawn on the map (out
-            to the directional 64 kt radius). Beyond that ring the sample is
-            clear, so a county that is half outside the cone is not charged
-            on the outside half. Between fixes the track is filled in
+            one cell. On a live storm the field is the NHC 34 kt radii, so a
+            core that is still offshore still reaches the counties inside
+            that field. Anything outside those radii is clear. A historical
+            storm has no 34 kt radii on this path, so it stays clipped to the
+            64 kt field drawn on the map. The wind inside the field is the
+            peak that point felt. Between fixes the track is filled in
             so a 6-hour gap cannot skip the core. The county is not stamped
             with the storm's peak just because the centroid sits inside the
             outer field. The bright core on the map is the eyewall. The wide

@@ -586,19 +586,27 @@ def _paint_fix(
     rmax_source: str,
     r64_nm: float,
     r64_quads: tuple[float, float, float, float] | None,
+    r34_nm: float = 0.0,
+    r34_quads: tuple[float, float, float, float] | None = None,
 ) -> None:
     """Raise the peak local wind at every sample this fix can still reach.
 
-    The field that counts is the one drawn on the map: hurricane-force wind
-    out to the directional R64. Beyond that ring a power-law skirt was
-    marking the rest of the county as tropical storm, so a county only half
-    inside the cone still carried 100% of its TIV into the loss.
+    Live advisories carry a 34 kt wind field. That is the field that reaches
+    land while the 64 kt core is still offshore, so counties inside it are
+    listed and the part outside it is clear. Historical storms have no 34 kt
+    radii; they stay clipped to the 64 kt field drawn on the map.
     """
-    r64_max = r64_nm
-    if r64_quads:
-        r64_max = max(r64_max, max(r64_quads))
-    # A county centroid just outside R64 can still have an edge inside.
-    reach = min(180.0, r64_max + 70.0)
+    has_r34 = r34_nm > 0 or (r34_quads is not None and any(v > 0 for v in r34_quads))
+    if has_r34:
+        r34_max = r34_nm
+        if r34_quads:
+            r34_max = max(r34_max, max(r34_quads))
+        reach = min(280.0, r34_max + 70.0)
+    else:
+        r64_max = r64_nm
+        if r64_quads:
+            r64_max = max(r64_max, max(r64_quads))
+        reach = min(180.0, r64_max + 70.0)
     if reach <= 0:
         return
     deg = reach / 50.0
@@ -623,10 +631,27 @@ def _paint_fix(
             d = haversine_nm(eye_lat, eye_lon, lat, lon)
             bearing = _bearing_deg(eye_lat, eye_lon, lat, lon)
             r64_here = r64_at_bearing(r64_quads, bearing, fallback_nm=r64_nm)
-            # Outside the drawn hurricane field this sample is clear.
-            if r64_here <= 0 or d > r64_here + 0.5:
-                continue
-            wind = experienced_wind_kt(d, vmax_kt, rmax, r64_here)
+            if has_r34:
+                r34_here = r64_at_bearing(r34_quads, bearing, fallback_nm=r34_nm)
+                if r34_here <= 0 or d > r34_here + 0.5:
+                    continue
+                in_core = vmax_kt >= 64 and r64_here > 0 and d <= r64_here + 0.5
+                if in_core:
+                    wind = experienced_wind_kt(d, vmax_kt, rmax, r64_here)
+                elif r64_here > 0 and r34_here > r64_here:
+                    # NHC 34 kt disk, outside the hurricane core. Stay in TS.
+                    span = r34_here - r64_here
+                    frac = min(1.0, max(0.0, (d - r64_here) / span))
+                    wind = int(round(63 - frac * (63 - 34)))
+                else:
+                    wind = int(vmax_kt) if int(vmax_kt) < 64 else 63
+                    if d > max(rmax, 1.0):
+                        wind = max(34, int(round(wind - (wind - 34) * min(1.0, d / max(r34_here, 1.0)))))
+            else:
+                # Outside the drawn hurricane field this sample is clear.
+                if r64_here <= 0 or d > r64_here + 0.5:
+                    continue
+                wind = experienced_wind_kt(d, vmax_kt, rmax, r64_here)
             if wind > acc.winds[i]:
                 acc.winds[i] = wind
 
@@ -674,6 +699,8 @@ class _Stamp:
     rmax_source: str
     r64_nm: float
     r64_quads: tuple[float, float, float, float] | None
+    r34_nm: float = 0.0
+    r34_quads: tuple[float, float, float, float] | None = None
 
 
 def _densify_track(stamps: list[_Stamp], step_nm: float = 12.0) -> list[_Stamp]:
@@ -703,6 +730,15 @@ def _densify_track(stamps: list[_Stamp], step_nm: float = 12.0) -> list[_Stamp]:
                 )
             else:
                 quads = a.r64_quads if t < 0.5 else b.r64_quads
+            if a.r34_quads is not None and b.r34_quads is not None:
+                q34: tuple[float, float, float, float] | None = (
+                    a.r34_quads[0] * (1 - t) + b.r34_quads[0] * t,
+                    a.r34_quads[1] * (1 - t) + b.r34_quads[1] * t,
+                    a.r34_quads[2] * (1 - t) + b.r34_quads[2] * t,
+                    a.r34_quads[3] * (1 - t) + b.r34_quads[3] * t,
+                )
+            else:
+                q34 = a.r34_quads if t < 0.5 else b.r34_quads
             out.append(
                 _Stamp(
                     lat=a.lat + (b.lat - a.lat) * t,
@@ -712,6 +748,8 @@ def _densify_track(stamps: list[_Stamp], step_nm: float = 12.0) -> list[_Stamp]:
                     rmax_source=a.rmax_source if t < 0.5 else b.rmax_source,
                     r64_nm=a.r64_nm + (b.r64_nm - a.r64_nm) * t,
                     r64_quads=quads,
+                    r34_nm=a.r34_nm + (b.r34_nm - a.r34_nm) * t,
+                    r34_quads=q34,
                 )
             )
         out.append(b)
@@ -754,11 +792,20 @@ def compute_impact(
         # wind field reorganises. Without the status filter we'd render an
         # absurdly large post-tropical cone.
         live_radii = pt.radii_source == "nhc"
-        if pt.wind_kt < MIN_FOOTPRINT_WIND_KT:
+        r34_quads = pt.r34_quads_nm if live_radii else None
+        has_r34 = bool(r34_quads and any(v > 0 for v in r34_quads))
+        # Hurricane-force fixes draw the cone. A live advisory below 64 kt
+        # still counts when NHC published a 34 kt field — that is what
+        # reaches the coast while the core is offshore.
+        if pt.wind_kt < 34:
+            continue
+        if pt.wind_kt < MIN_FOOTPRINT_WIND_KT and not has_r34:
             continue
         # IBTrACS post-tropical (EX) Rmax inflates wildly; skip those.
         # Live NHC official points carry their own radii and are not EX.
         if not live_radii and pt.status != "HU":
+            continue
+        if not live_radii and pt.wind_kt < MIN_FOOTPRINT_WIND_KT:
             continue
         if live_radii and pt.rmax_nm and pt.rmax_nm > 0:
             rmax, rmax_src = max(8.0, pt.rmax_nm), "nhc"
@@ -792,19 +839,25 @@ def compute_impact(
                 r64 = radius
                 r64_src = "fallback"
                 measured_quads = None
-        footprint.append(
-            FootprintPoint(
-                lat=pt.lat,
-                lon=pt.lon,
-                wind_kt=pt.wind_kt,
-                rmax_nm=rmax,
-                radius_nm=radius,
-                rmax_source=rmax_src,
-                r64_nm=r64,
-                r64_source=r64_src,
-                r64_quads_nm=measured_quads,
+        r34_mean = 0.0
+        if has_r34 and r34_quads is not None:
+            nonzero34 = [v for v in r34_quads if v > 0]
+            r34_mean = sum(nonzero34) / len(nonzero34)
+        draws_cone = pt.wind_kt >= MIN_FOOTPRINT_WIND_KT
+        if draws_cone:
+            footprint.append(
+                FootprintPoint(
+                    lat=pt.lat,
+                    lon=pt.lon,
+                    wind_kt=pt.wind_kt,
+                    rmax_nm=rmax,
+                    radius_nm=radius,
+                    rmax_source=rmax_src,
+                    r64_nm=r64,
+                    r64_source=r64_src,
+                    r64_quads_nm=measured_quads,
+                )
             )
-        )
         stamps.append(
             _Stamp(
                 lat=pt.lat,
@@ -814,6 +867,8 @@ def compute_impact(
                 rmax_source=rmax_src,
                 r64_nm=r64,
                 r64_quads=measured_quads,
+                r34_nm=r34_mean,
+                r34_quads=r34_quads,
             )
         )
 
@@ -832,6 +887,8 @@ def compute_impact(
             rmax_source=stamp.rmax_source,
             r64_nm=stamp.r64_nm,
             r64_quads=stamp.r64_quads,
+            r34_nm=stamp.r34_nm,
+            r34_quads=stamp.r34_quads,
         )
 
     impacts = _impacts_from_paint(painted)

@@ -48,6 +48,61 @@ def test_compute_impact_uses_nhc_quadrants(monkeypatch) -> None:
     assert any(i.geoid == "12086" for i in impacts)
 
 
+def test_r34_reaches_counties_the_core_misses(monkeypatch) -> None:
+    """Isaias shape: 64 kt core ~30 nm offshore, 34 kt field over the coast."""
+    import app.services.hurricane_impact as hi
+
+    # ~90 nm north of the eye. Inside R34 160, outside R64 30.
+    county = CountyMeta(
+        geoid="12033",
+        geography_id="US-FL-12033",
+        name="Escambia",
+        state_usps="FL",
+        centroid_lat=26.5,
+        centroid_lon=-87.6,
+    )
+    monkeypatch.setattr(hi, "county_centroids", lambda: {"12033": county})
+    monkeypatch.setattr(hi, "county_area_samples", lambda: {})
+    storm = Storm(
+        storm_id="AL092026",
+        name="ISAIAS",
+        year=2026,
+        track=[
+            TrackPoint(
+                datetime_utc="2026-10-09T12:00:00Z",
+                record_id="",
+                status="HU",
+                lat=25.0,
+                lon=-87.6,
+                wind_kt=105,
+                pressure_mb=959,
+                rmax_nm=20.0,
+                r64_quads_nm=(30.0, 30.0, 20.0, 20.0),
+                r34_quads_nm=(180.0, 110.0, 80.0, 160.0),
+                radii_source="nhc",
+            )
+        ],
+    )
+    impacts, footprint, *_ = compute_impact(storm)
+    assert footprint
+    assert len(impacts) == 1
+    hit = impacts[0]
+    assert hit.max_wind_kt < 64
+    assert hit.max_category == 0
+    # A second county well outside R34 must not appear.
+    far = CountyMeta(
+        geoid="36061",
+        geography_id="US-NY-36061",
+        name="New York",
+        state_usps="NY",
+        centroid_lat=40.7,
+        centroid_lon=-74.0,
+    )
+    monkeypatch.setattr(hi, "county_centroids", lambda: {"12033": county, "36061": far})
+    impacts, *_ = compute_impact(storm)
+    assert [i.geoid for i in impacts] == ["12033"]
+
+
 def test_storm_for_impact_prefers_official_adecks(monkeypatch) -> None:
     import app.services.live_hurricane as lh
     import app.services.atcf_adecks as ad
@@ -96,6 +151,7 @@ def test_storm_for_impact_prefers_official_adecks(monkeypatch) -> None:
     assert [p.radii_source for p in storm.track] == ["nhc", "nhc"]
     assert storm.track[0].rmax_nm == 16.0
     assert storm.track[0].r64_quads_nm == (40.0, 30.0, 25.0, 35.0)
+    assert storm.track[0].r34_quads_nm == (120.0, 100.0, 80.0, 90.0)
     assert storm.track[1].lat == 26.0
     # Must not require IBTrACS — a 2026 live id would 404 there.
     assert storm.storm_id == "AL072026"

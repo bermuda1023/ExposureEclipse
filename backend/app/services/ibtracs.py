@@ -57,6 +57,7 @@ class TrackPoint:
     # uses these instead of IBTrACS / Willoughby.
     rmax_nm: float | None = None
     r64_quads_nm: tuple[float, float, float, float] | None = None
+    r34_quads_nm: tuple[float, float, float, float] | None = None
     radii_source: str | None = None  # "nhc" | None
 
 
