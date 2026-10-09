@@ -103,6 +103,56 @@ def test_r34_reaches_counties_the_core_misses(monkeypatch) -> None:
     assert [i.geoid for i in impacts] == ["12033"]
 
 
+def test_forecast_cone_includes_inland_counties(monkeypatch) -> None:
+    """A county in the day-3 cone is listed even though the 34 kt field misses it."""
+    import app.services.hurricane_impact as hi
+
+    inland = CountyMeta(
+        geoid="47037",
+        geography_id="US-TN-47037",
+        name="Davidson",
+        state_usps="TN",
+        centroid_lat=36.2,
+        centroid_lon=-86.8,
+    )
+    outside = CountyMeta(
+        geoid="36061",
+        geography_id="US-NY-36061",
+        name="New York",
+        state_usps="NY",
+        centroid_lat=40.7,
+        centroid_lon=-74.0,
+    )
+    monkeypatch.setattr(hi, "county_centroids", lambda: {"47037": inland, "36061": outside})
+    monkeypatch.setattr(hi, "county_area_samples", lambda: {})
+    # Box around Nashville. New York is outside it.
+    cone = [(-88.0, 34.0), (-84.0, 34.0), (-84.0, 38.0), (-88.0, 38.0), (-88.0, 34.0)]
+    storm = Storm(
+        storm_id="AL092026",
+        name="ISAIAS",
+        year=2026,
+        track=[
+            TrackPoint(
+                datetime_utc="2026-10-11T00:00:00Z",
+                record_id="",
+                status="LO",
+                lat=36.0,
+                lon=-86.5,
+                wind_kt=30,
+                pressure_mb=1004,
+                radii_source="nhc",
+                forecast_hour=48,
+                cone_radius_nm=70.0,
+            )
+        ],
+        forecast_cone=cone,
+    )
+    impacts, *_ = compute_impact(storm)
+    assert [i.geoid for i in impacts] == ["47037"]
+    assert impacts[0].max_wind_kt == 30
+    assert impacts[0].max_category == -1
+
+
 def test_storm_for_impact_prefers_official_adecks(monkeypatch) -> None:
     import app.services.live_hurricane as lh
     import app.services.atcf_adecks as ad
@@ -110,8 +160,9 @@ def test_storm_for_impact_prefers_official_adecks(monkeypatch) -> None:
     monkeypatch.setattr(
         lh,
         "_get_live_entry",
-        lambda atcf: {"id": atcf, "name": "Gabrielle", "forecastTrack": {}},
+        lambda atcf, **_: {"id": atcf, "name": "Gabrielle", "forecastTrack": {}},
     )
+    monkeypatch.setattr(lh, "fetch_live_forecast_cone", lambda atcf, **_: [])
     monkeypatch.setattr(lh, "fetch_forecast_track", lambda url, *, refresh=False: [])
     monkeypatch.setattr(
         lh,

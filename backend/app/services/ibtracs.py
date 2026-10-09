@@ -59,6 +59,10 @@ class TrackPoint:
     r64_quads_nm: tuple[float, float, float, float] | None = None
     r34_quads_nm: tuple[float, float, float, float] | None = None
     radii_source: str | None = None  # "nhc" | None
+    # Live forecast only. Hour from the advisory (negative = pre-advisory
+    # history) and the NHC cone radius at that lead time.
+    forecast_hour: int | None = None
+    cone_radius_nm: float | None = None
 
 
 @dataclass(slots=True)
@@ -67,6 +71,8 @@ class Storm:
     name: str
     year: int
     track: list[TrackPoint] = field(default_factory=list)
+    # Live NHC cone of uncertainty, (lon, lat), closed. Empty for history.
+    forecast_cone: list[tuple[float, float]] | None = None
 
 
 # ───────────────────────── single-pass CSV parse ─────────────────────────

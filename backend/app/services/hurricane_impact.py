@@ -27,6 +27,7 @@ from .county_wind import (
     bands_from_winds,
     experienced_wind_kt,
     include_county,
+    point_in_ring,
     sample_polygons,
     severity,
     skirt_wind_kt,
@@ -572,6 +573,7 @@ class _Paint:
     closest_nm: float = 1e9
     rmax_nm: float = 0.0
     rmax_source: str = ""
+    in_forecast: bool = False
 
 
 def _paint_fix(
@@ -662,7 +664,7 @@ def _impacts_from_paint(painted: dict[str, _Paint]) -> list[CountyImpact]:
         bands = bands_from_winds(acc.winds)
         bins = speed_bins_from_winds(acc.winds)
         peak = max(acc.winds) if acc.winds else 0
-        if not include_county(bands, peak):
+        if not include_county(bands, peak) and not (acc.in_forecast and peak > 0):
             continue
         impacts.append(
             CountyImpact(
@@ -754,6 +756,86 @@ def _densify_track(stamps: list[_Stamp], step_nm: float = 12.0) -> list[_Stamp]:
             )
         out.append(b)
     return out
+
+
+def _forecast_wind_kt(lat: float, lon: float, track: list[TrackPoint]) -> tuple[int, float]:
+    """Forecast intensity at a point inside the cone.
+
+    A lead time covers the point only out to that hour's cone radius, so a
+    county in the day-3 cone is not stamped with the current peak. Returns
+    (wind_kt, distance_nm to the hour that set it).
+    """
+    best = 0
+    best_d = 1e9
+    covered = False
+    nearest_d = 1e9
+    nearest_w = 0
+    for pt in track:
+        hour = pt.forecast_hour
+        if hour is None or hour < 0:
+            continue
+        d = haversine_nm(pt.lat, pt.lon, lat, lon)
+        if d < nearest_d:
+            nearest_d = d
+            nearest_w = pt.wind_kt
+        radius = pt.cone_radius_nm or 0.0
+        if radius > 0 and d <= radius + 0.5 and pt.wind_kt >= best:
+            covered = True
+            best = pt.wind_kt
+            best_d = d
+    if covered:
+        return best, best_d
+    return nearest_w, nearest_d
+
+
+def _paint_forecast_cone(
+    painted: dict[str, _Paint],
+    centroids: dict[str, CountyMeta],
+    samples: dict[str, list[tuple[float, float]]],
+    cone: list[tuple[float, float]],
+    track: list[TrackPoint],
+) -> None:
+    """Counties inside the NHC forecast cone, not only the 34 kt radii.
+
+    The cone is the full forecast the map draws. Inland counties the 34 kt
+    field never reaches are still on that forecast, at the intensity of the
+    lead time whose cone covers them.
+    """
+    if len(cone) < 4:
+        return
+    # The KMZ ring is ~1,000 vertices. A coarser outline is enough to
+    # decide which county samples sit inside it.
+    if len(cone) > 180:
+        slim = list(cone[:: max(1, len(cone) // 160)])
+        if slim[0] != slim[-1]:
+            slim.append(slim[0])
+        cone = slim
+    lons = [p[0] for p in cone]
+    lats = [p[1] for p in cone]
+    lon_lo, lon_hi = min(lons) - 0.6, max(lons) + 0.6
+    lat_lo, lat_hi = min(lats) - 0.6, max(lats) + 0.6
+    for meta in centroids.values():
+        if not (lat_lo <= meta.centroid_lat <= lat_hi and lon_lo <= meta.centroid_lon <= lon_hi):
+            continue
+        cand = samples.get(meta.geoid) or [(meta.centroid_lat, meta.centroid_lon)]
+        inside = [
+            i for i, (lat, lon) in enumerate(cand)
+            if point_in_ring(lon, lat, cone)
+        ]
+        if not inside:
+            continue
+        acc = painted.get(meta.geoid)
+        if acc is None:
+            acc = _Paint(meta=meta, points=cand, winds=[0] * len(cand))
+            painted[meta.geoid] = acc
+        acc.in_forecast = True
+        for i in inside:
+            lat, lon = acc.points[i]
+            wind, dist = _forecast_wind_kt(lat, lon, track)
+            if wind > acc.winds[i]:
+                acc.winds[i] = wind
+            if dist < acc.closest_nm:
+                acc.closest_nm = dist
 
 
 def compute_impact(
@@ -889,6 +971,11 @@ def compute_impact(
             r64_quads=stamp.r64_quads,
             r34_nm=stamp.r34_nm,
             r34_quads=stamp.r34_quads,
+        )
+
+    if storm.forecast_cone:
+        _paint_forecast_cone(
+            painted, centroids, samples, storm.forecast_cone, storm.track,
         )
 
     impacts = _impacts_from_paint(painted)

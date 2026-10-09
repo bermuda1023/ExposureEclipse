@@ -256,17 +256,18 @@ export function Methodology() {
             wind, or when any sample is hurricane-force. Samples are one grid
             over the whole county, sized from the county's own area, so a chain
             of islands cannot outvote the mainland and a 10 nm eyewall is not
-            one cell. On a live storm the field is the NHC 34 kt radii, so a
-            core that is still offshore still reaches the counties inside
-            that field. Anything outside those radii is clear. A historical
-            storm has no 34 kt radii on this path, so it stays clipped to the
-            64 kt field drawn on the map. The wind inside the field is the
-            peak that point felt. Between fixes the track is filled in
-            so a 6-hour gap cannot skip the core. The county is not stamped
-            with the storm's peak just because the centroid sits inside the
-            outer field. The bright core on the map is the eyewall. The wide
-            ring is the 64 kt field, colored as the wind halfway out to that
-            edge, not as the peak.
+            one cell. On a live storm the list is the full NHC forecast cone,
+            not only the 34 kt radii. A county in the cone takes the intensity
+            of the lead time whose cone covers it, so inland day-3 counties
+            are not stamped with the current peak. The 34 and 64 kt radii
+            still grade the wind inside that field. A historical storm has no
+            forecast cone, so it stays clipped to the 64 kt field drawn on
+            the map. The wind inside the field is the peak that point felt.
+            Between fixes the track is filled in so a 6-hour gap cannot skip
+            the core. The county is not stamped with the storm's peak just
+            because the centroid sits inside the outer field. The bright core
+            on the map is the eyewall. The wide ring is the 64 kt field,
+            colored as the wind halfway out to that edge, not as the peak.
           </li>
           <li>
             Each county comes back as area fractions: clear, tropical storm,

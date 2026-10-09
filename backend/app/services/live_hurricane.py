@@ -734,7 +734,13 @@ def storm_for_impact(atcf_id: str) -> Storm | None:
                         pressure_mb=None,
                     )
                 )
-        return Storm(storm_id=atcf_id, name=observed.name, year=observed.year, track=track)
+        return Storm(
+            storm_id=atcf_id,
+            name=observed.name,
+            year=observed.year,
+            track=track,
+            forecast_cone=fetch_live_forecast_cone(atcf_id) or None,
+        )
 
     by_tau: dict[int, OfficialFix] = {f.hours_out: f for f in official}
     hours = sorted(set(by_tau) | set(kmz_by_hour) or {0})
@@ -751,13 +757,15 @@ def storm_for_impact(atcf_id: str) -> Storm | None:
             lat, lon, kmz_wind = ofcl.lat, ofcl.lon, ofcl.wind_kt
         else:
             continue
-        wind = ofcl.wind_kt if ofcl and ofcl.wind_kt else kmz_wind
+        wind = kmz_wind if kmz and kmz_wind else (ofcl.wind_kt if ofcl else 0)
         r64 = None
         if ofcl and ofcl.r64_quads and any(v > 0 for v in ofcl.r64_quads):
             r64 = tuple(float(v) for v in ofcl.r64_quads)
         r34 = None
         if ofcl and ofcl.r34_quads and any(v > 0 for v in ofcl.r34_quads):
             r34 = tuple(float(v) for v in ofcl.r34_quads)
+        basin = atcf_id[:2]
+        cone_r = _cone_radius_nm(basin, tau) if tau >= 0 else None
         track.append(
             TrackPoint(
                 datetime_utc=_init_plus_hours(init, tau) if init else "",
@@ -771,11 +779,20 @@ def storm_for_impact(atcf_id: str) -> Storm | None:
                 r64_quads_nm=r64,
                 r34_quads_nm=r34,
                 radii_source="nhc",
+                forecast_hour=tau,
+                cone_radius_nm=cone_r,
             )
         )
     if not track:
         return None
-    return Storm(storm_id=atcf_id, name=name, year=year, track=track)
+    cone = fetch_live_forecast_cone(atcf_id)
+    return Storm(
+        storm_id=atcf_id,
+        name=name,
+        year=year,
+        track=track,
+        forecast_cone=cone or None,
+    )
 
 
 def storm_and_forecasts(
