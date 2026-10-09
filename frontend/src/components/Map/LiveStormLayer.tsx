@@ -2054,7 +2054,7 @@ export function LiveStormLayer({ map }: Props) {
           `<div style="font-size:10px;color:#475569;margin-top:3px;padding-left:8px;border-left:2px solid #e2e8f0">` +
             `<div>Distance: ${(obs.distScore * 100).toFixed(0)}% <span style="color:#94a3b8">(nearest ${distStr})</span></div>` +
             `<div>Sources: ${(obs.countScore * 100).toFixed(0)}% <span style="color:#94a3b8">(${obs.sources} contributor${obs.sources === 1 ? "" : "s"})</span></div>` +
-            `<div>Agreement: ${(obs.agreementScore * 100).toFixed(0)}% <span style="color:#94a3b8">(${spreadStr})</span></div>` +
+            `<div>Agreement: ${(obs.agreementScore * 100).toFixed(0)}% <span style="color:#94a3b8">(nearby ${spreadStr})</span></div>` +
             `<div style="margin-top:2px;color:#0f172a">= ${(obs.confidence * 100).toFixed(0)}% composite</div>` +
           `</div></details>`,
         );

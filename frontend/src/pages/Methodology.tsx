@@ -698,10 +698,11 @@ export function Methodology() {
             rated 0.7 so a lucky single station doesn't max out the score.
           </li>
           <li>
-            <b>Agreement</b>: standard deviation of contributor speeds.
-            Tight agreement (&lt; 5 kt) = full, loose (≥ 20 kt) = 0. High
-            disagreement usually means the cell straddles a real gradient
-            (eyewall vs eye) and the IDW mean is misleading.
+            <b>Agreement</b>: weighted spread of the observations within
+            ~0.5° of the cell. Tight (&lt; 5 kt) = full, loose (20 kt or
+            more) = 0. Stations farther out are not a vote. A hurricane
+            gradient across the basin must not zero a hunter fix on the
+            cell. Two nearby fixes that disagree still score low.
           </li>
         </ul>
         <p>Frontend badges: HIGH ≥ 0.5, MED ≥ 0.25, LOW &lt; 0.25.</p>

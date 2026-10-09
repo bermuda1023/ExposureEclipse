@@ -301,15 +301,43 @@ def _clean_obs(
 _FULL_TRUST_DIST_DEG = 0.5
 
 
+def _agreement(
+    speeds: list[float],
+    weights: list[float] | None = None,
+) -> tuple[float, float | None]:
+    """How tightly the observations that drive this cell agree.
+
+    The spread is weighted by IDW weight and, when provided, only the
+    nearby contributors. A hurricane gradient across 300 km is real
+    structure, not a bad measurement — it used to zero the score even
+    when a hunter fix sat 7 km away and dominated the blend.
+    """
+    if len(speeds) < 2:
+        return 1.0, None
+    if weights is None or len(weights) != len(speeds):
+        weights = [1.0] * len(speeds)
+    wsum = sum(weights)
+    if wsum <= 0:
+        return 0.0, None
+    mean_s = sum(w * s for w, s in zip(weights, speeds)) / wsum
+    var = sum(w * (s - mean_s) ** 2 for w, s in zip(weights, speeds)) / wsum
+    std = var ** 0.5
+    if std <= 5.0:
+        score = 1.0
+    elif std >= 20.0:
+        score = 0.0
+    else:
+        score = max(0.0, 1.0 - (std - 5.0) / 15.0)
+    return score, std
+
+
 def _cell_confidence_parts(
     nearest_dist_deg: float | None,
     count: int,
     speeds: list[float],
+    weights: list[float] | None = None,
 ) -> tuple[float, float, float, float, float | None]:
-    """Return (composite, dist_score, count_score, agreement_score, std).
-    Same math as ``_cell_confidence`` but exposes the individual signals so
-    the frontend can show the user why a given cell scored HIGH / MED /
-    LOW instead of just a black-box composite."""
+    """Return (composite, dist_score, count_score, agreement_score, std)."""
     if count <= 0 or nearest_dist_deg is None:
         return 0.0, 0.0, 0.0, 0.0, None
     if nearest_dist_deg <= _FULL_TRUST_DIST_DEG:
@@ -325,19 +353,7 @@ def _cell_confidence_parts(
         count_score = 0.7
     else:
         count_score = 1.0
-    std: float | None = None
-    if len(speeds) < 2:
-        agreement_score = 1.0
-    else:
-        mean_s = sum(speeds) / len(speeds)
-        var = sum((s - mean_s) ** 2 for s in speeds) / len(speeds)
-        std = var ** 0.5
-        if std <= 5.0:
-            agreement_score = 1.0
-        elif std >= 20.0:
-            agreement_score = 0.0
-        else:
-            agreement_score = max(0.0, 1.0 - (std - 5.0) / 15.0)
+    agreement_score, std = _agreement(speeds, weights)
     composite = dist_score * count_score * agreement_score
     return (
         round(composite, 3),
@@ -352,64 +368,13 @@ def _cell_confidence(
     nearest_dist_deg: float | None,
     count: int,
     speeds: list[float],
+    weights: list[float] | None = None,
 ) -> float:
-    """Composite 0..1 confidence for a grid cell. Three independent signals
-    multiplied, so any weak component drags the whole score down.
-
-    * **Distance**: how close the nearest contributing obs is. Full score
-      when the nearest obs is within one grid-cell-width (i.e. we're
-      basically on top of a real measurement), fading linearly to zero at
-      the IDW radius edge (3°). The old 1.5° threshold rated most land
-      cells LOW because the median land-station spacing is ~50–100 km
-      (~0.5–1°) — well within the cell but outside the "on-station" band.
-    * **Count**: 2+ contributors saturates. Below that the value hinges on
-      a single station potentially being wrong.
-    * **Agreement**: standard deviation of contributor speeds. Tight
-      agreement (< 5 kt spread) = full score, loose agreement (>= 20 kt
-      spread) = zero. High disagreement usually means the cell straddles a
-      real gradient (e.g. eye-wall vs eye) so the IDW mean is misleading.
-
-    Multiplicative composition intentionally means "even one dead signal
-    kills confidence" — better to say LOW than pretend certainty."""
-    if count <= 0 or nearest_dist_deg is None:
-        return 0.0
-
-    # Distance score — same falloff as _cell_confidence_parts. See
-    # _FULL_TRUST_DIST_DEG for the rationale on the 0.5° threshold.
-    if nearest_dist_deg <= _FULL_TRUST_DIST_DEG:
-        dist_score = 1.0
-    elif nearest_dist_deg >= IDW_RADIUS_DEG:
-        dist_score = 0.0
-    else:
-        span = IDW_RADIUS_DEG - _FULL_TRUST_DIST_DEG
-        dist_score = max(
-            0.0, 1.0 - (nearest_dist_deg - _FULL_TRUST_DIST_DEG) / span,
-        )
-
-    # Count score — 2+ contributors = full trust. Solo obs are usable but
-    # rated at 0.7 so a single lucky station doesn't max out the score.
-    if count <= 0:
-        count_score = 0.0
-    elif count == 1:
-        count_score = 0.7
-    else:
-        count_score = 1.0
-
-    # Agreement score based on σ of contributor speeds.
-    if len(speeds) < 2:
-        agreement_score = 1.0
-    else:
-        mean_s = sum(speeds) / len(speeds)
-        var = sum((s - mean_s) ** 2 for s in speeds) / len(speeds)
-        std = var ** 0.5
-        if std <= 5.0:
-            agreement_score = 1.0
-        elif std >= 20.0:
-            agreement_score = 0.0
-        else:
-            agreement_score = max(0.0, 1.0 - (std - 5.0) / 15.0)
-
-    return round(dist_score * count_score * agreement_score, 3)
+    """Composite 0..1. See ``_cell_confidence_parts``."""
+    composite, *_ = _cell_confidence_parts(
+        nearest_dist_deg, count, speeds, weights,
+    )
+    return composite
 
 
 def _bbox_key(
@@ -582,7 +547,14 @@ def interpolate_obs(
             uv_weight_sum = 0.0
             count = 0
             nearest_d2: float | None = None
-            contributor_speeds: list[float] = []
+            # Agreement uses the local neighborhood only. The rest of the
+            # storm is allowed to differ. If nothing is nearby, fall back
+            # to the weighted spread of whoever actually entered the blend.
+            local_speeds: list[float] = []
+            local_weights: list[float] = []
+            all_speeds: list[float] = []
+            all_weights: list[float] = []
+            local_r2 = _FULL_TRUST_DIST_DEG * _FULL_TRUST_DIST_DEG
             for la, lo, kt, u, v, obs_r_sq, ow in precomputed:
                 if ow <= 0:
                     continue
@@ -599,7 +571,11 @@ def interpolate_obs(
                     v_sum += w * v
                     uv_weight_sum += w
                 count += 1
-                contributor_speeds.append(kt)
+                all_speeds.append(kt)
+                all_weights.append(w)
+                if d2 <= local_r2:
+                    local_speeds.append(kt)
+                    local_weights.append(w)
                 if nearest_d2 is None or d2 < nearest_d2:
                     nearest_d2 = d2
             if count == 0 or weight_sum <= 0:
@@ -616,8 +592,10 @@ def interpolate_obs(
             nearest_km = (
                 round(nearest_dist * 111.0, 0) if nearest_dist is not None else None
             )
+            agree_speeds = local_speeds if local_speeds else all_speeds
+            agree_weights = local_weights if local_speeds else all_weights
             composite, dist_s, count_s, agree_s, std = _cell_confidence_parts(
-                nearest_dist, count, contributor_speeds,
+                nearest_dist, count, agree_speeds, agree_weights,
             )
             cells.append(
                 WindGridCell(

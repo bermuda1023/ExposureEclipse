@@ -103,6 +103,60 @@ def test_hunter_sample_reaches_a_cell_the_buoys_do_not():
     assert on_top.wind_kt > 50
 
 
+def test_distant_gradient_does_not_zero_a_close_hunter():
+    """A hunter on the cell stays HIGH even if the rest of the storm differs."""
+    from app.services.wind_field_map import WindObs
+    obs = [
+        WindObs(
+            lat=22.0, lon=-94.0, wind_kt=90.0, wind_dir_deg=90.0,
+            source="recon", station_id="AF", observed_at="2026-10-07T12:00:00Z",
+            weight=1.0,
+        ),
+        WindObs(
+            lat=22.05, lon=-94.05, wind_kt=88.0, wind_dir_deg=80.0,
+            source="recon", station_id="AF2", observed_at="2026-10-07T12:00:00Z",
+            weight=1.0,
+        ),
+        # Far enough to be outside the 0.5° agreement neighborhood, inside
+        # the 3° buoy radius. These used to drive agreement to zero.
+        WindObs(
+            lat=24.2, lon=-94.0, wind_kt=15.0, wind_dir_deg=0.0,
+            source="buoy", station_id="B1", observed_at="2026-10-07T12:00:00Z",
+            weight=1.0,
+        ),
+        WindObs(
+            lat=22.0, lon=-91.6, wind_kt=20.0, wind_dir_deg=180.0,
+            source="buoy", station_id="B2", observed_at="2026-10-07T12:00:00Z",
+            weight=1.0,
+        ),
+    ]
+    cells = interpolate_obs(-94.5, 21.5, -93.5, 22.5, obs, step=0.5)
+    on_top = next(c for c in cells if abs(c.lat - 22.0) < 0.01 and abs(c.lon + 94.0) < 0.01)
+    assert on_top.nearest_obs_km is not None and on_top.nearest_obs_km < 20
+    assert on_top.confidence >= 0.5
+    assert on_top.agreement_score >= 0.5
+
+
+def test_nearby_hunter_disagreement_stays_low():
+    from app.services.wind_field_map import WindObs
+    obs = [
+        WindObs(
+            lat=22.0, lon=-94.0, wind_kt=30.0, wind_dir_deg=90.0,
+            source="recon", station_id="AF", observed_at="2026-10-07T12:00:00Z",
+            weight=1.0,
+        ),
+        WindObs(
+            lat=22.15, lon=-94.0, wind_kt=95.0, wind_dir_deg=90.0,
+            source="recon", station_id="AF2", observed_at="2026-10-07T12:00:00Z",
+            weight=1.0,
+        ),
+    ]
+    cells = interpolate_obs(-94.5, 21.5, -93.5, 22.5, obs, step=0.5)
+    on_top = next(c for c in cells if abs(c.lat - 22.0) < 0.01 and abs(c.lon + 94.0) < 0.01)
+    assert on_top.confidence < 0.25
+
+
+
 def test_model_step_coarsens_a_basin_sized_bbox():
     step = choose_model_step(-100.0, 10.0, -60.0, 45.0)
     nlat = int(35.0 / step) + 1
