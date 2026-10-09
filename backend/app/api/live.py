@@ -73,7 +73,11 @@ from ..services.wind_forecast import (
     point_forecast,
 )
 from ..services import wildfire_exposure
-from .geometry_input import ExposureRequest, PolygonExposureOut, exposure_out
+from .geometry_input import (
+    PolygonExposureOut,
+    WatchWarnExposureRequest,
+    exposure_out,
+)
 
 router = APIRouter(prefix="/live", tags=["live"])
 
@@ -1990,10 +1994,12 @@ class WatchWarnExposureResponse(CamelModel):
 
 
 @router.post("/watches-warnings/exposure", response_model=WatchWarnExposureResponse)
-def post_watch_warn_exposure(req: ExposureRequest) -> WatchWarnExposureResponse:
+def post_watch_warn_exposure(req: WatchWarnExposureRequest) -> WatchWarnExposureResponse:
     """Roll up exposed TIV by client for the supplied NHC watch/warning
-    polygons. ``combined`` is the deduped union across all polygons (each
-    synthetic location counted once) so overlapping Hurricane Warning +
+    polygons. A full active set is one polygon per coastal zone (well over the
+    50-shape cap used when a user picks fire or flood polygons), so this route
+    accepts that set. ``combined`` is the deduped union across all polygons
+    (each synthetic location counted once) so overlapping Hurricane Warning +
     Storm Surge Warning areas over the same coast do not double-count.
 
     Zone-coded watches (no polygon) cannot be rolled up here — surface them

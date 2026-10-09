@@ -19,6 +19,12 @@ from ..models.common import CamelModel
 # a further (candidates × vertices) work budget that these alone can't express.
 MAX_POLYGONS = 50
 MAX_VERTICES = 100_000
+# NHC watches and warnings are one polygon per coastal zone, not one shape per
+# storm. A live event is ~150 polygons and can be several hundred when warnings
+# and watches stack. The shared 50-cap is for a user picking fire or flood
+# shapes; it rejects a full warning set before any TIV is computed. The work
+# budget still prices the ray-cast.
+MAX_WW_POLYGONS = 1_000
 
 
 def rings_of(geom: dict) -> list:
@@ -65,16 +71,31 @@ class PolygonIn(CamelModel):
         return v
 
 
+def _reject_oversized(polygons: list[PolygonIn]) -> list[PolygonIn]:
+    total = sum(len(r) for p in polygons for r in rings_of(p.geometry))
+    if total > MAX_VERTICES:
+        raise ValueError(f"at most {MAX_VERTICES} vertices per request")
+    return polygons
+
+
 class ExposureRequest(CamelModel):
     polygons: list[PolygonIn] = Field(max_length=MAX_POLYGONS)
 
     @field_validator("polygons")
     @classmethod
     def _validate_budget(cls, v: list[PolygonIn]) -> list[PolygonIn]:
-        total = sum(len(r) for p in v for r in rings_of(p.geometry))
-        if total > MAX_VERTICES:
-            raise ValueError(f"at most {MAX_VERTICES} vertices per request")
-        return v
+        return _reject_oversized(v)
+
+
+class WatchWarnExposureRequest(CamelModel):
+    """Same polygon shape as ExposureRequest, with room for a full NHC set."""
+
+    polygons: list[PolygonIn] = Field(max_length=MAX_WW_POLYGONS)
+
+    @field_validator("polygons")
+    @classmethod
+    def _validate_budget(cls, v: list[PolygonIn]) -> list[PolygonIn]:
+        return _reject_oversized(v)
 
 
 class ClientExposureOut(CamelModel):
@@ -108,10 +129,12 @@ def exposure_out(pid: str, name: str | None, rollup: tuple) -> PolygonExposureOu
 
 __all__ = [
     "MAX_POLYGONS",
+    "MAX_WW_POLYGONS",
     "MAX_VERTICES",
     "rings_of",
     "PolygonIn",
     "ExposureRequest",
+    "WatchWarnExposureRequest",
     "ClientExposureOut",
     "PolygonExposureOut",
     "exposure_out",

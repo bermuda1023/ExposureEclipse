@@ -150,11 +150,18 @@ async def _validation_error_handler(
     exc: RequestValidationError,
 ) -> JSONResponse:
     """Convert Pydantic/FastAPI validation errors → ``VALIDATION_ERROR`` 422 envelope."""
+    errors = jsonable_encoder(exc.errors())
+    hint = ""
+    if errors:
+        first = errors[0]
+        loc = ".".join(str(part) for part in first.get("loc", []) if part != "body")
+        msg = first.get("msg") or ""
+        hint = f" {loc}: {msg}".rstrip() if loc else f" {msg}"
     return _envelope(
         code=ErrorCode.VALIDATION_ERROR,
-        message="Request validation failed.",
+        message=f"Request validation failed.{hint}",
         status_code=422,
-        details={"errors": jsonable_encoder(exc.errors())},
+        details={"errors": errors},
     )
 
 

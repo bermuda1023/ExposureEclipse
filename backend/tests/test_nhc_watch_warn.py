@@ -124,6 +124,45 @@ def test_ww_exposure_endpoint_smoke() -> None:
     assert isinstance(body["results"], list) and len(body["results"]) == 1
 
 
+def test_ww_exposure_accepts_a_full_warning_set() -> None:
+    """A live NHC set is one polygon per coastal zone. The shared 50-polygon
+    cap used for hand-picked fire and flood shapes must not reject it."""
+    from app.api.geometry_input import MAX_POLYGONS, MAX_WW_POLYGONS
+
+    client = TestClient(app)
+    count = MAX_POLYGONS + 20
+    ok = client.post(
+        "/api/live/watches-warnings/exposure",
+        json={
+            "polygons": [
+                {
+                    "id": f"ww-{i}",
+                    "name": "Tropical Storm Warning",
+                    "geometry": _tiny_polygon(),
+                }
+                for i in range(count)
+            ]
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert len(body["results"]) == count
+    assert body["combined"]["id"] == "combined"
+    # Overlapping copies of one box count each location once.
+    assert body["combined"]["locationCount"] == body["results"][0]["locationCount"]
+
+    too_many = client.post(
+        "/api/live/watches-warnings/exposure",
+        json={
+            "polygons": [
+                {"id": f"ww-{i}", "geometry": _tiny_polygon()}
+                for i in range(MAX_WW_POLYGONS + 1)
+            ]
+        },
+    )
+    assert too_many.status_code == 422
+
+
 def test_ww_exposure_endpoint_rejects_bad_geometry() -> None:
     client = TestClient(app)
     r = client.post(
