@@ -177,6 +177,11 @@ def test_model_step_keeps_a_gulf_cone_under_the_minute_budget():
     assert step == 1.25
 
 
+def test_model_step_uses_quarter_degree_on_a_tight_view():
+    # A zoomed 2° box. 0.25° is 9×9 = 81 locations, under the cap.
+    assert choose_model_step(-88.0, 27.0, -86.0, 29.0) == 0.25
+
+
 def test_model_step_stays_half_degree_on_a_small_box():
     assert choose_model_step(-90.0, 24.0, -84.0, 30.0) == 0.5
 

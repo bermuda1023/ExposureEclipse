@@ -18,6 +18,7 @@ import type { GeoJSONSource, Map as MbMap } from "mapbox-gl";
 import { useEffect, useRef } from "react";
 import { shearViewActive, useLiveStormStore } from "../../state/liveStorm";
 import { placeWindParticlesUnderTrack } from "./WindParticleLayer";
+import { resampleWindField } from "./windGridResample";
 import type { JmaOverlay } from "../../api/live";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
 import { segmentsAvoidingAntimeridian } from "./trackSplit";
@@ -781,6 +782,57 @@ export function LiveStormLayer({ map }: Props) {
   const dataRef = useRef(data);
   dataRef.current = data;
 
+  // The model grid follows the map, not the whole forecast track. A zoomed
+  // gulf view then fits inside the location budget at a finer step.
+  useEffect(() => {
+    if (!map) return;
+    let timer = 0;
+    const publish = () => {
+      const b = map.getBounds();
+      const storm = useLiveStormStore.getState().data?.bbox;
+      if (!b || !storm) return;
+      const pad = 0.2;
+      let west = b.getWest();
+      let south = b.getSouth();
+      let east = b.getEast();
+      let north = b.getNorth();
+      const lonSpan = Math.max(east - west, 0.5);
+      const latSpan = Math.max(north - south, 0.5);
+      west -= lonSpan * pad;
+      east += lonSpan * pad;
+      south -= latSpan * pad;
+      north += latSpan * pad;
+      west = Math.floor(west * 2) / 2;
+      south = Math.floor(south * 2) / 2;
+      east = Math.ceil(east * 2) / 2;
+      north = Math.ceil(north * 2) / 2;
+      west = Math.max(west, storm[0]);
+      south = Math.max(south, storm[1]);
+      east = Math.min(east, storm[2]);
+      north = Math.min(north, storm[3]);
+      if (!(east > west) || !(north > south)) return;
+      const next: [number, number, number, number] = [
+        Math.round(west * 100) / 100,
+        Math.round(south * 100) / 100,
+        Math.round(east * 100) / 100,
+        Math.round(north * 100) / 100,
+      ];
+      const cur = useLiveStormStore.getState().modelViewBbox;
+      if (cur && cur.every((v, i) => Math.abs(v - next[i]) < 0.01)) return;
+      useLiveStormStore.getState().setModelViewBbox(next);
+    };
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(publish, 450);
+    };
+    publish();
+    map.on("moveend", schedule);
+    return () => {
+      window.clearTimeout(timer);
+      map.off("moveend", schedule);
+    };
+  }, [map, data?.bbox]);
+
   useEffect(() => {
     if (!map) return;
     const apply = () => {
@@ -893,6 +945,16 @@ export function LiveStormLayer({ map }: Props) {
             isShearView = true;
           }
         }
+      }
+      if (
+        !isShearView
+        && windMapMode !== "observed"
+        && windMapMode != null
+        && cellsForView.length > 0
+      ) {
+        const painted = resampleWindField(cellsForView, viewStep);
+        cellsForView = painted.cells;
+        viewStep = painted.step;
       }
       setSource(map, SRC_WIND_MAP, buildWindMapFC(cellsForView, viewStep));
 

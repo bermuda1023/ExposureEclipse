@@ -51,6 +51,15 @@ import {
 import { useEffectiveScope } from "../../state/useEffectiveScope";
 import { useViewStore } from "../../state/view";
 
+/** Last GFS/ECMWF request identity. A finished fetch is not repeated for
+ *  the same view, but a zoom that changes the box is. */
+const modelFetchKey: Record<"gfs" | "ecmwf" | "gfs-shear" | "ecmwf-shear", string> = {
+  gfs: "",
+  ecmwf: "",
+  "gfs-shear": "",
+  "ecmwf-shear": "",
+};
+
 export function LiveStormPanel() {
   const open = useLiveStormStore((s) => s.pickerOpen);
   const setPickerOpen = useLiveStormStore((s) => s.setPickerOpen);
@@ -134,6 +143,7 @@ export function LiveStormPanel() {
   // Bbox only — a hunter poll replaces `data` every half minute and must
   // not cancel a GFS/ECMWF request that is already in flight.
   const bboxKey = store.data?.bbox?.join(",") ?? "";
+  const viewKey = store.modelViewBbox?.join(",") ?? "";
   const stormIsLive = store.data?.storm.isLive === true;
 
   // Lazy-fetch model grids whenever the mode requires them. Retry bumps
@@ -145,8 +155,10 @@ export function LiveStormPanel() {
     const nonce = snap.reloadNonce;
     const data = snap.data;
     const stormId = snap.activeStormId;
-    if (!data || !stormId) return;
-    const bbox = data.bbox;
+    if (!data || !stormId || !snap.modelViewBbox) return;
+    // The map publishes the visible box. Wait for it so the first request
+    // is the zoomed view, not the whole forecast track at a 1° step.
+    const bbox = snap.modelViewBbox;
     let cancelled = false;
     const needGfs =
       mode === "gfs"
@@ -157,17 +169,20 @@ export function LiveStormPanel() {
       || mode === "diff-obs-vs-ecmwf"
       || mode === "diff-gfs-vs-ecmwf";
 
+    const wanted = bbox.join(",");
     const stillCurrent = () => {
       const s = useLiveStormStore.getState();
-      return !cancelled && s.activeStormId === stormId && s.reloadNonce === nonce;
+      const now = s.modelViewBbox?.join(",") ?? "";
+      return !cancelled && s.activeStormId === stormId && s.reloadNonce === nonce
+        && now === wanted;
     };
 
     async function fetchWithRetry(model: "gfs" | "ecmwf") {
       const state = useLiveStormStore.getState();
       const status = model === "gfs" ? state.gfsGridStatus : state.ecmwfGridStatus;
-      const attempted = model === "gfs" ? state.gfsAttemptNonce : state.ecmwfAttemptNonce;
+      const attemptKey = `${stormId}|${nonce}|${wanted}`;
       if (
-        attempted === nonce
+        modelFetchKey[model] === attemptKey
         && (status === "ok" || status === "empty" || status === "error")
       ) {
         return;
@@ -175,6 +190,7 @@ export function LiveStormPanel() {
       const setStatus = model === "gfs" ? state.setGfsGridStatus : state.setEcmwfGridStatus;
       const setGrid = model === "gfs" ? state.setGfsGrid : state.setEcmwfGrid;
       const setAttempt = model === "gfs" ? state.setGfsAttemptNonce : state.setEcmwfAttemptNonce;
+      modelFetchKey[model] = attemptKey;
       setAttempt(nonce);
       setStatus("loading");
       const refresh = nonce > 0;
@@ -182,6 +198,12 @@ export function LiveStormPanel() {
         if (!stillCurrent()) return;
         if (windGridUsable(g)) {
           setGrid(g);
+          setStatus("ok");
+        } else if (windGridUsable(model === "gfs"
+          ? useLiveStormStore.getState().gfsGrid
+          : useLiveStormStore.getState().ecmwfGrid)) {
+          // A finer view that comes back empty should not wipe the field
+          // already on the map.
           setStatus("ok");
         } else {
           setGrid(null);
@@ -237,7 +259,7 @@ export function LiveStormPanel() {
     return () => {
       cancelled = true;
     };
-  }, [store.windMapMode, bboxKey, store.reloadNonce]);
+  }, [store.windMapMode, bboxKey, viewKey, store.reloadNonce]);
 
   // Deep-layer shear uses the same slider hours. Fetched only when the
   // toggle is on and the visible model is GFS or ECMWF — not for obs or diffs.
@@ -248,18 +270,22 @@ export function LiveStormPanel() {
     if (!snap.showWindShear || !model || !bboxKey) return;
     const nonce = snap.reloadNonce;
     const stormId = snap.activeStormId;
-    const bbox = snap.data?.bbox;
+    const bbox = snap.modelViewBbox ?? snap.data?.bbox;
     if (!stormId || !bbox) return;
     let cancelled = false;
+    const wanted = bbox.join(",");
     const stillCurrent = () => {
       const s = useLiveStormStore.getState();
+      const now = (s.modelViewBbox ?? s.data?.bbox)?.join(",") ?? "";
       return !cancelled && s.activeStormId === stormId && s.reloadNonce === nonce
-        && s.showWindShear && s.windMapMode === mode;
+        && s.showWindShear && s.windMapMode === mode
+        && now === wanted;
     };
     const status = model === "gfs" ? snap.gfsShearStatus : snap.ecmwfShearStatus;
-    const attempted = model === "gfs" ? snap.gfsShearAttemptNonce : snap.ecmwfShearAttemptNonce;
+    const attemptKey = `${stormId}|${nonce}|${wanted}`;
+    const slot = model === "gfs" ? "gfs-shear" : "ecmwf-shear";
     if (
-      attempted === nonce
+      modelFetchKey[slot] === attemptKey
       && (status === "ok" || status === "empty" || status === "error")
     ) {
       return;
@@ -269,6 +295,7 @@ export function LiveStormPanel() {
     const setAttempt = model === "gfs"
       ? snap.setGfsShearAttemptNonce
       : snap.setEcmwfShearAttemptNonce;
+    modelFetchKey[slot] = attemptKey;
     setAttempt(nonce);
     setStatus("loading");
     const refresh = nonce > 0;
@@ -327,7 +354,7 @@ export function LiveStormPanel() {
     return () => {
       cancelled = true;
     };
-  }, [store.showWindShear, store.windMapMode, bboxKey, store.reloadNonce]);
+  }, [store.showWindShear, store.windMapMode, bboxKey, viewKey, store.reloadNonce]);
 
   // Hunter points keep arriving while a plane is in the storm. Poll the
   // recon feed alone — the full bundle is too slow to repeat, and a page

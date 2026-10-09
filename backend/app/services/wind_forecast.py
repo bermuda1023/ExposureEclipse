@@ -467,12 +467,16 @@ def _try_reserve_locations(n: int) -> bool:
 
 def choose_model_step(
     west: float, south: float, east: float, north: float,
-    preferred: float = 0.5,
+    preferred: float = 0.25,
 ) -> float:
-    """Step that keeps the Open-Meteo request inside ``_MAX_MODEL_CELLS``."""
+    """Step that keeps the Open-Meteo request inside ``_MAX_MODEL_CELLS``.
+
+    Native GFS and IFS spacing is 0.25°. A zoomed view that fits uses that.
+    A basin-sized box coarsens so both models still fit in one minute.
+    """
     span_lat = max(north - south, 0.5)
     span_lon = max(east - west, 0.5)
-    step = max(preferred, 0.5)
+    step = max(preferred, 0.25)
     while step < 2.0:
         nlat = int(span_lat / step) + 1
         nlon = int(span_lon / step) + 1
@@ -784,7 +788,7 @@ def _assemble_model_grid(
         raise ValueError(f"unknown model wire name: {model_wire!r}")
 
     step_deg = choose_model_step(
-        west, south, east, north, preferred=step_deg or 0.5,
+        west, south, east, north, preferred=step_deg if step_deg else 0.25,
     )
     cache_key = (
         round(west, 2), round(south, 2), round(east, 2), round(north, 2),

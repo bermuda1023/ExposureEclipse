@@ -61,6 +61,10 @@ interface LiveStormState {
   // the panel can distinguish "loading" from "no data available at this
   // bbox" (Open-Meteo's ECMWF variants return nulls over the mid-Pacific).
   windMapMode: WindMapMode | null;
+  /** Map view the model grids were requested for. Smaller than the storm
+   *  bbox when the user is zoomed in, so the forecast step can tighten. */
+  modelViewBbox: [number, number, number, number] | null;
+  setModelViewBbox: (b: [number, number, number, number] | null) => void;
   gfsGrid: WindModelGrid | null;
   ecmwfGrid: WindModelGrid | null;
   gfsGridStatus: "idle" | "loading" | "ok" | "empty" | "error";
@@ -309,6 +313,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   showWindMap: true,
   showWindParticles: true,
   windMapMode: "observed" as WindMapMode,
+  modelViewBbox: null,
   gfsGrid: null,
   ecmwfGrid: null,
   gfsGridStatus: "idle" as const,
@@ -386,6 +391,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
       windMapFrameIndex: 0,
       highlightObs: null,
       windMapMode: "observed",
+      modelViewBbox: null,
       modelTracks: null,
       modelTracksStatus: "idle",
       ensembleRisk: null,
@@ -413,6 +419,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
     windMapFrameIndex: 0,
     highlightObs: null,
     windMapMode: "observed",
+    modelViewBbox: null,
     // Reset ALL storm-specific data slices — otherwise ModelTrackLayer /
     // StrikeProbabilityLayer keep painting whatever they held from the
     // previous storm. GTWO is intentionally NOT reset — it's a basin-wide
@@ -432,6 +439,7 @@ export const useLiveStormStore = create<LiveStormState>((set, get) => ({
   }),
   setToggle: (key, value) => set({ [key]: value } as Partial<LiveStormState>),
   setWindMapMode: (mode) => set({ windMapMode: mode, windMapFrameIndex: 0 }),
+  setModelViewBbox: (b) => set({ modelViewBbox: b }),
   setGfsGrid: (g) => set({ gfsGrid: g }),
   setEcmwfGrid: (g) => set({ ecmwfGrid: g }),
   setGfsGridStatus: (s) => set({ gfsGridStatus: s }),
