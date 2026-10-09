@@ -948,7 +948,6 @@ export function LiveStormLayer({ map }: Props) {
       }
       if (
         !isShearView
-        && windMapMode !== "observed"
         && windMapMode != null
         && cellsForView.length > 0
       ) {
@@ -1121,11 +1120,15 @@ export function LiveStormLayer({ map }: Props) {
           "fill-color": paintExpr,
           "fill-opacity": fillOpacity,
           "fill-outline-color": "rgba(0,0,0,0)",
+          // Antialiased edges draw a seam between every cell. Off, a fine
+          // lattice reads as one field instead of a mosaic.
+          "fill-antialias": false,
         },
       }, "county-line");
       if (map.getLayer(LAYER_WIND_MAP_FILL)) {
         map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-color", paintExpr);
         map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-opacity", fillOpacity);
+        map.setPaintProperty(LAYER_WIND_MAP_FILL, "fill-antialias", false);
       }
       // Same north-pointing glyph as the hunter arrows, drawn small.
       // A cell-sized arrow hides the track. Direction is meteorological

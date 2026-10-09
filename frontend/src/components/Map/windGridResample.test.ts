@@ -16,7 +16,7 @@ describe("resampleWindField", () => {
       }
     }
     const painted = resampleWindField(cells, 1);
-    expect(painted.step).toBeLessThan(0.5);
+    expect(painted.step).toBeLessThanOrEqual(0.05);
     expect(painted.cells.length).toBeGreaterThan(cells.length);
     const mid = painted.cells.find(
       (c) => Math.abs(c.lat - 25.5) < 0.08 && Math.abs(c.lon + 89.5) < 0.08,

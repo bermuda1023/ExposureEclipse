@@ -1,9 +1,9 @@
-/** Paint step for model and difference fields. The fetched grid is often
- *  0.5–1.25° because of the forecast-service budget. Drawn as squares that
- *  reads as a few giant color blocks. This resamples onto a fine lattice
- *  with bilinear weights so the same samples look like a continuous field. */
-export const DISPLAY_STEP_DEG = 0.12;
-const MAX_DISPLAY_CELLS = 8000;
+/** Paint step for every wind-map mode. Model samples are no finer than
+ *  0.25° (native GFS / IFS, and the forecast-service location budget).
+ *  Observed cells are 0.25° too. Drawn at that step they read as tiles.
+ *  This resamples onto a ~5 km lattice so the same samples look continuous. */
+export const DISPLAY_STEP_DEG = 0.05;
+const MAX_DISPLAY_CELLS = 20000;
 
 export interface ResampleCell {
   lat: number;
@@ -22,8 +22,8 @@ export function displayStepDeg(
   let step = DISPLAY_STEP_DEG;
   const count = (s: number) =>
     (Math.ceil(latSpan / s) + 1) * (Math.ceil(lonSpan / s) + 1);
-  while (count(step) > MAX_DISPLAY_CELLS && step + 0.04 < sourceStep) {
-    step = Math.round((step + 0.04) * 100) / 100;
+  while (count(step) > MAX_DISPLAY_CELLS && step + 0.01 < sourceStep) {
+    step = Math.round((step + 0.01) * 100) / 100;
   }
   return Math.min(step, sourceStep);
 }
@@ -130,7 +130,8 @@ export function resampleWindField<T extends ResampleCell>(
           ((((Math.atan2(u, v) * 180) / Math.PI + 180) % 360) * 10),
         ) / 10;
       }
-      const sample = corners[0].c;
+      const dominant = corners.reduce((a, b) => (b.w > a.w ? b : a));
+      const sample = dominant.c;
       out.push({
         ...sample,
         lat: Math.round(lat * 1000) / 1000,
