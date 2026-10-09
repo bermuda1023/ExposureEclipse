@@ -256,18 +256,20 @@ export function Methodology() {
             wind, or when any sample is hurricane-force. Samples are one grid
             over the whole county, sized from the county's own area, so a chain
             of islands cannot outvote the mainland and a 10 nm eyewall is not
-            one cell. On a live storm the list is the full NHC forecast cone,
-            not only the 34 kt radii. A county in the cone takes the intensity
-            of the lead time whose cone covers it, so inland day-3 counties
-            are not stamped with the current peak. The 34 and 64 kt radii
-            still grade the wind inside that field. A historical storm has no
-            forecast cone, so it stays clipped to the 64 kt field drawn on
-            the map. The wind inside the field is the peak that point felt.
-            Between fixes the track is filled in so a 6-hour gap cannot skip
-            the core. The county is not stamped with the storm's peak just
-            because the centroid sits inside the outer field. The bright core
-            on the map is the eyewall. The wide ring is the 64 kt field,
-            colored as the wind halfway out to that edge, not as the peak.
+            one cell. On a live storm the wind is the NHC 64 / 50 / 34 kt
+            radii along the whole official forecast, on a log profile.
+            Hurricane-force wind stays inside the 64 kt radius. The forecast
+            cone is where the center might go, not a disk of the peak wind.
+            Outside that core the sustained wind is capped by the higher of
+            GFS and ECMWF (10 m wind brought up to a 1-minute speed). Those
+            models do not resolve the eyewall, so they do not cut the core. A historical storm has no live radii, so it stays
+            clipped to the 64 kt field drawn on the map. The wind inside the
+            field is the peak that point felt. Between fixes the track is
+            filled in so a 6-hour gap cannot skip the core. The county is not
+            stamped with the storm's peak just because the centroid sits
+            inside the outer field. The bright core on the map is the eyewall.
+            The wide ring is the 64 kt field, colored as the wind halfway out
+            to that edge, not as the peak.
           </li>
           <li>
             Each county comes back as area fractions: clear, tropical storm,

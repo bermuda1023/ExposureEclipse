@@ -206,8 +206,15 @@ def _compute_impact_payload(
     facts = _apply_peril_filter(resolved.facts, payload.perils)
     facts = apply_filters(facts, payload.filters)
 
+    from ..services.wind_forecast import outer_wind_cap
+
+    model_wind = None
+    if track_source == "live":
+        model_wind = outer_wind_cap(
+            [(p.lat, p.lon) for p in storm.track if p.wind_kt >= 34]
+        )
     impacts, footprint, cone, outer_cone, outer_rings = compute_impact(
-        storm, multiplier=multiplier
+        storm, multiplier=multiplier, model_wind=model_wind,
     )
     impacts = join_tiv(impacts, facts)
 

@@ -761,6 +761,9 @@ def storm_for_impact(atcf_id: str) -> Storm | None:
         r64 = None
         if ofcl and ofcl.r64_quads and any(v > 0 for v in ofcl.r64_quads):
             r64 = tuple(float(v) for v in ofcl.r64_quads)
+        r50 = None
+        if ofcl and ofcl.r50_quads and any(v > 0 for v in ofcl.r50_quads):
+            r50 = tuple(float(v) for v in ofcl.r50_quads)
         r34 = None
         if ofcl and ofcl.r34_quads and any(v > 0 for v in ofcl.r34_quads):
             r34 = tuple(float(v) for v in ofcl.r34_quads)
@@ -777,6 +780,7 @@ def storm_for_impact(atcf_id: str) -> Storm | None:
                 pressure_mb=ofcl.pressure_mb if ofcl else None,
                 rmax_nm=ofcl.rmw_nm if ofcl else None,
                 r64_quads_nm=r64,
+                r50_quads_nm=r50,
                 r34_quads_nm=r34,
                 radii_source="nhc",
                 forecast_hour=tau,

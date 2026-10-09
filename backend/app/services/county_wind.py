@@ -91,6 +91,72 @@ def experienced_wind_kt(
     return local_wind_kt(distance_nm, vmax_kt, rmax, r64_nm)
 
 
+def effective_rmax(
+    rmax: float,
+    r64_nm: float = 0.0,
+    r50_nm: float = 0.0,
+    r34_nm: float = 0.0,
+) -> float:
+    """Keep Rmax inside the radii NHC actually published.
+
+    Willoughby Rmax for a weakening storm is often 30–50 nm. Treating that
+    whole disk as Vmax puts hurricane-force wind on inland counties that the
+    50 kt radius says are already in the outer field.
+    """
+    rmax = max(float(rmax or 0.0), 8.0)
+    if r64_nm > 0 and rmax > r64_nm * 0.8:
+        return max(8.0, r64_nm * 0.55)
+    if r50_nm > 0 and rmax > r50_nm * 0.75:
+        return max(8.0, r50_nm * 0.45)
+    if r34_nm > 0 and r64_nm <= 0 and r50_nm <= 0 and rmax > 20.0:
+        return 15.0
+    return rmax
+
+
+def radii_wind_kt(
+    distance_nm: float,
+    vmax_kt: int,
+    rmax: float,
+    r64_nm: float,
+    r50_nm: float,
+    r34_nm: float,
+) -> int:
+    """Sustained wind pinned to the published 64 / 50 / 34 kt radii.
+
+    Hurricane-force wind exists only inside R64 (or, if NHC did not publish
+    one, only while the curve is still falling from Vmax at Rmax toward the
+    next radius). The old linear ramp put 63 kt on the whole tropical-storm
+    annulus, including inland of a 35 kt forecast point.
+    """
+    if vmax_kt < TS_KT or distance_nm < 0:
+        return 0
+    rmax = effective_rmax(rmax, r64_nm, r50_nm, r34_nm)
+    if distance_nm <= rmax:
+        return int(vmax_kt)
+    knots: list[tuple[float, float]] = [(rmax, float(vmax_kt))]
+
+    def _add(radius: float, speed: float) -> None:
+        if radius > knots[-1][0] * 1.05 and speed < knots[-1][1]:
+            knots.append((float(radius), float(speed)))
+
+    if r64_nm > 0 and vmax_kt >= 64:
+        _add(r64_nm, 64.0)
+    if r50_nm > 0 and vmax_kt > 50:
+        _add(r50_nm, 50.0 if vmax_kt >= 64 else min(50.0, float(vmax_kt)))
+    if r34_nm > 0 and vmax_kt >= TS_KT:
+        _add(r34_nm, 34.0)
+    if distance_nm > knots[-1][0] + 0.5:
+        return 0
+    for (r0, v0), (r1, v1) in zip(knots, knots[1:]):
+        if distance_nm <= r1 + 0.5:
+            if distance_nm <= r0 or r1 <= r0:
+                return int(round(min(vmax_kt, v0)))
+            t = math.log(distance_nm / r0) / math.log(r1 / r0)
+            t = min(1.0, max(0.0, t))
+            return int(round(min(vmax_kt, v0 + t * (v1 - v0))))
+    return 0
+
+
 def skirt_wind_kt(vmax_kt: int, rmax: float, r64_nm: float) -> int:
     """Wind used to color the R64 annulus, not the eyewall.
 

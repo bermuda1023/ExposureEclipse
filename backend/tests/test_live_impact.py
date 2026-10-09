@@ -103,8 +103,8 @@ def test_r34_reaches_counties_the_core_misses(monkeypatch) -> None:
     assert [i.geoid for i in impacts] == ["12033"]
 
 
-def test_forecast_cone_includes_inland_counties(monkeypatch) -> None:
-    """A county in the day-3 cone is listed even though the 34 kt field misses it."""
+def test_cone_does_not_stamp_inland_wind(monkeypatch) -> None:
+    """The forecast cone is not a wind field. Inland of R34 stays clear."""
     import app.services.hurricane_impact as hi
 
     inland = CountyMeta(
@@ -115,18 +115,8 @@ def test_forecast_cone_includes_inland_counties(monkeypatch) -> None:
         centroid_lat=36.2,
         centroid_lon=-86.8,
     )
-    outside = CountyMeta(
-        geoid="36061",
-        geography_id="US-NY-36061",
-        name="New York",
-        state_usps="NY",
-        centroid_lat=40.7,
-        centroid_lon=-74.0,
-    )
-    monkeypatch.setattr(hi, "county_centroids", lambda: {"47037": inland, "36061": outside})
+    monkeypatch.setattr(hi, "county_centroids", lambda: {"47037": inland})
     monkeypatch.setattr(hi, "county_area_samples", lambda: {})
-    # Box around Nashville. New York is outside it.
-    cone = [(-88.0, 34.0), (-84.0, 34.0), (-84.0, 38.0), (-88.0, 38.0), (-88.0, 34.0)]
     storm = Storm(
         storm_id="AL092026",
         name="ISAIAS",
@@ -135,22 +125,62 @@ def test_forecast_cone_includes_inland_counties(monkeypatch) -> None:
             TrackPoint(
                 datetime_utc="2026-10-11T00:00:00Z",
                 record_id="",
-                status="LO",
-                lat=36.0,
-                lon=-86.5,
-                wind_kt=30,
-                pressure_mb=1004,
+                status="TS",
+                lat=34.4,
+                lon=-86.6,
+                wind_kt=41,
+                pressure_mb=1000,
+                rmax_nm=20.0,
+                r34_quads_nm=(30.0, 20.0, 14.0, 30.0),
                 radii_source="nhc",
-                forecast_hour=48,
-                cone_radius_nm=70.0,
+                forecast_hour=36,
+                cone_radius_nm=55.0,
             )
         ],
-        forecast_cone=cone,
+        forecast_cone=[(-88.0, 34.0), (-84.0, 34.0), (-84.0, 38.0), (-88.0, 38.0), (-88.0, 34.0)],
     )
     impacts, *_ = compute_impact(storm)
-    assert [i.geoid for i in impacts] == ["47037"]
-    assert impacts[0].max_wind_kt == 30
-    assert impacts[0].max_category == -1
+    assert impacts == []
+
+
+def test_weak_advisory_does_not_paint_hurricane_winds(monkeypatch) -> None:
+    """A 35 kt point must not grow a 63 kt ring just because R64 was missing."""
+    import app.services.hurricane_impact as hi
+
+    county = CountyMeta(
+        geoid="01003",
+        geography_id="US-AL-01003",
+        name="Baldwin",
+        state_usps="AL",
+        centroid_lat=30.7,
+        centroid_lon=-87.7,
+    )
+    monkeypatch.setattr(hi, "county_centroids", lambda: {"01003": county})
+    monkeypatch.setattr(hi, "county_area_samples", lambda: {})
+    storm = Storm(
+        storm_id="AL092026",
+        name="ISAIAS",
+        year=2026,
+        track=[
+            TrackPoint(
+                datetime_utc="2026-10-10T00:00:00Z",
+                record_id="",
+                status="TS",
+                lat=30.7,
+                lon=-87.7,
+                wind_kt=35,
+                pressure_mb=1002,
+                rmax_nm=25.0,
+                r34_quads_nm=(40.0, 40.0, 40.0, 40.0),
+                radii_source="nhc",
+                forecast_hour=24,
+            )
+        ],
+    )
+    impacts, *_ = compute_impact(storm)
+    assert impacts
+    assert impacts[0].max_wind_kt <= 35
+    assert impacts[0].max_category <= 0
 
 
 def test_storm_for_impact_prefers_official_adecks(monkeypatch) -> None:

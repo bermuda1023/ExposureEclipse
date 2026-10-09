@@ -928,6 +928,112 @@ def fetch_model_shear_grid(
     )
 
 
+# WMO factor from 10-minute (what GFS/IFS 10 m wind is closest to) to the
+# 1-minute sustained speed the damage curves use.
+_ONE_MIN_FROM_10M = 1.11
+_OUTER_CAP_CACHE: TtlCache[tuple, list] = TtlCache(ttl_s=20 * 60, maxsize=4)
+
+
+def outer_wind_cap(track_points: list[tuple[float, float]]):
+    """Max of GFS and ECMWF 1-minute wind over the next 3 days.
+
+    Sampled on a 1.2° grid around the forecast track. Used only to cap the
+    outer wind field (beyond the 50 kt radius). Returns a ``(lat, lon) -> kt``
+    lookup, or None if neither model answers. The core is left to NHC:
+    global models do not resolve the eyewall.
+    """
+    if len(track_points) < 1:
+        return None
+    lats = [p[0] for p in track_points]
+    lons = [p[1] for p in track_points]
+    lat0 = math.floor(min(lats) - 1.2)
+    lat1 = math.ceil(max(lats) + 1.2)
+    lon0 = math.floor(min(lons) - 1.2)
+    lon1 = math.ceil(max(lons) + 1.2)
+    # Keep the request small. The outer field does not need eyewall resolution.
+    step = 1.2
+    grid: list[tuple[float, float]] = []
+    lat = lat0
+    while lat <= lat1 + 0.01:
+        lon = lon0
+        while lon <= lon1 + 0.01:
+            grid.append((round(lat, 2), round(lon, 2)))
+            lon += step
+        lat += step
+    if len(grid) > 80:
+        grid = grid[:80]
+    key = tuple(grid)
+    cached = _OUTER_CAP_CACHE.get(key)
+    if cached is None:
+        cached = _fetch_outer_cap(grid)
+        if cached:
+            _OUTER_CAP_CACHE.set(key, cached)
+    if not cached:
+        return None
+
+    def _at(lat_q: float, lon_q: float) -> float | None:
+        num = 0.0
+        den = 0.0
+        for glat, glon, kt in cached:
+            dlat = lat_q - glat
+            dlon = lon_q - glon
+            dist2 = dlat * dlat + dlon * dlon
+            # Only the local cell. A 2° blend pulls the eyewall into inland counties.
+            if dist2 > 0.85 * 0.85:
+                continue
+            w = 1.0 / max(dist2, 0.04)
+            num += w * kt
+            den += w
+        if den <= 0:
+            return None
+        return num / den
+
+    return _at
+
+
+def _fetch_outer_cap(grid: list[tuple[float, float]]) -> list[tuple[float, float, float]]:
+    """Per grid point, the higher of the two models' peak 1-minute wind."""
+    lats = ",".join(f"{lat:.2f}" for lat, _lon in grid)
+    lons = ",".join(f"{lon:.2f}" for _lat, lon in grid)
+    peaks: list[list[float]] = [[0.0, 0.0] for _ in grid]
+
+    def _one(model_key: str, slot: int) -> None:
+        params = {
+            "latitude": lats,
+            "longitude": lons,
+            "hourly": "wind_speed_10m",
+            "wind_speed_unit": "kn",
+            "timezone": "UTC",
+            "forecast_days": 3,
+            "models": model_key,
+        }
+        url = f"{OPEN_METEO_URL}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return
+        rows = data if isinstance(data, list) else [data]
+        for i, row in enumerate(rows):
+            if i >= len(peaks):
+                break
+            speeds = ((row or {}).get("hourly") or {}).get("wind_speed_10m") or []
+            vals = [float(v) for v in speeds if v is not None]
+            if vals:
+                peaks[i][slot] = max(vals) * _ONE_MIN_FROM_10M
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pool.submit(_one, "gfs_seamless", 0)
+        pool.submit(_one, "ecmwf_ifs025", 1)
+    out: list[tuple[float, float, float]] = []
+    for (lat, lon), (gfs_kt, ecm_kt) in zip(grid, peaks):
+        kt = max(gfs_kt, ecm_kt)
+        if kt > 0:
+            out.append((lat, lon, kt))
+    return out
+
+
 __all__ = [
     "ModelForecast",
     "ModelWindFrame",
@@ -942,5 +1048,6 @@ __all__ = [
     "ModelDaily",
     "daily_forecast",
     "fetch_model_wind_grid",
+    "outer_wind_cap",
     "point_forecast",
 ]
