@@ -12,6 +12,18 @@ the newest calibrated set as the default.
 Run from the repo root:
   python backend/scripts/calibrate_damage_curves.py
   python backend/scripts/calibrate_damage_curves.py --events AL092022 AL142018 --dry-run
+
+Post-event evidence (``scripts/build_event_evidence.py``) can separate hazard
+error from vulnerability:
+  --wind-correction evidence   scale each event's wind by its ASOS observed /
+                               modelled ratio relative to the all-event median,
+                               so the curve does not learn one storm's
+                               too-strong (or too-weak) wind field
+  --exclude-flood              drop tropical-storm-wind counties (modelled
+                               peak < 64 kt, no ASOS reading >= 34 kt) with
+                               flood reports or riverine high-water marks:
+                               PCS includes private flood there and no wind
+                               curve should chase it
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ from app.services.damage_curves import (
     insured_prior,
     load_curve_sets,
 )
+from app.services.event_evidence import county_evidence, load_evidence
 from app.services.event_loss import resolve_storm, storm_impacts
 from app.services.industry_losses import LOSS_SEGMENTS, load_actuals, tiv_for_year
 from app.services.loss_calibration import implied_dr_by_band, match_event
@@ -44,6 +57,32 @@ from app.services.onlevel import onlevel_actuals
 MIN_OBS_PER_SEGMENT = 5
 SIGMA_COUNTY_FLOOR = 0.25
 SIGMA_EVENT_FLOOR = 0.15
+# ASSUMPTION: an event's ASOS wind bias counts only with 20+ usable stations;
+# the >50 kt subset is preferred once it has 10. The relative correction is
+# clamped so one odd station network cannot swing a storm's wind by > 30%.
+MIN_BIAS_STATIONS = 20
+MIN_STRONG_STATIONS = 10
+WIND_CORRECTION_CLAMP = (0.7, 1.3)
+FLOOD_SIGNAL_MIN = 2
+
+
+def event_wind_bias(storm_id: str) -> float | None:
+    doc = load_evidence(storm_id)
+    b = (doc or {}).get("windBias") or {}
+    if (b.get("nModelAbove50Kt") or 0) >= MIN_STRONG_STATIONS and b.get("medianObsOverModelAbove50Kt"):
+        return float(b["medianObsOverModelAbove50Kt"])
+    if (b.get("n") or 0) >= MIN_BIAS_STATIONS and b.get("medianObsOverModel"):
+        return float(b["medianObsOverModel"])
+    return None
+
+
+def flood_dominated(storm_id: str, geography_id: str, peak_wind_kt: int) -> bool:
+    if peak_wind_kt >= 64:
+        return False
+    ev = county_evidence(load_evidence(storm_id), geography_id)
+    if not ev or (ev["asosMaxSustainedKt"] or 0) >= 34:
+        return False
+    return ev["floodReports"] + ev["hwmRiverine"] >= FLOOD_SIGNAL_MIN
 
 
 def _rms(values: list[float]) -> float | None:
@@ -67,6 +106,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-onlevel", action="store_true",
                         help="fit on reported losses without scaling them to the TIV valuation date")
+    parser.add_argument("--wind-correction", choices=("none", "evidence"), default="none")
+    parser.add_argument("--exclude-flood", action="store_true")
     args = parser.parse_args()
 
     actuals = load_actuals()
@@ -75,6 +116,10 @@ def main() -> None:
         raise SystemExit("No events in mockdata/industry_losses/. Add a CSV first.")
     prior = load_curve_sets()[args.prior]
     wind_factor = args.wind_factor if args.wind_factor is not None else prior.wind_factor
+
+    biases = {sid: event_wind_bias(sid) for sid in wanted} if args.wind_correction == "evidence" else {}
+    known = sorted(b for b in biases.values() if b)
+    bias_ref = known[len(known) // 2] if known else None
 
     obs: dict[str, list[Observation]] = {seg: [] for seg in LOSS_SEGMENTS}
     event_meta: list[dict] = []
@@ -94,7 +139,22 @@ def main() -> None:
         if not args.no_onlevel:
             act, on_level = onlevel_actuals(act, tiv.as_of)
         impacts = storm_impacts(storm, source, args.multiplier)
-        matched = match_event(act, impacts, tiv, wind_factor)
+        rel = 1.0
+        if bias_ref and biases.get(storm_id):
+            lo, hi = WIND_CORRECTION_CLAMP
+            rel = min(hi, max(lo, biases[storm_id] / bias_ref))
+        matched = match_event(act, impacts, tiv, wind_factor * rel)
+        flood_dropped = 0.0
+        if args.exclude_flood:
+            peak = {imp.geography_id: imp.max_wind_kt for imp in impacts}
+            for seg in LOSS_SEGMENTS:
+                keep = []
+                for o in matched.observations[seg]:
+                    if flood_dominated(storm_id, o.geography_id, peak.get(o.geography_id, 0)):
+                        flood_dropped += o.actual
+                    else:
+                        keep.append(o)
+                matched.observations[seg] = keep
         for seg in LOSS_SEGMENTS:
             obs[seg].extend(matched.observations[seg])
         miss = sum(a for _g, _s, a in matched.footprint_miss)
@@ -111,12 +171,17 @@ def main() -> None:
             "footprintMissLoss": miss,
             "exposureGapLoss": gap,
             "countiesMatched": {seg: len(matched.observations[seg]) for seg in LOSS_SEGMENTS},
+            "windBias": biases.get(storm_id),
+            "windCorrection": rel,
+            "floodExcludedLoss": flood_dropped,
         }
         event_meta.append(meta)
         print(
             f"{storm_id} {storm.name} {storm.year}: actual {act.total():,.0f} {act.currency}"
             + (f" (reported x{on_level['factor']:.2f} on-level)" if on_level else "") + "; "
             f"matched {meta['countiesMatched']}; outside wind field {miss:,.0f}; no TIV {gap:,.0f}"
+            + (f"; wind x{rel:.2f}" if rel != 1.0 else "")
+            + (f"; flood-dominated dropped {flood_dropped:,.0f}" if flood_dropped else "")
         )
 
     opts = FitOptions(alpha_event=args.alpha_event, ridge=args.ridge)
@@ -192,6 +257,9 @@ def main() -> None:
             "ridge": args.ridge,
             "alphaEvent": args.alpha_event,
             "multiplier": args.multiplier,
+            "windCorrection": args.wind_correction,
+            "windBiasReference": bias_ref,
+            "excludeFlood": args.exclude_flood,
             "events": event_meta,
             "segments": fit_meta,
         },
