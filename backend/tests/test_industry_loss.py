@@ -11,7 +11,13 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services import damage_curves, event_loss, industry_losses, onlevel
 from app.services.county_wind import SpeedBin
-from app.services.curve_fit import Observation, _pav_non_decreasing, fit_curve, fit_with_holdout
+from app.services.curve_fit import (
+    Observation,
+    _pav_non_decreasing,
+    fit_curve,
+    fit_with_holdout,
+    residuals,
+)
 from app.services.damage_curves import BAND_MPH_LO, get_curve_set, vendor_curve
 from app.services.event_loss import lognormal_band
 from app.services.hurricane_impact import CountyImpact
@@ -21,6 +27,7 @@ from app.services.industry_losses import (
     IndustryTiv,
     normalize_geography,
 )
+from app.services.loss_calibration import match_event
 
 client = TestClient(app)
 
@@ -275,6 +282,52 @@ def test_fit_with_holdout_scores_each_event() -> None:
     assert all(abs(e) < 0.15 for e in res.oos_event_errors.values())
 
 
+def test_below_materiality_rows_are_upper_bounds() -> None:
+    prior = vendor_curve("kcc")
+    truth = [v * 0.6 for v in prior]
+    clean = _synthetic(truth)
+    # Token PCS allocations in barely touched counties: $5k on $100M of TIV
+    # in the 41-60 mph bands, where the true loss is about $66k-$156k.
+    def noise(upper: float | None) -> list[Observation]:
+        return [
+            Observation(f"EV{1 + i % 3}", f"US-GA-{13000 + i:05d}", 1e8, [(i % 2, 1.0)], 5_000.0,
+                        upper_bound=upper)
+            for i in range(60)
+        ]
+
+    exact = fit_curve(clean + noise(None), prior)
+    censored = fit_curve(clean + noise(250_000.0), prior)
+    # Read as exact, the noise implies a 0.005% DR and drags the low bands down.
+    assert exact.curve[0] < 0.6 * censored.curve[0]
+    assert censored.curve[0] >= 0.5 * truth[0]
+    for b in range(3, 11):
+        assert censored.curve[b] == pytest.approx(truth[b], rel=0.2)
+    # A model under the ceiling costs nothing.
+    o = Observation("EV", "US-FL-1", 1e9, [(5, 1.0)], 5_000.0, upper_bound=250_000.0)
+    assert residuals([o], [0.0001] * len(prior))[0] == []
+
+
+def test_match_event_censors_small_rows_and_low_claim_counts() -> None:
+    impact = _impact("US-FL-12071", [(131, 1.0)])
+    tiv = IndustryTiv(
+        kind="supplied", year=2022, currency="USD",
+        county={"US-FL-12071": {"RESIDENTIAL": 1e10, "COMMERCIAL": 5e9, "AUTO": 1e9}},
+    )
+    actuals = industry_losses.EventActuals(
+        storm_id="AL092022", currency="USD",
+        county={
+            ("US-FL-12071", "RESIDENTIAL"): 2e9,
+            ("US-FL-12071", "COMMERCIAL"): 40_000.0,
+            ("US-FL-12071", "AUTO"): 900_000.0,
+        },
+        county_claims={("US-FL-12071", "AUTO"): 12.0},
+    )
+    m = match_event(actuals, [impact], tiv, 0.8)
+    assert m.observations["RESIDENTIAL"][0].upper_bound is None
+    assert m.observations["COMMERCIAL"][0].upper_bound == 250_000.0
+    assert m.observations["AUTO"][0].upper_bound == 900_000.0
+
+
 def test_fit_without_data_returns_prior() -> None:
     prior = vendor_curve("kcc")
     assert fit_curve([], prior).curve == prior
@@ -407,8 +460,14 @@ def test_api_backtest(data_dir, fake_storm) -> None:
     assert body["segments"]["RESIDENTIAL"]["countiesScored"] == 2
     # Polk reported a loss but sits outside the modelled wind field.
     assert body["footprintMisses"] == [
-        {"geographyId": "US-FL-12105", "segment": "RESIDENTIAL", "actual": 200_000_000}
+        {
+            "geographyId": "US-FL-12105",
+            "segment": "RESIDENTIAL",
+            "actual": 200_000_000,
+            "belowMateriality": False,
+        }
     ]
+    assert body["materiality"]["currency"] == "USD"
     assert {c["geographyId"] for c in body["unreportedCounties"]} == {"US-FL-12115"}
     assert client.get("/api/industry-losses/AL012000/backtest").status_code == 404
 

@@ -131,6 +131,9 @@ export interface BacktestCountyRow {
   maxWindKt: number | null;
   logError: number | null;
   inWindField: boolean;
+  claims: number | null;
+  /** Under the materiality cut: scored as an upper bound, not an exact DR. */
+  belowMateriality: boolean;
 }
 
 export interface BacktestResponse {
@@ -150,6 +153,9 @@ export interface BacktestResponse {
       ratio: number | null;
       logError: number | null;
       countiesScored: number;
+      countiesMaterial: number;
+      countiesBelowMateriality: number;
+      countiesAboveMaterialityCeiling: number;
       countyLogRms: number | null;
       countyLogMedian: number | null;
       shareOfActualInWindField: number | null;
@@ -157,7 +163,8 @@ export interface BacktestResponse {
   >;
   counties: BacktestCountyRow[];
   unreportedCounties: Array<{ geographyId: string; name: string; state: string; modelled: number; maxWindKt: number }>;
-  footprintMisses: Array<{ geographyId: string; segment: LossSegment; actual: number }>;
+  footprintMisses: Array<{ geographyId: string; segment: LossSegment; actual: number; belowMateriality: boolean }>;
+  materiality: { lossBelow: number; claimsBelow: number; currency: string };
   exposureGaps: Array<{ geographyId: string; segment: LossSegment; actual: number }>;
   missingTivCounties: number;
 }

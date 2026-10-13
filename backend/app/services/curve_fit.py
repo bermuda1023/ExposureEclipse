@@ -12,7 +12,10 @@ Parameters are ``theta_b = log DR_b``. The objective is
     R_e = log(sum modelled) - log(sum actual) over event e     event-total error
 
 ``eps_i`` is a 0.01% damage-ratio floor so a reported zero is a penalty, not
-infinity. The ridge toward the prior (Form V-1 KCC by default) keeps bands
+infinity. A below-materiality row (``upper_bound`` set) is interval-censored:
+``r_i = max(0, log(modelled_i + eps_i) - log(upper_i + eps_i))``. PCS spreads
+token amounts (often round $5k-$40k) over barely touched counties; read as
+exact they imply absurdly low damage ratios and drag the low-wind bands down. The ridge toward the prior (Form V-1 KCC by default) keeps bands
 with little data in place. After every step DR is projected onto a curve
 that never falls as wind rises. Pure Python: about a dozen parameters.
 """
@@ -34,6 +37,9 @@ class Observation:
     tiv: float
     bins: list[tuple[int, float]]  # (band index, area fraction)
     actual: float
+    # Set for below-materiality rows: the true loss is only known to lie in
+    # [0, upper_bound], so the fit is penalised only above it.
+    upper_bound: float | None = None
 
 
 @dataclass(slots=True)
@@ -105,7 +111,10 @@ def _evaluate(
     for o, w in zip(obs, weights):
         m = o.tiv * sum(f * dr[b] for b, f in o.bins)
         eps = EPS_DR * o.tiv
-        r = math.log(m + eps) - math.log(o.actual + eps)
+        if o.upper_bound is None:
+            r = math.log(m + eps) - math.log(o.actual + eps)
+        else:
+            r = max(0.0, math.log(m + eps) - math.log(o.upper_bound + eps))
         j_county += w * r * r
         ev_model[o.event] = ev_model.get(o.event, 0.0) + m
         ev_actual[o.event] = ev_actual.get(o.event, 0.0) + o.actual
@@ -195,13 +204,14 @@ def predict(o: Observation, curve: list[float]) -> float:
 
 
 def residuals(obs: list[Observation], curve: list[float]) -> tuple[list[float], dict[str, float]]:
-    """County log errors (both sides positive only) and event-total log errors."""
+    """County log errors (both sides positive, material rows only) and
+    event-total log errors (every row)."""
     county: list[float] = []
     ev_m: dict[str, float] = {}
     ev_a: dict[str, float] = {}
     for o in obs:
         m = predict(o, curve)
-        if m > 0 and o.actual > 0:
+        if m > 0 and o.actual > 0 and o.upper_bound is None:
             county.append(math.log(m / o.actual))
         ev_m[o.event] = ev_m.get(o.event, 0.0) + m
         ev_a[o.event] = ev_a.get(o.event, 0.0) + o.actual

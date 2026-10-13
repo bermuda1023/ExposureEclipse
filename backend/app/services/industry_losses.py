@@ -138,6 +138,8 @@ class EventActuals:
     unallocated: dict[tuple[str, str], float] = field(default_factory=dict)
     # segment -> reported claim count, when the source carries one.
     claims: dict[str, float] = field(default_factory=dict)
+    # (geography_id, segment) -> claim count for county rows that carry one.
+    county_claims: dict[tuple[str, str], float] = field(default_factory=dict)
     as_of: str | None = None
     event_date: str | None = None  # ISO date the loss is priced at (PCS first event date)
     source: str | None = None
@@ -226,8 +228,10 @@ def load_actuals() -> dict[str, EventActuals]:
                 value = _flag(row.get(column))
                 if value is not None:
                     setattr(event, attr, value)
+            row_claims = None
             if (row.get("claims") or "").strip():
-                event.claims[seg] = event.claims.get(seg, 0.0) + _money(row["claims"], where)
+                row_claims = _money(row["claims"], where)
+                event.claims[seg] = event.claims.get(seg, 0.0) + row_claims
             if _flag(row.get("unallocated")):
                 if geo.level != "STATE":
                     raise IndustryDataError(f"{where}: unallocated rows must use a state geographyId")
@@ -240,6 +244,8 @@ def load_actuals() -> dict[str, EventActuals]:
                 target = event.state_rows
                 key = (geo.state, seg)
             target[key] = target.get(key, 0.0) + loss
+            if row_claims is not None and target is event.county:
+                event.county_claims[key] = event.county_claims.get(key, 0.0) + row_claims
     return events
 
 

@@ -11,6 +11,10 @@ County rules:
 ASSUMPTION: a county missing from the loss file is unknown, not zero. It is
 left out of county scoring but its modelled loss still counts in the event
 total, because PCS event totals include every county.
+
+Below-materiality rows (reported zeros included) are scored as "somewhere
+between 0 and max(reported, MATERIALITY_LOSS)": the fit is only penalised
+when the model goes above that ceiling. They stay in every event total.
 """
 
 from __future__ import annotations
@@ -33,6 +37,20 @@ def indexed_bins(impact: CountyImpact, wind_factor: float) -> list[tuple[int, fl
         for idx, w in interp_weights(mph * wind_factor):
             out[idx] = out.get(idx, 0.0) + frac * w
     return sorted(out.items())
+
+
+# ASSUMPTION: county rows under $250k on-levelled loss, or under 25 claims
+# when the source carries counts, are allocation noise rather than a measured
+# damage ratio. Across the 15 PCS events about 50-75% of positive county rows
+# sit under $250k and hold 0.1-5% of the dollars, mostly round amounts.
+MATERIALITY_LOSS = 250_000.0
+MATERIALITY_CLAIMS = 25.0
+
+
+def below_materiality(loss: float, claims: float | None) -> bool:
+    if loss < MATERIALITY_LOSS:
+        return True
+    return claims is not None and claims < MATERIALITY_CLAIMS
 
 
 @dataclass(slots=True)
@@ -63,8 +81,16 @@ def match_event(
             if loss > 0:
                 out.exposure_gap.append((gid, seg, loss))
             continue
+        small = below_materiality(loss, actuals.county_claims.get((gid, seg)))
         out.observations[seg].append(
-            Observation(event=actuals.storm_id, geography_id=gid, tiv=value, bins=bins, actual=loss)
+            Observation(
+                event=actuals.storm_id,
+                geography_id=gid,
+                tiv=value,
+                bins=bins,
+                actual=loss,
+                upper_bound=max(loss, MATERIALITY_LOSS) if small else None,
+            )
         )
     return out
 
@@ -97,10 +123,15 @@ def backtest(
     for seg in LOSS_SEGMENTS:
         act = actual_seg.get(seg, 0.0)
         mod = modelled.by_segment.get(seg, 0.0)
+        material = [o for o in matched.observations[seg] if o.upper_bound is None]
         county_err = [
-            e for o in matched.observations[seg]
+            e for o in material
             if (e := _log_ratio(by_gid[o.geography_id].loss[seg], o.actual)) is not None
         ]
+        over_ceiling = sum(
+            1 for o in matched.observations[seg]
+            if o.upper_bound is not None and by_gid[o.geography_id].loss[seg] > o.upper_bound
+        )
         reported_in_field = sum(o.actual for o in matched.observations[seg])
         segments[seg] = {
             "actual": act,
@@ -108,6 +139,11 @@ def backtest(
             "ratio": (mod / act) if act > 0 else None,
             "logError": _log_ratio(mod, act),
             "countiesScored": len(matched.observations[seg]),
+            "countiesMaterial": len(material),
+            "countiesBelowMateriality": len(matched.observations[seg]) - len(material),
+            # Below-materiality counties where the model is above the ceiling:
+            # the only way those rows can disagree with the model.
+            "countiesAboveMaterialityCeiling": over_ceiling,
             "countyLogRms": _rms(county_err),
             "countyLogMedian": sorted(county_err)[len(county_err) // 2] if county_err else None,
             "shareOfActualInWindField": (reported_in_field / act) if act > 0 else None,
@@ -133,6 +169,8 @@ def backtest(
             "maxWindKt": imp.max_wind_kt if imp else None,
             "logError": _log_ratio(mod, act),
             "inWindField": imp is not None and bool(county_bins(imp)),
+            "claims": actuals.county_claims.get((gid, seg)),
+            "belowMateriality": below_materiality(act, actuals.county_claims.get((gid, seg))),
         })
     rows.sort(key=lambda r: -abs(r["modelled"] - r["actual"]))
 
@@ -160,8 +198,19 @@ def backtest(
         "counties": rows,
         "unreportedCounties": unreported[:200],
         "footprintMisses": [
-            {"geographyId": g, "segment": s, "actual": a} for g, s, a in matched.footprint_miss
+            {
+                "geographyId": g,
+                "segment": s,
+                "actual": a,
+                "belowMateriality": below_materiality(a, actuals.county_claims.get((g, s))),
+            }
+            for g, s, a in matched.footprint_miss
         ],
+        "materiality": {
+            "lossBelow": MATERIALITY_LOSS,
+            "claimsBelow": MATERIALITY_CLAIMS,
+            "currency": actuals.currency,
+        },
         "exposureGaps": [
             {"geographyId": g, "segment": s, "actual": a} for g, s, a in matched.exposure_gap
         ],
@@ -170,10 +219,11 @@ def backtest(
 
 
 def implied_dr_by_band(observations: list[Observation]) -> list[dict]:
-    """Diagnostic: actual / TIV for counties whose land wind sits mostly on one band midpoint."""
+    """Diagnostic: actual / TIV for material counties whose land wind sits
+    mostly on one band midpoint."""
     out: dict[int, list[float]] = {}
     for o in observations:
-        if not o.bins:
+        if not o.bins or o.upper_bound is not None:
             continue
         b, frac = max(o.bins, key=lambda bf: bf[1])
         if frac >= 0.7 and o.tiv > 0:

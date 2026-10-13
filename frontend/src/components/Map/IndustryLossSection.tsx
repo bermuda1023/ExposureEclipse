@@ -51,6 +51,9 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
   const hasActuals = Boolean(data?.actuals);
   const backtest = useIndustryBacktest(stormId, data?.curveSet.id ?? curveSetId, hasActuals && showBacktest);
   const selected = curveSetId ?? curves.data?.defaultId ?? "";
+  const misses = backtest.data?.footprintMisses ?? [];
+  const noiseMisses = misses.filter((m) => m.belowMateriality).length;
+  const materialMisses = misses.length - noiseMisses;
 
   return (
     <section
@@ -197,9 +200,12 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
           {showBacktest && backtest.data && (
             <div style={{ display: "grid", gap: 4 }}>
               <div style={{ fontSize: "0.62rem", color: "var(--ink-600)" }}>
-                Biggest county misses. {backtest.data.footprintMisses.length} reported counties sit outside the
-                modelled wind field; {backtest.data.unreportedCounties.length} modelled counties have no
-                reported loss.
+                Biggest county misses. {materialMisses} reported counties sit outside the modelled wind
+                field
+                {noiseMisses > 0 ? ` (plus ${noiseMisses} below materiality)` : ""};{" "}
+                {backtest.data.unreportedCounties.length} modelled counties have no reported loss. Rows
+                under {formatMoneyCompact(backtest.data.materiality.lossBelow, backtest.data.materiality.currency)}{" "}
+                are treated as allocation noise: an upper bound, not a damage ratio.
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.68rem" }}>
                 <thead>
@@ -217,7 +223,10 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
                         <div style={{ fontSize: "0.58rem", color: "var(--ink-500)" }}>
                           {SEGMENT_LABEL[row.segment]}
                           {row.maxWindKt ? ` · ${row.maxWindKt} kt` : " · outside wind field"}
-                          {row.impliedDr != null ? ` · implied DR ${(row.impliedDr * 100).toFixed(2)}%` : ""}
+                          {row.impliedDr != null && !row.belowMateriality
+                            ? ` · implied DR ${(row.impliedDr * 100).toFixed(2)}%`
+                            : ""}
+                          {row.belowMateriality ? " · below materiality" : ""}
                         </div>
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
