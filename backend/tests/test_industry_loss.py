@@ -133,6 +133,19 @@ def test_actuals_unallocated_claims_and_basis_flags(data_dir) -> None:
     assert ("US-PR-72127", "AUTO") in ev.county  # a reported zero is kept as a known zero
 
 
+def test_actuals_reject_mixed_fx_conversions(data_dir) -> None:
+    _write(
+        data_dir / "industry_losses" / "pcs.csv",
+        """
+        stormId,geographyId,segment,loss,currency,reportedLoss,reportedCurrency,fxRate
+        AL142024,US-FL-12057,RESIDENTIAL,1325,USD,1000,GBP,1.325
+        AL142024,US-FL-12103,RESIDENTIAL,1300,USD,1000,GBP,1.30
+        """,
+    )
+    with pytest.raises(IndustryDataError, match="mixes FX"):
+        industry_losses.load_actuals()
+
+
 def test_unallocated_row_must_be_state(data_dir) -> None:
     _write(
         data_dir / "industry_losses" / "bad.csv",

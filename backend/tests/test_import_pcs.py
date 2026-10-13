@@ -84,3 +84,27 @@ def test_reads_workbook_and_writes_loader_compatible_csv(tmp_path, monkeypatch) 
 def test_sums_mismatch_stops_the_import(tmp_path) -> None:
     with pytest.raises(pcs.PcsFormatError, match="ResidentialDollars"):
         pcs.read_workbook(_book(tmp_path, sums=[151, 9_999_999, 25, 350_000, 10, 2_000_000]))
+
+
+def test_foreign_currency_workbook_is_converted_with_the_rate_kept(tmp_path, monkeypatch) -> None:
+    from datetime import date
+
+    book = pcs.read_workbook(_book(tmp_path))
+    fx = pcs.Fx("GBP", 1.25, date(2026, 10, 13), "test rate")
+    out = tmp_path / "data" / "industry_losses"
+    path = pcs.write_csv(book, "AL092022", pcs.csv_rows(book, "AL092022", fx), out, fx)
+    assert "converted to USD at 1.25 USD/GBP" in path.read_text()
+
+    monkeypatch.setattr(industry_losses, "data_dir", lambda: tmp_path / "data")
+    industry_losses.clear_caches()
+    try:
+        ev = industry_losses.actuals_for("AL092022")
+        assert ev.currency == "USD"
+        assert ev.county[("US-FL-12071", "RESIDENTIAL")] == 6_250_000
+        reported = 5_000_000 + 1_000_000 + 20_000 + 70_000 + 2_040_000 + 359_000
+        assert ev.total() == pytest.approx(reported * 1.25, abs=10)
+        assert ev.fx["reportedCurrency"] == "GBP" and ev.fx["fxRate"] == 1.25
+        assert ev.fx["reportedTotal"] == reported
+        assert ev.claims["RESIDENTIAL"] == 156  # counts are not converted
+    finally:
+        industry_losses.clear_caches()

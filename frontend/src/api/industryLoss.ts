@@ -50,6 +50,15 @@ export interface ActualsBasis {
   includesNfip: boolean | null;
   includesLae: boolean | null;
   eventDate: string | null;
+  /** Present when the source was supplied in another currency and converted on import. */
+  fx?: {
+    reportedCurrency: string;
+    /** Units of the actuals currency per one unit of reportedCurrency. */
+    fxRate: number;
+    fxDate: string | null;
+    fxSource: string | null;
+    reportedTotal: number;
+  } | null;
   /** Present when the reported loss was scaled to the TIV valuation date. */
   onLevel?: OnLevelInfo | null;
 }
@@ -77,6 +86,11 @@ export function actualsBasisLabel(a: ActualsBasis): string {
   flag(a.includesFlood, a.includesNfip === false ? "private flood" : "flood");
   flag(a.includesNfip, "NFIP");
   flag(a.includesLae, "LAE");
+  if (a.fx) {
+    parts.push(
+      `from ${a.fx.reportedCurrency} at ${a.fx.fxRate}${a.fx.fxDate ? ` (${a.fx.fxDate})` : ""}`,
+    );
+  }
   return parts.join(" · ");
 }
 

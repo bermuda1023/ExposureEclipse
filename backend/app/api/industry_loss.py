@@ -100,6 +100,7 @@ def _actual_basis(actuals: EventActuals) -> dict:
         "includesSurge": actuals.includes_surge,
         "includesNfip": actuals.includes_nfip,
         "includesLae": actuals.includes_lae,
+        "fx": actuals.fx,
     }
 
 
@@ -164,6 +165,13 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
                 f"Reported loss on-levelled x{on_level_info['factor']:.2f} from "
                 f"{on_level_info['eventDate']} to the TIV valuation date {on_level_info['targetDate']} "
                 "(county housing units, employment and payroll; construction cost; used-vehicle prices)."
+            )
+        if actuals.fx:
+            fx = actuals.fx
+            notes.append(
+                f"Reported loss was supplied in {fx['reportedCurrency']} and converted to "
+                f"{actuals.currency} at {fx['fxRate']:g} {actuals.currency}/{fx['reportedCurrency']}"
+                + (f" ({fx['fxSource']}, {fx['fxDate']})" if fx.get("fxSource") else "") + "."
             )
         unalloc = actuals.unallocated_total()
         if unalloc > 0.01 * actuals.total():

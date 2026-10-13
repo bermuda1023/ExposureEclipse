@@ -121,7 +121,7 @@ starting with `#` are ignored. `geographyId` accepts `US-FL-12086`, a raw
 `industry_losses/*.csv` — any file name, one or more events per file:
 
 ```
-stormId,geographyId,segment,loss,currency[,claims,asOfDate,source,includesFlood,includesSurge,includesNfip,includesLae,unallocated]
+stormId,geographyId,segment,loss,currency[,claims,asOfDate,source,includesFlood,includesSurge,includesNfip,includesLae,unallocated,reportedLoss,reportedCurrency,fxRate,fxDate,fxSource]
 AL092022,US-FL-12071,RESIDENTIAL,8123000000,USD,120000,,PCS 2261 estimate 16,true,true,false,false,
 AL092022,US-FL,RESIDENTIAL,45000,USD,20,,PCS 2261 estimate 16,true,true,false,false,true
 ```
@@ -145,6 +145,15 @@ loss including private-market flood (so private surge and auto comprehensive
 flood), excluding NFIP, excluding loss adjustment expense. The modelled loss
 is wind only, so flood-driven events (Debby, Helene inland, Ida north-east)
 sit above the wind model by construction.
+
+PCS workbooks carry no currency, and `loss` is always written in USD. A
+workbook supplied in another currency is converted on import with
+`--reported-currency GBP --fx-rate <USD per GBP> --fx-date <YYYY-MM-DD>
+--fx-source <text>`. Every row keeps `reportedLoss`, `reportedCurrency`,
+`fxRate`, `fxDate` and `fxSource`. The loader rejects an event that mixes
+rates. **Milton 2024 (PCS 2478)** was supplied in GBP and converted at
+1.3247 USD/GBP: the ECB reference rate via Frankfurter, 2026-10-13. That
+turns £18.05B into $23.92B.
 
 `industry_tiv/<year>.csv` — the exposure the losses are measured against.
 The file name must start with the 4-digit vintage year (`2022.csv`,

@@ -14,9 +14,15 @@ PCS loss semantics (supplied with the data): insured property loss including
 private-market flood (so private surge and auto comprehensive flood), excluding
 NFIP and excluding loss adjustment expense.
 
+PCS workbooks carry no currency. Losses are written in USD; a workbook supplied
+in another currency is converted on import, and every row keeps the reported
+amount, currency, rate, rate date and rate source:
+
 Run from the repo root:
   python backend/scripts/import_pcs_county_estimates.py path/to/*.xlsx
   python backend/scripts/import_pcs_county_estimates.py --check path/to/*.xlsx
+  python backend/scripts/import_pcs_county_estimates.py milton.xlsx \
+      --reported-currency GBP --fx-rate 1.3247 --fx-date 2026-10-13 --fx-source "ECB reference rate"
 """
 
 from __future__ import annotations
@@ -61,12 +67,23 @@ HEADER = ["FIPSCode", "County", "ResidentialClaims", "ResidentialDollars",
 # (segment, claims index, dollars index) into the six values after FIPS + County.
 SEGMENT_COLUMNS = (("RESIDENTIAL", 0, 1), ("AUTO", 2, 3), ("COMMERCIAL", 4, 5))
 CSV_COLUMNS = ["stormId", "geographyId", "segment", "loss", "claims", "currency", "eventDate", "source",
-               "includesFlood", "includesSurge", "includesNfip", "includesLae", "unallocated"]
+               "includesFlood", "includesSurge", "includesNfip", "includesLae", "unallocated",
+               "reportedLoss", "reportedCurrency", "fxRate", "fxDate", "fxSource"]
 TOLERANCE = 0.5
 
 
 class PcsFormatError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class Fx:
+    """USD per one unit of the reported currency."""
+
+    currency: str
+    rate: float
+    on: date
+    source: str
 
 
 @dataclass
@@ -234,7 +251,7 @@ def revision(path: Path) -> str | None:
     return m.group(1) if m else None
 
 
-def csv_rows(book: Workbook, storm_id: str) -> list[dict[str, str]]:
+def csv_rows(book: Workbook, storm_id: str, fx: Fx | None = None) -> list[dict[str, str]]:
     rev = revision(book.path)
     source = f"PCS {book.serial}" + (f" estimate {rev}" if rev else "")
     flags = {"includesFlood": "true", "includesSurge": "true",
@@ -242,11 +259,19 @@ def csv_rows(book: Workbook, storm_id: str) -> list[dict[str, str]]:
     first = book.first_date
     event_date = first.isoformat() if first else ""
 
+    fx_cols = {"reportedLoss": "", "reportedCurrency": "", "fxRate": "", "fxDate": "", "fxSource": ""}
+
     def row(geo: str, seg: str, loss: float, claims: float, unallocated: bool) -> dict[str, str]:
+        usd = loss
+        cols = dict(fx_cols)
+        if fx is not None:
+            usd = loss * fx.rate
+            cols = {"reportedLoss": f"{loss:.0f}", "reportedCurrency": fx.currency,
+                    "fxRate": f"{fx.rate:g}", "fxDate": fx.on.isoformat(), "fxSource": fx.source}
         return {"stormId": storm_id, "geographyId": geo, "segment": seg,
-                "loss": f"{loss:.0f}", "claims": f"{claims:g}", "currency": "USD",
+                "loss": f"{usd:.0f}", "claims": f"{claims:g}", "currency": "USD",
                 "eventDate": event_date, "source": source, **flags,
-                "unallocated": "true" if unallocated else ""}
+                "unallocated": "true" if unallocated else "", **cols}
 
     out: list[dict[str, str]] = []
     for sheet in book.sheets:
@@ -261,7 +286,8 @@ def csv_rows(book: Workbook, storm_id: str) -> list[dict[str, str]]:
     return out
 
 
-def write_csv(book: Workbook, storm_id: str, rows: list[dict[str, str]], folder: Path) -> Path:
+def write_csv(book: Workbook, storm_id: str, rows: list[dict[str, str]], folder: Path,
+              fx: Fx | None = None) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"pcs_{book.serial}_{book.storm_name.lower()}_{book.year}.csv"
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -270,6 +296,9 @@ def write_csv(book: Workbook, storm_id: str, rows: list[dict[str, str]], folder:
         handle.write(f"# Perils: {book.perils}\n")
         handle.write(f"# Imported from {book.path.name} by import_pcs_county_estimates.py\n")
         handle.write("# Insured loss incl. private-market flood; excludes NFIP and LAE.\n")
+        if fx is not None:
+            handle.write(f"# Supplied in {fx.currency}; converted to USD at {fx.rate:g} USD/{fx.currency} "
+                         f"({fx.source}, {fx.on.isoformat()}). reportedLoss keeps the original.\n")
         writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
@@ -281,7 +310,17 @@ def main() -> None:
     ap.add_argument("workbooks", nargs="+", type=Path)
     ap.add_argument("--out", type=Path, default=None, help="default: mockdata/industry_losses")
     ap.add_argument("--check", action="store_true", help="validate and summarise; write nothing")
+    ap.add_argument("--reported-currency", help="ISO code the workbook dollars are actually in (e.g. GBP)")
+    ap.add_argument("--fx-rate", type=float, help="USD per one unit of --reported-currency")
+    ap.add_argument("--fx-date", type=date.fromisoformat, help="date of the rate, YYYY-MM-DD")
+    ap.add_argument("--fx-source", default="", help="where the rate came from")
     args = ap.parse_args()
+
+    fx = None
+    if args.reported_currency and args.reported_currency.upper() != "USD":
+        if not args.fx_rate or args.fx_rate <= 0 or args.fx_date is None or not args.fx_source:
+            raise SystemExit("--reported-currency needs --fx-rate > 0, --fx-date and --fx-source")
+        fx = Fx(args.reported_currency.upper(), args.fx_rate, args.fx_date, args.fx_source)
 
     folder = args.out or (data_dir() / LOSSES_DIR)
     failures = 0
@@ -293,15 +332,15 @@ def main() -> None:
             print(f"FAIL {exc}", file=sys.stderr)
             failures += 1
             continue
-        rows = csv_rows(book, storm_id)
-        total = sum(sum(s.sums[k] for k in (1, 3, 5)) for s in book.sheets)
+        rows = csv_rows(book, storm_id, fx)
+        total = sum(sum(s.sums[k] for k in (1, 3, 5)) for s in book.sheets) * (fx.rate if fx else 1.0)
         unalloc = sum(sum(s.unallocated[k] for k in (1, 3, 5)) for s in book.sheets)
         states = ",".join(s.state for s in book.sheets)
         print(f"{storm_id} {book.storm_name} {book.year} PCS {book.serial}: "
               f"${total / 1e9:,.2f}B ({unalloc / max(total, 1):.2%} unallocated) "
               f"{sum(len(s.counties) for s in book.sheets)} counties [{states}]")
         if not args.check:
-            print(f"  -> {write_csv(book, storm_id, rows, folder).relative_to(ROOT)}")
+            print(f"  -> {write_csv(book, storm_id, rows, folder, fx).relative_to(ROOT)}")
     if failures:
         raise SystemExit(f"{failures} workbook(s) failed")
 

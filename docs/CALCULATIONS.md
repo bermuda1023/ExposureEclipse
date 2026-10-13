@@ -373,7 +373,7 @@ Findings across the 15 PCS events, on the built-in book TIV (2026-10). Columns:
 | Irma 2017 | 0.78 | 0.69 | 136 | 0.55 | 3% |
 | Laura 2020 | 0.87 | 0.56 | 38 | 0.57 | 6% |
 | Michael 2018 | 0.68 | 0.69 | 205 | 1.13 | 5% |
-| Milton 2024 | 0.75 | 0.70 | 70 | 1.32 | 0.5% |
+| Milton 2024 | 0.75 | 0.70 | 70 | 1.00 | 0.5% (PCS supplied in GBP, converted at 1.3247) |
 | Maria 2017 | (2 usable; PR network failed) | | 2 | 1.24 | 0% |
 | Sally 2020 | 0.72 | 1.05 | 31 | 0.39 | 15% (flood 5%) |
 | Delta 2020 | 0.90 | 0.86 | 34 | 0.12 | 26% (flood 8%, 9 stations at TS force outside the field) |

@@ -334,6 +334,11 @@ notes[]`. `Band = {mean, p10, p50, p90}` (lognormal around the mean).
 - `includesFlood`, `includesSurge`, `includesNfip`, `includesLae`: true,
   false, or null when unknown
 - `eventDate`
+- `fx`: null unless the source was supplied in another currency and
+  converted on import. Otherwise `{reportedCurrency, fxRate, fxDate,
+  fxSource, reportedTotal}`, where `fxRate` is in actuals-currency units per
+  unit of `reportedCurrency` and `reportedTotal` is in `reportedCurrency`
+  before on-levelling. A note states the conversion.
 - `onLevel`: null when switched off or no indices are installed. Otherwise
   `{eventDate, targetDate, reportedTotal, reportedBySegment, factor,
   factorBySegment, rowsByQuantityLevel, adjustments[], indicesBuiltAt,

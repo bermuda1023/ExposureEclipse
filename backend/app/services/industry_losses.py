@@ -148,6 +148,10 @@ class EventActuals:
     includes_nfip: bool | None = None
     includes_lae: bool | None = None
     files: list[str] = field(default_factory=list)
+    # Set when the source was supplied in another currency and converted to
+    # ``currency`` on import: reportedCurrency, fxRate (``currency`` per unit),
+    # fxDate, fxSource and the reported total in the original currency.
+    fx: dict | None = None
 
     def segment_totals(self) -> dict[str, float]:
         """Event loss by segment. County rows win over state rows for the same
@@ -228,6 +232,18 @@ def load_actuals() -> dict[str, EventActuals]:
                 value = _flag(row.get(column))
                 if value is not None:
                     setattr(event, attr, value)
+            if (rep_ccy := (row.get("reportedCurrency") or "").strip().upper()) and rep_ccy != currency:
+                rate = _money(row.get("fxRate") or "", where)
+                if rate <= 0:
+                    raise IndustryDataError(f"{where}: fxRate is required to convert {rep_ccy}")
+                if event.fx is None:
+                    event.fx = {"reportedCurrency": rep_ccy, "fxRate": rate,
+                                "fxDate": (row.get("fxDate") or "").strip() or None,
+                                "fxSource": (row.get("fxSource") or "").strip() or None,
+                                "reportedTotal": 0.0}
+                elif (event.fx["reportedCurrency"], event.fx["fxRate"]) != (rep_ccy, rate):
+                    raise IndustryDataError(f"{where}: {storm_id} mixes FX conversions")
+                event.fx["reportedTotal"] += _money(row.get("reportedLoss") or "0", where)
             row_claims = None
             if (row.get("claims") or "").strip():
                 row_claims = _money(row["claims"], where)
