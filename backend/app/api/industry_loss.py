@@ -1,0 +1,229 @@
+"""Industry loss for a storm, supplied actuals, and backtests.
+
+  GET  /api/damage-curves
+  POST /api/hurricanes/{storm_id}/industry-loss
+  GET  /api/industry-losses
+  GET  /api/industry-losses/{storm_id}/backtest?curveSetId=&multiplier=
+
+Industry loss is independent of the left-rail selection: it always runs on
+the industry TIV (supplied vintage for the storm year, else the built-in
+Industry book).
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
+
+from ..services.damage_curves import default_curve_set_id, get_curve_set, load_curve_sets
+from ..services.event_loss import event_loss, lognormal_band, resolve_storm, storm_impacts
+from ..services.industry_losses import (
+    LOSS_SEGMENTS,
+    IndustryDataError,
+    actuals_for,
+    load_actuals,
+    tiv_for_year,
+)
+from ..services.loss_calibration import backtest
+
+router = APIRouter(tags=["industry-loss"])
+
+
+class IndustryLossRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    curve_set_id: str | None = None
+    multiplier: float = Field(2.5, ge=1.0, le=6.0)
+    # geoid or geographyId -> exposed fraction 0..1 (the impact panel overrides).
+    exposed_fraction: dict[str, float] = Field(default_factory=dict)
+
+
+def _error(status: int, code: str, message: str, **details) -> HTTPException:
+    return HTTPException(status_code=status, detail={"code": code, "message": message, "details": details})
+
+
+def _curve(curve_set_id: str | None):
+    try:
+        return get_curve_set(curve_set_id)
+    except KeyError as exc:
+        raise _error(404, "VALIDATION_ERROR", f"Unknown curve set {curve_set_id!r}.",
+                     available=sorted(load_curve_sets())) from exc
+
+
+def _storm(storm_id: str):
+    try:
+        found = resolve_storm(storm_id)
+    except Exception as exc:
+        raise _error(502, "UPSTREAM_UNAVAILABLE", "Failed to fetch storm tracks.", error=str(exc)) from exc
+    if found is None:
+        raise _error(404, "DATASET_NOT_FOUND", f"Storm '{storm_id}' was not found.", stormId=storm_id)
+    return found
+
+
+def _actuals(storm_id: str):
+    try:
+        return actuals_for(storm_id)
+    except IndustryDataError as exc:
+        raise _error(422, "VALIDATION_ERROR", str(exc)) from exc
+
+
+def _tiv(year: int):
+    try:
+        return tiv_for_year(year)
+    except IndustryDataError as exc:
+        raise _error(422, "VALIDATION_ERROR", str(exc)) from exc
+
+
+def _tiv_source(tiv) -> dict:
+    return {"kind": tiv.kind, "year": tiv.year, "file": tiv.file, "currency": tiv.currency}
+
+
+@router.get("/damage-curves")
+def list_damage_curves() -> dict:
+    return {
+        "defaultId": default_curve_set_id(),
+        "curveSets": [c.to_wire() for c in load_curve_sets().values()],
+    }
+
+
+@router.post("/hurricanes/{storm_id}/industry-loss")
+def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> dict:
+    req = payload or IndustryLossRequest()
+    curve = _curve(req.curve_set_id)
+    storm, track_source = _storm(storm_id)
+    tiv = _tiv(storm.year)
+    actuals = _actuals(storm.storm_id)
+    impacts = storm_impacts(storm, track_source, req.multiplier)
+    result = event_loss(impacts, tiv, curve, req.exposed_fraction)
+    currency = tiv.currency
+
+    notes: list[str] = []
+    if tiv.kind == "book":
+        notes.append(
+            "Using the built-in Industry book (census and build-cost estimate outside Florida, "
+            "no auto). Supply industry_tiv/<year>.csv to replace it."
+        )
+    elif tiv.year != storm.year:
+        notes.append(f"No {storm.year} TIV supplied; using the {tiv.year} vintage.")
+    for seg in result.segments_without_tiv:
+        notes.append(f"No {seg.lower()} TIV in this vintage, so no {seg.lower()} loss is modelled.")
+    if result.missing_tiv:
+        notes.append(f"{len(result.missing_tiv)} counties in the wind field have no industry TIV.")
+    if curve.kind == "vendor":
+        notes.append(
+            "Uncalibrated curve: commercial uses the residential Form V-1 curve and auto uses 15% "
+            "of it. The band is a default spread, not a fitted one."
+        )
+    if actuals is not None and actuals.currency != currency:
+        raise _error(422, "CURRENCY_MISMATCH",
+                     f"Actuals are {actuals.currency} but TIV is {currency}.")
+
+    sig_c, sig_e = curve.sigma_log_county, curve.sigma_log_event
+    by_seg = {
+        seg: {
+            "tiv": result.tiv_by_segment[seg],
+            **lognormal_band(result.by_segment[seg], sig_e),
+        }
+        for seg in LOSS_SEGMENTS
+    }
+    actual_block = None
+    if actuals is not None:
+        seg_tot = actuals.segment_totals()
+        actual_block = {
+            "total": actuals.total(),
+            "bySegment": seg_tot,
+            "asOfDate": actuals.as_of,
+            "source": actuals.source,
+            "includesFlood": actuals.includes_flood,
+            "includesSurge": actuals.includes_surge,
+        }
+
+    return {
+        "stormId": storm.storm_id,
+        "stormName": storm.name,
+        "year": storm.year,
+        "trackSource": track_source,
+        "currency": currency,
+        "multiplier": req.multiplier,
+        "curveSet": {"id": curve.id, "label": curve.label, "kind": curve.kind,
+                     "sigmaLogCounty": sig_c, "sigmaLogEvent": sig_e},
+        "tivSource": _tiv_source(tiv),
+        "formula": "loss = exposedFraction x TIV[segment] x sum_bands(areaFraction x DR[segment](band))",
+        "summary": {
+            "total": lognormal_band(result.total, sig_e),
+            "bySegment": by_seg,
+            "countiesWithLoss": sum(1 for c in result.counties if c.total > 0),
+        },
+        "actuals": actual_block,
+        "counties": [
+            {
+                "geographyId": c.impact.geography_id,
+                "geoid": c.impact.geoid,
+                "name": c.impact.name,
+                "state": c.impact.state_usps,
+                "maxWindKt": c.impact.max_wind_kt,
+                "exposedFraction": c.exposed_fraction,
+                "segments": {
+                    seg: {"tiv": c.tiv[seg], "loss": c.loss[seg], "dr": c.dr[seg]}
+                    for seg in LOSS_SEGMENTS
+                },
+                **lognormal_band(c.total, sig_c),
+            }
+            for c in result.counties
+            if c.total > 0
+        ],
+        "notes": notes,
+    }
+
+
+@router.get("/industry-losses")
+def list_industry_losses() -> dict:
+    try:
+        events = load_actuals()
+    except IndustryDataError as exc:
+        raise _error(422, "VALIDATION_ERROR", str(exc)) from exc
+    return {
+        "events": [
+            {
+                "stormId": e.storm_id,
+                "currency": e.currency,
+                "total": e.total(),
+                "bySegment": e.segment_totals(),
+                "counties": len({gid for gid, _ in e.county}),
+                "asOfDate": e.as_of,
+                "source": e.source,
+                "files": e.files,
+            }
+            for e in sorted(events.values(), key=lambda ev: ev.storm_id)
+        ]
+    }
+
+
+@router.get("/industry-losses/{storm_id}/backtest")
+def industry_loss_backtest(
+    storm_id: str,
+    curve_set_id: str | None = Query(None, alias="curveSetId"),
+    multiplier: float = Query(2.5, ge=1.0, le=6.0),
+) -> dict:
+    actuals = _actuals(storm_id)
+    if actuals is None:
+        raise _error(404, "DATASET_NOT_FOUND", f"No industry losses supplied for '{storm_id}'.",
+                     stormId=storm_id)
+    curve = _curve(curve_set_id)
+    storm, track_source = _storm(storm_id)
+    tiv = _tiv(storm.year)
+    if actuals.currency != tiv.currency:
+        raise _error(422, "CURRENCY_MISMATCH",
+                     f"Actuals are {actuals.currency} but TIV is {tiv.currency}.")
+    impacts = storm_impacts(storm, track_source, multiplier)
+    result = backtest(actuals, impacts, tiv, curve)
+    return {
+        "stormId": storm.storm_id,
+        "stormName": storm.name,
+        "year": storm.year,
+        "currency": tiv.currency,
+        "curveSet": {"id": curve.id, "label": curve.label, "kind": curve.kind},
+        "tivSource": _tiv_source(tiv),
+        **result,
+    }

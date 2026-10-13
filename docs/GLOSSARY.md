@@ -29,7 +29,7 @@ Domain terms an engineer must understand to build this correctly.
 | **EXPLIM_GR / EXPLIM_NET** | Exposed Limit, Gross / Net — alternative exposure bases to TIV. |
 | **PORTNAME** | Exposure-data snapshot date (`MMDDYYYY`); the dataset's cutoff date / portfolio label. |
 | **ERT cut** | One standardized ERT output section, produced by a `CALC.Get_*` function (TIV Summary, Evolution, Construction, Year Built, Stories, Peril Details, Distance to Coast). |
-| **Occupancy / OccupancySegment** | Building use class; maps to `RESIDENTIAL` / `COMMERCIAL` / `INDUSTRIAL` / `UNKNOWN`. |
+| **Occupancy / OccupancySegment** | Building use class; maps to `RESIDENTIAL` / `COMMERCIAL` / `INDUSTRIAL` / `AUTO` / `UNKNOWN`. |
 | **Construction / Year built / Number of stories / Geocoding quality** | Building/data dimensions used in pivots and tooltips. |
 | **Current viewed grain** | The full set of active grouping dimensions in the current view. Max-across-perils is computed at this grain. |
 | **Choropleth** | A map where areas are shaded by a metric value. Our v1 map type — implemented via Mapbox vector tilesets + feature-state. |

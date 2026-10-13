@@ -1,0 +1,324 @@
+"""Industry loss: supplied actuals + TIV loaders, event loss, curve fit, API."""
+
+from __future__ import annotations
+
+import json
+import math
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.services import damage_curves, event_loss, industry_losses
+from app.services.county_wind import SpeedBin
+from app.services.curve_fit import Observation, _pav_non_decreasing, fit_curve, fit_with_holdout
+from app.services.damage_curves import BAND_MPH_LO, get_curve_set, vendor_curve
+from app.services.event_loss import lognormal_band
+from app.services.hurricane_impact import CountyImpact
+from app.services.ibtracs import Storm
+from app.services.industry_losses import (
+    IndustryDataError,
+    IndustryTiv,
+    normalize_geography,
+)
+
+client = TestClient(app)
+
+
+@pytest.fixture
+def data_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(industry_losses, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(damage_curves, "data_dir", lambda: tmp_path)
+    industry_losses.clear_caches()
+    damage_curves.load_curve_sets.cache_clear()
+    yield tmp_path
+    industry_losses.clear_caches()
+    damage_curves.load_curve_sets.cache_clear()
+
+
+def _write(path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text.strip() + "\n", encoding="utf-8")
+
+
+def _impact(gid: str, bins: list[tuple[int, float]], wind: int = 100) -> CountyImpact:
+    usps, geoid = gid.split("-")[1], gid.split("-")[2]
+    return CountyImpact(
+        geoid=geoid,
+        geography_id=gid,
+        name=f"County {geoid}",
+        state_usps=usps,
+        centroid_lat=27.0,
+        centroid_lon=-82.0,
+        max_wind_kt=wind,
+        max_category=3,
+        closest_distance_nm=10.0,
+        rmax_at_closest_nm=20.0,
+        rmax_source="ibtracs",
+        tiv=0.0,
+        location_count=0,
+        has_data=False,
+        speed_bins=[
+            SpeedBin(mph_lo=lo, mph_hi=lo + 9, category=3, area_fraction=f, max_wind_kt=wind)
+            for lo, f in bins
+        ],
+    )
+
+
+# ─────────────────────────────── loaders ───────────────────────────────
+
+
+def test_normalize_geography_variants() -> None:
+    assert normalize_geography("US-FL-12086").geography_id == "US-FL-12086"
+    assert normalize_geography("12086").geography_id == "US-FL-12086"
+    assert normalize_geography("1001").geography_id == "US-AL-01001"
+    assert normalize_geography("US-FL").level == "STATE"
+    assert normalize_geography("fl").geography_id == "US-FL"
+    assert normalize_geography("US-TX-12086") is None
+    assert normalize_geography("nowhere") is None
+
+
+def test_actuals_load_and_totals(data_dir) -> None:
+    _write(
+        data_dir / "industry_losses" / "ian.csv",
+        """
+        # comment lines are ignored
+        stormId,geographyId,segment,loss,currency,asOfDate,source
+        AL092022,US-FL-12071,RESIDENTIAL,"8,000,000,000",USD,2024-06-30,PCS
+        AL092022,12071,COMMERCIAL,4000000000,USD,,
+        AL092022,US-FL-12015,AUTO,500000000,USD,,
+        AL092022,US-SC,RESIDENTIAL,100000000,USD,,
+        AL092022,US-FL,RESIDENTIAL,999,USD,,
+        """,
+    )
+    ev = industry_losses.actuals_for("al092022")
+    assert ev is not None
+    assert ev.source == "PCS" and ev.as_of == "2024-06-30"
+    seg = ev.segment_totals()
+    # FL residential has county rows, so the FL state row is not double counted.
+    assert seg["RESIDENTIAL"] == 8_000_000_000 + 100_000_000
+    assert seg["COMMERCIAL"] == 4_000_000_000
+    assert seg["AUTO"] == 500_000_000
+    assert industry_losses.actuals_for("AL012000") is None
+
+
+def test_actuals_reject_bad_segment(data_dir) -> None:
+    _write(
+        data_dir / "industry_losses" / "bad.csv",
+        "stormId,geographyId,segment,loss,currency\nAL092022,US-FL-12071,MARINE,1,USD",
+    )
+    with pytest.raises(IndustryDataError, match="bad.csv:2"):
+        industry_losses.load_actuals()
+
+
+def test_tiv_vintage_selection(data_dir) -> None:
+    body = "geographyId,segment,tiv,currency\nUS-FL-12071,RESIDENTIAL,100,USD"
+    _write(data_dir / "industry_tiv" / "2018.csv", body)
+    _write(data_dir / "industry_tiv" / "2022.csv", body)
+    assert industry_losses.tiv_for_year(2022).year == 2022
+    assert industry_losses.tiv_for_year(2020).year == 2018
+    assert industry_losses.tiv_for_year(2017).year == 2018
+    assert industry_losses.tiv_for_year(2026).year == 2022
+    assert industry_losses.tiv_for_year(2022).kind == "supplied"
+
+
+def test_tiv_falls_back_to_book_when_nothing_supplied(data_dir) -> None:
+    _write(
+        data_dir / "industry_exposure_counties.csv",
+        "geographyId,residentialTiv,commercialTiv\nUS-FL-12071,10,5",
+    )
+    tiv = industry_losses.tiv_for_year(2022)
+    assert tiv.kind == "book"
+    assert tiv.county["US-FL-12071"] == {"RESIDENTIAL": 10.0, "COMMERCIAL": 5.0}
+    assert tiv.segments_present() == {"RESIDENTIAL", "COMMERCIAL"}
+
+
+# ─────────────────────────────── event loss ───────────────────────────────
+
+
+def test_event_loss_sums_bins_by_segment(data_dir) -> None:
+    kcc = get_curve_set("kcc")
+    imp = _impact("US-FL-12071", [(101, 0.5), (121, 0.25)])
+    tiv = IndustryTiv(
+        kind="supplied", year=2022, currency="USD",
+        county={"US-FL-12071": {"RESIDENTIAL": 1_000.0, "COMMERCIAL": 400.0, "AUTO": 100.0}},
+    )
+    res = event_loss.event_loss([imp], tiv, kcc)
+    k = vendor_curve("kcc")
+    dr = 0.5 * k[BAND_MPH_LO.index(101)] + 0.25 * k[BAND_MPH_LO.index(121)]
+    assert res.by_segment["RESIDENTIAL"] == pytest.approx(1_000 * dr)
+    assert res.by_segment["COMMERCIAL"] == pytest.approx(400 * dr)
+    assert res.by_segment["AUTO"] == pytest.approx(100 * dr * 0.15)
+    half = event_loss.event_loss([imp], tiv, kcc, {"12071": 0.5})
+    assert half.total == pytest.approx(res.total * 0.5)
+
+
+def test_event_loss_reports_counties_without_tiv() -> None:
+    kcc = get_curve_set("kcc")
+    tiv = IndustryTiv(kind="supplied", year=2022, currency="USD", county={})
+    res = event_loss.event_loss([_impact("US-FL-12071", [(101, 1.0)])], tiv, kcc)
+    assert res.missing_tiv == ["US-FL-12071"]
+    assert set(res.segments_without_tiv) == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
+
+
+def test_lognormal_band_keeps_mean() -> None:
+    band = lognormal_band(100.0, 0.5)
+    assert band["p10"] < band["p50"] < band["mean"] < band["p90"]
+    assert band["p50"] == pytest.approx(100 * math.exp(-0.125))
+    assert lognormal_band(0.0, 0.5)["p90"] == 0.0
+
+
+# ─────────────────────────────── curve fit ───────────────────────────────
+
+
+def test_pav_is_non_decreasing() -> None:
+    assert _pav_non_decreasing([1, 3, 2, 4]) == [1, 2.5, 2.5, 4]
+    assert _pav_non_decreasing([5, 4, 3]) == [4, 4, 4]
+
+
+def _synthetic(truth: list[float]) -> list[Observation]:
+    obs = []
+    for e, event in enumerate(("EV1", "EV2", "EV3")):
+        for i in range(40):
+            hi = 3 + (i + 3 * e) % 9  # bands 71..151 mph
+            lo = hi - 2
+            bins = [(lo, 0.3), (hi - 1, 0.3), (hi, 0.2)]
+            tiv = 1e9 * (1 + (i % 7))
+            actual = tiv * sum(f * truth[b] for b, f in bins)
+            obs.append(Observation(event, f"US-FL-{12000 + i:05d}", tiv, bins, actual))
+    return obs
+
+
+def test_fit_recovers_scaled_curve() -> None:
+    prior = vendor_curve("kcc")
+    truth = [v * 0.6 for v in prior]
+    obs = _synthetic(truth)
+    res = fit_curve(obs, prior)
+    assert all(b >= a for a, b in zip(res.curve, res.curve[1:]))
+    for ev, err in res.event_errors.items():
+        assert abs(err) < 0.05, ev
+    assert res.county_sigma is not None and res.county_sigma < 0.1
+    # Bands with plenty of data land near the truth.
+    for b in range(3, 11):
+        assert res.curve[b] == pytest.approx(truth[b], rel=0.2)
+
+
+def test_fit_with_holdout_scores_each_event() -> None:
+    prior = vendor_curve("kcc")
+    obs = _synthetic([v * 1.5 for v in prior])
+    res = fit_with_holdout(obs, prior)
+    assert set(res.oos_event_errors) == {"EV1", "EV2", "EV3"}
+    assert all(abs(e) < 0.15 for e in res.oos_event_errors.values())
+
+
+def test_fit_without_data_returns_prior() -> None:
+    prior = vendor_curve("kcc")
+    assert fit_curve([], prior).curve == prior
+
+
+def test_calibrated_set_becomes_default(data_dir) -> None:
+    assert damage_curves.default_curve_set_id() == "kcc"
+    payload = {
+        "id": "calibrated-test",
+        "kind": "calibrated",
+        "createdAt": "2026-10-13T00:00:00+00:00",
+        "segments": {"RESIDENTIAL": [0.01] * len(BAND_MPH_LO)},
+        "sigmaLogCounty": 0.4,
+        "sigmaLogEvent": 0.2,
+    }
+    _write(data_dir / "damage_curves" / "calibrated-test.json", json.dumps(payload))
+    damage_curves.load_curve_sets.cache_clear()
+    assert damage_curves.default_curve_set_id() == "calibrated-test"
+    cs = get_curve_set(None)
+    assert cs.sigma_log_event == 0.2
+    # Segments missing from the file fall back to the KCC shape.
+    assert cs.segments["AUTO"] == get_curve_set("kcc").segments["AUTO"]
+
+
+# ─────────────────────────────── API ───────────────────────────────
+
+
+@pytest.fixture
+def fake_storm(monkeypatch):
+    from app.api import industry_loss as api
+
+    storm = Storm(storm_id="AL092022", name="IAN", year=2022)
+    impacts = [
+        _impact("US-FL-12071", [(121, 0.6), (131, 0.2)], wind=120),
+        _impact("US-FL-12015", [(91, 0.5)], wind=80),
+        _impact("US-FL-12115", [(61, 0.4)], wind=55),
+    ]
+    monkeypatch.setattr(api, "resolve_storm", lambda sid: (storm, "ibtracs") if sid.upper() == "AL092022" else None)
+    monkeypatch.setattr(api, "storm_impacts", lambda s, src, m: impacts)
+    return storm
+
+
+def _seed_files(root) -> None:
+    _write(
+        root / "industry_tiv" / "2022.csv",
+        """
+        geographyId,segment,tiv,currency
+        US-FL-12071,RESIDENTIAL,100000000000,USD
+        US-FL-12071,COMMERCIAL,60000000000,USD
+        US-FL-12071,AUTO,8000000000,USD
+        US-FL-12015,RESIDENTIAL,40000000000,USD
+        US-FL-12015,COMMERCIAL,20000000000,USD
+        US-FL-12115,RESIDENTIAL,90000000000,USD
+        """,
+    )
+    _write(
+        root / "industry_losses" / "ian.csv",
+        """
+        stormId,geographyId,segment,loss,currency,source
+        AL092022,US-FL-12071,RESIDENTIAL,20000000000,USD,PCS
+        AL092022,US-FL-12071,COMMERCIAL,9000000000,USD,PCS
+        AL092022,US-FL-12071,AUTO,300000000,USD,PCS
+        AL092022,US-FL-12015,RESIDENTIAL,1500000000,USD,PCS
+        AL092022,US-FL-12105,RESIDENTIAL,200000000,USD,PCS
+        """,
+    )
+
+
+def test_api_industry_loss(data_dir, fake_storm) -> None:
+    _seed_files(data_dir)
+    r = client.post("/api/hurricanes/AL092022/industry-loss", json={"curveSetId": "kcc"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["currency"] == "USD"
+    assert body["tivSource"] == {"kind": "supplied", "year": 2022, "file": "2022.csv", "currency": "USD"}
+    assert body["curveSet"]["id"] == "kcc"
+    seg = body["summary"]["bySegment"]
+    assert seg["RESIDENTIAL"]["mean"] > 0 and seg["AUTO"]["mean"] > 0
+    total = sum(s["mean"] for s in seg.values())
+    assert body["summary"]["total"]["mean"] == pytest.approx(total)
+    assert body["actuals"]["total"] == pytest.approx(31_000_000_000)
+    assert body["counties"][0]["geographyId"] == "US-FL-12071"
+
+
+def test_api_unknown_curve_and_storm(data_dir, fake_storm) -> None:
+    assert client.post("/api/hurricanes/AL092022/industry-loss", json={"curveSetId": "nope"}).status_code == 404
+    assert client.post("/api/hurricanes/AL012000/industry-loss", json={}).status_code == 404
+
+
+def test_api_backtest(data_dir, fake_storm) -> None:
+    _seed_files(data_dir)
+    listing = client.get("/api/industry-losses").json()
+    assert [e["stormId"] for e in listing["events"]] == ["AL092022"]
+    r = client.get("/api/industry-losses/AL092022/backtest?curveSetId=kcc")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"]["actual"] == pytest.approx(31_000_000_000)
+    assert body["segments"]["RESIDENTIAL"]["countiesScored"] == 2
+    # Polk reported a loss but sits outside the modelled wind field.
+    assert body["footprintMisses"] == [
+        {"geographyId": "US-FL-12105", "segment": "RESIDENTIAL", "actual": 200_000_000}
+    ]
+    assert {c["geographyId"] for c in body["unreportedCounties"]} == {"US-FL-12115"}
+    assert client.get("/api/industry-losses/AL012000/backtest").status_code == 404
+
+
+def test_api_damage_curves(data_dir) -> None:
+    body = client.get("/api/damage-curves").json()
+    assert body["defaultId"] == "kcc"
+    ids = {c["id"] for c in body["curveSets"]}
+    assert {"kcc", "air", "rms"} <= ids
