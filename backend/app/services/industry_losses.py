@@ -4,8 +4,11 @@ Two drop-in folders under ``mockdata/``:
 
 ``industry_losses/*.csv`` — one or more events per file::
 
-    stormId,geographyId,segment,loss,currency[,claims,asOfDate,source,
+    stormId,geographyId,segment,loss,currency[,claims,eventDate,asOfDate,source,
         includesFlood,includesSurge,includesNfip,includesLae,unallocated]
+
+``eventDate`` (YYYY-MM-DD) is the date the loss is priced at, used to
+on-level it to the TIV valuation date (``services/onlevel.py``).
 
 ``industry_tiv/<year>.csv`` — the exposure the losses are measured against::
 
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -39,6 +43,7 @@ LOSS_SEGMENTS: tuple[str, ...] = (
 
 LOSSES_DIR = "industry_losses"
 TIV_DIR = "industry_tiv"
+BOOK_TIV_AS_OF = date(2026, 1, 1)
 
 
 # PCS reports the US Virgin Islands; the county-geometry map does not carry it.
@@ -134,6 +139,7 @@ class EventActuals:
     # segment -> reported claim count, when the source carries one.
     claims: dict[str, float] = field(default_factory=dict)
     as_of: str | None = None
+    event_date: str | None = None  # ISO date the loss is priced at (PCS first event date)
     source: str | None = None
     includes_flood: bool | None = None
     includes_surge: bool | None = None
@@ -206,6 +212,12 @@ def load_actuals() -> dict[str, EventActuals]:
             if path.name not in event.files:
                 event.files.append(path.name)
             event.as_of = (row.get("asOfDate") or "").strip() or event.as_of
+            if (raw_date := (row.get("eventDate") or "").strip()):
+                try:
+                    date.fromisoformat(raw_date)
+                except ValueError as exc:
+                    raise IndustryDataError(f"{where}: eventDate {raw_date!r} is not YYYY-MM-DD") from exc
+                event.event_date = raw_date
             event.source = (row.get("source") or "").strip() or event.source
             for attr, column in (("includes_flood", "includesFlood"),
                                  ("includes_surge", "includesSurge"),
@@ -248,6 +260,8 @@ class IndustryTiv:
     county: dict[str, dict[str, float]]  # geography_id -> segment -> tiv
     state: dict[str, dict[str, float]] = field(default_factory=dict)  # state rows as supplied
     file: str | None = None
+    # Valuation date of the values; reported losses are on-levelled to it.
+    as_of: date | None = None
 
     def segments_present(self) -> set[str]:
         out: set[str] = set()
@@ -260,6 +274,7 @@ def _load_tiv_file(path: Path, year: int) -> IndustryTiv:
     county: dict[str, dict[str, float]] = {}
     state: dict[str, dict[str, float]] = {}
     currency: str | None = None
+    as_of: date | None = None
     for line, row in _rows(path):
         where = f"{path.name}:{line}"
         geo = normalize_geography(row.get("geographyId") or "")
@@ -267,6 +282,11 @@ def _load_tiv_file(path: Path, year: int) -> IndustryTiv:
             raise IndustryDataError(f"{where}: unknown geographyId {row.get('geographyId')!r}")
         seg = _segment(row.get("segment") or "", where)
         tiv = _money(row.get("tiv") or "", where)
+        if as_of is None and (raw := (row.get("asOfDate") or "").strip()):
+            try:
+                as_of = date.fromisoformat(raw)
+            except ValueError as exc:
+                raise IndustryDataError(f"{where}: asOfDate {raw!r} is not YYYY-MM-DD") from exc
         cur = (row.get("currency") or "USD").strip().upper()
         if currency is None:
             currency = cur
@@ -276,9 +296,10 @@ def _load_tiv_file(path: Path, year: int) -> IndustryTiv:
         key = geo.geography_id if geo.level == "COUNTY" else geo.state
         segs = target.setdefault(key, {})
         segs[seg] = segs.get(seg, 0.0) + tiv
+    # ASSUMPTION: a vintage without asOfDate is valued mid-year.
     return IndustryTiv(
         kind="supplied", year=year, currency=currency or "USD",
-        county=county, state=state, file=path.name,
+        county=county, state=state, file=path.name, as_of=as_of or date(year, 7, 1),
     )
 
 
@@ -315,8 +336,9 @@ def _book_tiv() -> IndustryTiv:
                     "RESIDENTIAL": float(row["residentialTiv"]),
                     "COMMERCIAL": float(row["commercialTiv"]),
                 }
+    # build_industry_exposure.py bridges its inputs to early-2026 reconstruction dollars.
     return IndustryTiv(kind="book", year=None, currency="USD", county=county,
-                       file="industry_exposure_counties.csv")
+                       file="industry_exposure_counties.csv", as_of=BOOK_TIV_AS_OF)
 
 
 def tiv_for_year(year: int) -> IndustryTiv:
