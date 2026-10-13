@@ -27,6 +27,7 @@ from ..services.industry_losses import (
     tiv_for_year,
 )
 from ..services.loss_calibration import backtest
+from ..services.onlevel import onlevel_actuals
 
 router = APIRouter(tags=["industry-loss"])
 
@@ -38,6 +39,8 @@ class IndustryLossRequest(BaseModel):
     multiplier: float = Field(2.5, ge=1.0, le=6.0)
     # geoid or geographyId -> exposed fraction 0..1 (the impact panel overrides).
     exposed_fraction: dict[str, float] = Field(default_factory=dict)
+    # Scale reported losses to the TIV valuation date (services/onlevel.py).
+    on_level: bool = True
 
 
 def _error(status: int, code: str, message: str, **details) -> HTTPException:
@@ -77,7 +80,8 @@ def _tiv(year: int):
 
 
 def _tiv_source(tiv) -> dict:
-    return {"kind": tiv.kind, "year": tiv.year, "file": tiv.file, "currency": tiv.currency}
+    return {"kind": tiv.kind, "year": tiv.year, "file": tiv.file, "currency": tiv.currency,
+            "asOfDate": tiv.as_of.isoformat() if tiv.as_of else None}
 
 
 def _actual_basis(actuals: EventActuals) -> dict:
@@ -86,6 +90,7 @@ def _actual_basis(actuals: EventActuals) -> dict:
         "total": actuals.total(),
         "bySegment": actuals.segment_totals(),
         "unallocated": actuals.unallocated_total(),
+        "eventDate": actuals.event_date,
         "claimsBySegment": actuals.claims or None,
         "states": actuals.states(),
         "asOfDate": actuals.as_of,
@@ -149,7 +154,16 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
     }
     actual_block = None
     if actuals is not None:
-        actual_block = _actual_basis(actuals)
+        on_level_info = None
+        if req.on_level:
+            actuals, on_level_info = onlevel_actuals(actuals, tiv.as_of)
+        actual_block = {**_actual_basis(actuals), "onLevel": on_level_info}
+        if on_level_info and on_level_info["factor"]:
+            notes.append(
+                f"Reported loss on-levelled x{on_level_info['factor']:.2f} from "
+                f"{on_level_info['eventDate']} to the TIV valuation date {on_level_info['targetDate']} "
+                "(county housing units, employment and payroll; construction cost; used-vehicle prices)."
+            )
         unalloc = actuals.unallocated_total()
         if unalloc > 0.01 * actuals.total():
             notes.append(
@@ -228,6 +242,7 @@ def industry_loss_backtest(
     storm_id: str,
     curve_set_id: str | None = Query(None, alias="curveSetId"),
     multiplier: float = Query(2.5, ge=1.0, le=6.0),
+    on_level: bool = Query(True, alias="onLevel"),
 ) -> dict:
     actuals = _actuals(storm_id)
     if actuals is None:
@@ -240,6 +255,9 @@ def industry_loss_backtest(
         raise _error(422, "CURRENCY_MISMATCH",
                      f"Actuals are {actuals.currency} but TIV is {tiv.currency}.")
     impacts = storm_impacts(storm, track_source, multiplier)
+    on_level_info = None
+    if on_level:
+        actuals, on_level_info = onlevel_actuals(actuals, tiv.as_of)
     result = backtest(actuals, impacts, tiv, curve)
     return {
         "stormId": storm.storm_id,
@@ -248,5 +266,6 @@ def industry_loss_backtest(
         "currency": tiv.currency,
         "curveSet": {"id": curve.id, "label": curve.label, "kind": curve.kind},
         "tivSource": _tiv_source(tiv),
+        "onLevel": on_level_info,
         **result,
     }

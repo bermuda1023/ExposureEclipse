@@ -12,7 +12,7 @@ const response: IndustryLossResponse = {
   currency: "USD",
   multiplier: 2.5,
   curveSet: { id: "calibrated-x", label: "Calibrated X", kind: "calibrated", windFactor: 0.8, deductible: {}, sigmaLogCounty: 0.4, sigmaLogEvent: 0.3 },
-  tivSource: { kind: "supplied", year: 2022, file: "2022.csv", currency: "USD" },
+  tivSource: { kind: "supplied", year: 2022, file: "2022.csv", currency: "USD", asOfDate: "2025-07-01" },
   formula: "",
   summary: {
     total: band(60e9),
@@ -35,6 +35,20 @@ const response: IndustryLossResponse = {
     includesSurge: true,
     includesNfip: false,
     includesLae: false,
+    eventDate: "2022-09-27",
+    onLevel: {
+      eventDate: "2022-09-27",
+      targetDate: "2025-07-01",
+      reportedTotal: 42e9,
+      reportedBySegment: { RESIDENTIAL: 27e9, COMMERCIAL: 13e9, AUTO: 2e9 },
+      factor: 1.19,
+      factorBySegment: { RESIDENTIAL: 1.19, COMMERCIAL: 1.23, AUTO: 1 },
+      rowsByQuantityLevel: { county: 3 },
+      adjustments: [],
+      indicesBuiltAt: null,
+      latestMonth: "2026-08",
+      method: "",
+    },
   },
   counties: [],
   notes: ["No 2026 TIV supplied; using the 2022 vintage."],
@@ -72,6 +86,7 @@ describe("IndustryLossSection", () => {
     expect(screen.getByText(/using the 2022 vintage/)).toBeTruthy();
     expect(screen.getByText(/actuals PCS as of 2024-06-30/)).toBeTruthy();
     expect(screen.getByText(/incl\. private flood · excl\. NFIP · excl\. LAE/)).toBeTruthy();
+    expect(screen.getByText("Actual (on-level 2025)")).toBeTruthy();
   });
 
   it("asks for the backtest only when opened", () => {

@@ -39,6 +39,7 @@ from app.services.damage_curves import (
 from app.services.event_loss import resolve_storm, storm_impacts
 from app.services.industry_losses import LOSS_SEGMENTS, load_actuals, tiv_for_year
 from app.services.loss_calibration import implied_dr_by_band, match_event
+from app.services.onlevel import onlevel_actuals
 
 MIN_OBS_PER_SEGMENT = 5
 SIGMA_COUNTY_FLOOR = 0.25
@@ -64,6 +65,8 @@ def main() -> None:
     )
     parser.add_argument("--id", help="curve set id (default calibrated-YYYYMMDD)")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-onlevel", action="store_true",
+                        help="fit on reported losses without scaling them to the TIV valuation date")
     args = parser.parse_args()
 
     actuals = load_actuals()
@@ -86,6 +89,10 @@ def main() -> None:
         tiv = tiv_for_year(storm.year)
         if tiv.currency != act.currency:
             raise SystemExit(f"{storm_id}: actuals {act.currency} vs TIV {tiv.currency}")
+        reported_total = act.total()
+        on_level = None
+        if not args.no_onlevel:
+            act, on_level = onlevel_actuals(act, tiv.as_of)
         impacts = storm_impacts(storm, source, args.multiplier)
         matched = match_event(act, impacts, tiv, wind_factor)
         for seg in LOSS_SEGMENTS:
@@ -98,13 +105,17 @@ def main() -> None:
             "year": storm.year,
             "tiv": {"kind": tiv.kind, "year": tiv.year, "file": tiv.file},
             "actualTotal": act.total(),
+            "reportedTotal": reported_total,
+            "onLevelFactor": on_level["factor"] if on_level else None,
+            "onLevelTarget": on_level["targetDate"] if on_level else None,
             "footprintMissLoss": miss,
             "exposureGapLoss": gap,
             "countiesMatched": {seg: len(matched.observations[seg]) for seg in LOSS_SEGMENTS},
         }
         event_meta.append(meta)
         print(
-            f"{storm_id} {storm.name} {storm.year}: actual {act.total():,.0f} {act.currency}; "
+            f"{storm_id} {storm.name} {storm.year}: actual {act.total():,.0f} {act.currency}"
+            + (f" (reported x{on_level['factor']:.2f} on-level)" if on_level else "") + "; "
             f"matched {meta['countiesMatched']}; outside wind field {miss:,.0f}; no TIV {gap:,.0f}"
         )
 

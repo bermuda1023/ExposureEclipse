@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services import damage_curves, event_loss, industry_losses
+from app.services import damage_curves, event_loss, industry_losses, onlevel
 from app.services.county_wind import SpeedBin
 from app.services.curve_fit import Observation, _pav_non_decreasing, fit_curve, fit_with_holdout
 from app.services.damage_curves import BAND_MPH_LO, get_curve_set, vendor_curve
@@ -30,9 +30,11 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(industry_losses, "data_dir", lambda: tmp_path)
     monkeypatch.setattr(damage_curves, "data_dir", lambda: tmp_path)
     industry_losses.clear_caches()
+    onlevel.clear_caches()
     damage_curves.load_curve_sets.cache_clear()
     yield tmp_path
     industry_losses.clear_caches()
+    onlevel.clear_caches()
     damage_curves.load_curve_sets.cache_clear()
 
 
@@ -348,7 +350,9 @@ def test_api_industry_loss(data_dir, fake_storm) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["currency"] == "USD"
-    assert body["tivSource"] == {"kind": "supplied", "year": 2022, "file": "2022.csv", "currency": "USD"}
+    assert body["tivSource"] == {"kind": "supplied", "year": 2022, "file": "2022.csv",
+                                 "currency": "USD", "asOfDate": "2022-07-01"}
+    assert body["actuals"]["onLevel"] is None  # no indices installed
     assert body["curveSet"]["id"] == "kcc"
     seg = body["summary"]["bySegment"]
     assert seg["RESIDENTIAL"]["mean"] > 0 and seg["AUTO"]["mean"] > 0
@@ -356,6 +360,35 @@ def test_api_industry_loss(data_dir, fake_storm) -> None:
     assert body["summary"]["total"]["mean"] == pytest.approx(total)
     assert body["actuals"]["total"] == pytest.approx(31_000_000_000)
     assert body["counties"][0]["geographyId"] == "US-FL-12071"
+
+
+def test_api_onlevels_actuals_to_tiv_valuation_date(data_dir, fake_storm) -> None:
+    _seed_files(data_dir)
+    _write(data_dir / "industry_tiv" / "2022.csv",
+           "geographyId,segment,tiv,currency,asOfDate\nUS-FL-12071,RESIDENTIAL,1e11,USD,2025-07-01")
+    _write(data_dir / "onlevel" / "county_indices.csv", """
+        geographyId,metric,2021,2022,2023,2024,2025
+        US-FL-12071,HU,100,100,105,110,120
+        US-FL,HU,100,100,100,100,100
+        US-FL,CONS_PAY,50,50,50,50,50
+        US-FL,POP,1,1,1,1,1
+        US-FL,EMP,1000,1000,1000,1000,1000
+        US-FL,WAGES,1,1,1,1,1
+    """)
+    _write(data_dir / "onlevel" / "monthly_indices.csv", """
+        month,PPI_RES_INPUTS,PPI_NONRES_INPUTS,CPI_USED_VEHICLES
+        2022-07,100,100,100
+        2025-07,100,100,100
+    """)
+    body = client.post("/api/hurricanes/AL092022/industry-loss", json={"curveSetId": "kcc"}).json()
+    info = body["actuals"]["onLevel"]
+    assert info["eventDate"] == "2022-07-01" and info["targetDate"] == "2025-07-01"
+    # Lee residential units grew 100 -> 120; everything else is flat.
+    assert body["actuals"]["bySegment"]["RESIDENTIAL"] == pytest.approx(20e9 * 1.2 + 1.5e9 + 2e8, rel=1e-3)
+    assert info["reportedTotal"] == pytest.approx(31e9)
+    off = client.post("/api/hurricanes/AL092022/industry-loss",
+                      json={"curveSetId": "kcc", "onLevel": False}).json()
+    assert off["actuals"]["total"] == pytest.approx(31e9) and off["actuals"]["onLevel"] is None
 
 
 def test_api_unknown_curve_and_storm(data_dir, fake_storm) -> None:

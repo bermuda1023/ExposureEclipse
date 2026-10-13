@@ -94,7 +94,18 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
                 <th style={th}>Segment</th>
                 <th style={{ ...th, textAlign: "right" }}>P50</th>
                 <th style={{ ...th, textAlign: "right" }}>P10 – P90</th>
-                {hasActuals && <th style={{ ...th, textAlign: "right" }}>Actual</th>}
+                {hasActuals && (
+                  <th
+                    style={{ ...th, textAlign: "right" }}
+                    title={
+                      data.actuals?.onLevel
+                        ? `Reported ${formatMoneyCompact(data.actuals.onLevel.reportedTotal, data.currency)} on ${data.actuals.onLevel.eventDate} exposure, scaled to ${data.actuals.onLevel.targetDate}`
+                        : "As reported"
+                    }
+                  >
+                    {data.actuals?.onLevel ? `Actual (on-level ${data.actuals.onLevel.targetDate.slice(0, 4)})` : "Actual"}
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>

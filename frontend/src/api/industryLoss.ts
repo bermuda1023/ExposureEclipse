@@ -33,6 +33,7 @@ export interface TivSource {
   year: number | null;
   file: string | null;
   currency: string;
+  asOfDate: string | null;
 }
 
 export interface ActualsBasis {
@@ -48,6 +49,23 @@ export interface ActualsBasis {
   includesSurge: boolean | null;
   includesNfip: boolean | null;
   includesLae: boolean | null;
+  eventDate: string | null;
+  /** Present when the reported loss was scaled to the TIV valuation date. */
+  onLevel?: OnLevelInfo | null;
+}
+
+export interface OnLevelInfo {
+  eventDate: string;
+  targetDate: string;
+  reportedTotal: number;
+  reportedBySegment: Record<LossSegment, number>;
+  factor: number | null;
+  factorBySegment: Record<LossSegment, number | null>;
+  rowsByQuantityLevel: Record<string, number>;
+  adjustments: Array<{ stormId: string; geographyId: string; segment: string; factor: number; reason: string; lossEffect: number }>;
+  indicesBuiltAt: string | null;
+  latestMonth: string;
+  method: string;
 }
 
 export function actualsBasisLabel(a: ActualsBasis): string {
@@ -122,6 +140,7 @@ export interface BacktestResponse {
   currency: string;
   curveSet: { id: string; label: string; kind: string };
   tivSource: TivSource;
+  onLevel: OnLevelInfo | null;
   total: { actual: number; modelled: number; ratio: number | null; logError: number | null };
   segments: Record<
     LossSegment,
