@@ -290,7 +290,17 @@ modelled wind field is a **footprint miss** and reported loss with no TIV
 is an **exposure gap**. Both are excluded from the fit and listed in the
 backtest. A county missing from the loss file counts as unknown, not zero: it
 is left out of the county scoring, but its modelled loss stays in the event
-total.
+total. A county reported at zero is a known zero and is scored. Unallocated
+state loss (PCS "County Not Available") is in the event totals, and so in
+`R_e`, but never in a county error.
+
+PCS basis caveat: PCS includes private-market flood and surge and excludes
+NFIP and LAE, while the modelled loss is wind only. Flood-dominated events
+therefore read as wind underestimates.
+
+ASSUMPTION: until flood is modelled, flood-dominated events should be
+excluded from the fit with `--events` rather than allowed to steepen the wind
+curve.
 
 ## Hazard climatology blend (tornado + hail)
 

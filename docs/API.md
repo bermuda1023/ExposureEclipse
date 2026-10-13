@@ -325,13 +325,20 @@ Response: `stormId, stormName, year, trackSource, currency, curveSet, tivSource
 Band + tiv}, countiesWithLoss}, actuals | null, counties[{geographyId, name,
 state, maxWindKt, exposedFraction, segments {seg: {tiv, loss, dr}}, ...Band}],
 notes[]`. `Band = {mean, p10, p50, p90}` (lognormal around the mean).
-`actuals` is filled when the storm has a supplied loss file. Currency mismatch
-between actuals and TIV → 422 `CURRENCY_MISMATCH`.
+`actuals` is filled when the storm has a supplied loss file. Its fields are:
+- `total`, `bySegment`
+- `unallocated`: loss not placed in a county
+- `claimsBySegment`: null when no claims were supplied
+- `states`, `asOfDate`, `source`
+- `includesFlood`, `includesSurge`, `includesNfip`, `includesLae`: true,
+  false, or null when unknown
+
+Currency mismatch between actuals and TIV → 422 `CURRENCY_MISMATCH`.
 
 ### `GET /api/industry-losses`
 
-Events that have supplied actuals: `{ events: [{stormId, currency, total,
-bySegment, counties, asOfDate, source, files}] }`.
+Events that have supplied actuals: `{ events: [{stormId, currency, counties,
+files, ...the actuals fields above}] }`.
 
 ### `GET /api/industry-losses/{stormId}/backtest?curveSetId=&multiplier=`
 
