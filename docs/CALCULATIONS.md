@@ -221,7 +221,59 @@ The displayed county loss is therefore:
     loss_band(category) = effective_tiv * { mean - sd, mean, mean + sd } / 100
 
 Neither store is sent back to the backend; persistence is per browser
-in v1.
+in v1. This band is for the user's selection (portfolio). The industry loss
+below is computed on the backend.
+
+## Industry loss (backend, calibrated)
+
+`services/event_loss.py`, served by `POST /api/hurricanes/{id}/industry-loss`.
+For each county in the storm's wind field and each segment
+(`RESIDENTIAL`, `COMMERCIAL`, `AUTO`):
+
+    loss[seg] = exposedFraction × TIV[seg] × Σ_b areaFraction_b × DR[seg](band_b)
+
+- `areaFraction_b` = share of the county polygon whose peak local wind is in
+  10 mph band `b` (Form V-1 bands 41–50 … 161–170 mph), from `compute_impact`
+  `speed_bins`. Same wind field as the impact panel, live or historical.
+- `TIV[seg]` = supplied industry TIV vintage for the storm year
+  (`industry_tiv/<year>.csv`), else the built-in Industry book (no auto).
+- `DR[seg]` = curve set (`services/damage_curves.py`). Built-ins are Form V-1
+  AIR / KCC / RMS. ASSUMPTION until calibrated: commercial = residential curve,
+  auto = 15% of it.
+
+**Uncertainty.** The point estimate is the mean of a lognormal. County bands
+use `sigmaLogCounty`, segment and event bands use `sigmaLogEvent`:
+
+    median = mean × exp(−σ²/2);  P10/P90 = median × exp(∓1.2816 σ)
+
+Event bands are not the sum of county bands (that would assume every county
+misses in the same direction). Calibrated sets carry fitted sigmas; built-ins
+use 0.9 (county) and 0.45 (event), both assumptions.
+
+### Calibration against supplied PCS losses
+
+`services/curve_fit.py` + `scripts/calibrate_damage_curves.py`. Per segment,
+each reported county loss in an event is an observation
+`(TIV, {band: areaFraction}, actual)`. Parameters are `θ_b = log DR_b`:
+
+    J = mean_i(w_i · r_i²) + α · mean_e(R_e²) + λ · mean_b((θ_b − prior_b)²)
+    r_i = log(model_i + ε_i) − log(actual_i + ε_i)    county error
+    R_e = log(Σ model) − log(Σ actual) per event       event-total error
+
+- `w_i ∝ sqrt(actual_i)` (normalised to mean 1), `ε_i` = 0.01% of TIV,
+  `α = 1`, `λ = 0.05`, prior = KCC. All assumptions, overridable on the CLI.
+- Projected gradient descent; after each step DR is projected to a
+  non-decreasing curve (pool-adjacent-violators) inside [1e-5, 1].
+- With ≥ 2 events every event is re-fitted out (leave-one-event-out).
+  `sigmaLogCounty` = holdout county log-RMS (floor 0.25). `sigmaLogEvent` =
+  holdout event log-RMS once ≥ 3 events exist (floor 0.15), else 0.45.
+
+County matching (`services/loss_calibration.py`): reported loss outside the
+modelled wind field is a **footprint miss** and reported loss with no TIV
+is an **exposure gap**. Both are excluded from the fit and listed in the
+backtest. A county missing from the loss file counts as unknown, not zero: it
+is left out of the county scoring, but its modelled loss stays in the event
+total.
 
 ## Hazard climatology blend (tornado + hail)
 

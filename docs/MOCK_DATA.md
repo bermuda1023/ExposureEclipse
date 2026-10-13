@@ -25,6 +25,9 @@ mockdata/
 ├── hazard_hail_grid.json     ← same shape
 ├── hazard_wildfire_grid.json ← same shape
 ├── fund_returns.json         ← fund-analysis demo series (if enabled)
+├── industry_losses/*.csv     ← supplied PCS-style event losses (see below)
+├── industry_tiv/<year>.csv   ← supplied industry TIV vintages (see below)
+├── damage_curves/*.json      ← calibrated curve sets (calibrate_damage_curves.py)
 └── geo/                      ← tiny country + CRESTA features only
                                  (state + county come from Mapbox tilesets,
                                   not GeoJSON)
@@ -106,6 +109,42 @@ to that total. `US-MS-28033` is omitted at county grain
 so `WARN_IED_DENOMINATOR_MISSING` still fires. State and country rows
 include that county. Outside Florida this is a census and build-cost
 proxy, not RMS or AIR.
+
+## Industry losses + industry TIV (calibration inputs)
+
+Drop-in folders read by `backend/app/services/industry_losses.py`. Lines
+starting with `#` are ignored. `geographyId` accepts `US-FL-12086`, a raw
+5-digit GEOID (`12086`), or a state (`US-FL`). Segment is `RESIDENTIAL`,
+`COMMERCIAL` or `AUTO`. Money may contain commas or `$`.
+
+`industry_losses/*.csv` — any file name, one or more events per file:
+
+```
+stormId,geographyId,segment,loss,currency,asOfDate,source,includesFlood,includesSurge
+AL092022,US-FL-12071,RESIDENTIAL,8123000000,USD,2024-06-30,PCS,false,false
+```
+
+`stormId` is the ATCF id the hurricane list uses. County rows are what the
+calibration scores. A state row only counts toward the event total when that
+state + segment has no county rows. A county missing from the file is treated
+as unknown, not zero. A storm without a file has no actuals.
+
+`industry_tiv/<year>.csv` — the exposure the losses are measured against.
+The file name must start with the 4-digit vintage year (`2022.csv`,
+`2022_pcs.csv`):
+
+```
+geographyId,segment,tiv,currency
+US-FL-12071,RESIDENTIAL,212000000000,USD
+```
+
+The loss for a storm uses the vintage of its year, else the latest earlier
+vintage, else the earliest later one. With no supplied vintage the built-in
+book is used (no auto).
+
+`damage_curves/*.json` — written by
+`python backend/scripts/calibrate_damage_curves.py` (`--dry-run` to preview).
+The newest calibrated set becomes the API default.
 
 ## Treaty metadata + EDM linkage
 

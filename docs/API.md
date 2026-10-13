@@ -301,6 +301,47 @@ browser. See `frontend/src/state/{damageAssumptions,countyOverrides}.ts`.
 Same request shape as `/impact`. Streams an `.xlsx` workbook (Summary +
 Impacted Counties sheets, per-county breakdown with the Rmax source per row).
 
+## Industry loss (calibrated against supplied PCS losses)
+
+Industry loss does not use the left-rail selection. It always runs on the
+industry TIV: `mockdata/industry_tiv/<year>.csv` for the storm year (else the
+latest earlier vintage, else the earliest later one), falling back to the
+built-in Industry book (residential + commercial, no auto). See
+`docs/CALCULATIONS.md §Industry loss` and `docs/MOCK_DATA.md §Industry losses`.
+
+### `GET /api/damage-curves`
+
+`{ defaultId, curveSets: [{ id, label, kind: "vendor"|"calibrated", bandsMphLo,
+segments: {RESIDENTIAL|COMMERCIAL|AUTO: [DR per band]}, sigmaLogCounty,
+sigmaLogEvent, createdAt, fit }] }`. Default = newest calibrated set, else `kcc`.
+
+### `POST /api/hurricanes/{stormId}/industry-loss`
+
+Body (all optional): `{ curveSetId, multiplier, exposedFraction: {geoid: 0..1} }`.
+Works for live NHC storms and IBTrACS history (historical wind fields are cached).
+
+Response: `stormId, stormName, year, trackSource, currency, curveSet, tivSource
+{kind, year, file, currency}, formula, summary {total: Band, bySegment: {seg:
+Band + tiv}, countiesWithLoss}, actuals | null, counties[{geographyId, name,
+state, maxWindKt, exposedFraction, segments {seg: {tiv, loss, dr}}, ...Band}],
+notes[]`. `Band = {mean, p10, p50, p90}` (lognormal around the mean).
+`actuals` is filled when the storm has a supplied loss file. Currency mismatch
+between actuals and TIV → 422 `CURRENCY_MISMATCH`.
+
+### `GET /api/industry-losses`
+
+Events that have supplied actuals: `{ events: [{stormId, currency, total,
+bySegment, counties, asOfDate, source, files}] }`.
+
+### `GET /api/industry-losses/{stormId}/backtest?curveSetId=&multiplier=`
+
+Modelled vs reported for one event: `total {actual, modelled, ratio,
+logError}`, `segments {seg: {actual, modelled, ratio, logError, countiesScored,
+countyLogRms, countyLogMedian, shareOfActualInWindField}}`, `counties[]`
+(sorted by absolute miss, with `impliedDr` = actual / TIV), `unreportedCounties`,
+`footprintMisses` (reported loss outside the modelled wind field),
+`exposureGaps` (reported loss with no TIV). 404 when no actuals are supplied.
+
 ## Live + replay storms
 
 | Verb | Path | Purpose |
@@ -931,6 +972,10 @@ still work (JSON facts). Under `hybrid`/`sqlserver`, servers come from
 | GET | `/api/hurricanes` |
 | POST | `/api/hurricanes/{stormId}/impact` |
 | POST | `/api/hurricanes/{stormId}/impact/export` |
+| POST | `/api/hurricanes/{stormId}/industry-loss` |
+| GET | `/api/damage-curves` |
+| GET | `/api/industry-losses` |
+| GET | `/api/industry-losses/{stormId}/backtest` |
 | GET | `/api/live/storms` |
 | GET | `/api/live/storms/{atcfId}` |
 | GET | `/api/wildfire/active` |
