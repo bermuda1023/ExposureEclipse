@@ -354,10 +354,20 @@ files, ...the actuals fields above}] }`.
 Modelled vs reported for one event, with reported losses on-levelled unless
 `onLevel=false` (`onLevel` block as above). The response contains: `total {actual, modelled, ratio,
 logError}`, `segments {seg: {actual, modelled, ratio, logError, countiesScored,
+countiesMaterial, countiesBelowMateriality, countiesAboveMaterialityCeiling,
 countyLogRms, countyLogMedian, shareOfActualInWindField}}`, `counties[]`
-(sorted by absolute miss, with `impliedDr` = actual / TIV), `unreportedCounties`,
-`footprintMisses` (reported loss outside the modelled wind field),
-`exposureGaps` (reported loss with no TIV). 404 when no actuals are supplied.
+(sorted by absolute miss, with `impliedDr` = actual / TIV, `claims`,
+`belowMateriality`, and `evidence` = observed ASOS wind, tornado / flood /
+surge / wind report counts and high-water marks for the county),
+`unreportedCounties`, `footprintMisses` (reported loss outside the modelled
+wind field, each with `belowMateriality` and `evidencePeril`),
+`footprintMissByPeril` (out-of-field dollars by reported peril), `exposureGaps`
+(reported loss with no TIV), `materiality {lossBelow, claimsBelow, currency}`
+and `evidence` (event summary: ASOS `windBias`, Storm Events totals, sources,
+window). `countyLogRms` covers material rows only. `evidence`,
+`footprintMissByPeril` and `evidencePeril` are null when no evidence file has
+been built. 404 when no actuals are supplied. See `docs/CALCULATIONS.md
+§Post-event evidence`.
 
 ## Live + replay storms
 

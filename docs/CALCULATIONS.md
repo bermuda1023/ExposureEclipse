@@ -177,6 +177,20 @@ no R64): symmetric 2.5×Rmax.
     capture iff haversine(eye, centroid) ≤ threshold
                 AND fix.wind_kt ≥ 85   # MIN_IMPACT_WIND_KT
 
+**Tropical-storm field for industry loss** — `compute_impact(..., ts_field=True)`,
+used by the industry-loss engine, backtest and calibration for historical
+storms, also paints the 34–63 kt field. It reads the IBTrACS best-track
+`USA_R34_*` / `USA_R50_*` quadrants and pins local wind to them with the same
+`radii_wind_kt` profile the live NHC path uses. HU, TS and SS fixes count;
+EX and LO fixes count only when the best track carries a 34 kt radius
+(ASSUMPTION: Sandy 2012 came ashore as EX). A fix below 64 kt gets no R64 ring.
+The drawn cone is unchanged (hurricane-force fixes only). Without this field,
+Debby, Isaias, Helene, Delta and Zeta had 56–99% of their PCS county loss
+outside the modelled footprint. With it, every event except Debby is under
+33%, and most of what remains is flood or tornado (see §Post-event evidence).
+The three USVI districts are not in us-atlas. They are added as fixed points
+so Irma and Maria losses there can be scored.
+
 **TIV join** — fact rows joined by `geography_id`, summed per county and
 also indexed per `dataset_id` for the per-programme breakdown in the
 right-rail impact detail view.
@@ -290,17 +304,95 @@ modelled wind field is a **footprint miss** and reported loss with no TIV
 is an **exposure gap**. Both are excluded from the fit and listed in the
 backtest. A county missing from the loss file counts as unknown, not zero: it
 is left out of the county scoring, but its modelled loss stays in the event
-total. A county reported at zero is a known zero and is scored. Unallocated
+total. Unallocated
 state loss (PCS "County Not Available") is in the event totals, and so in
 `R_e`, but never in a county error.
 
+**Below-materiality rows (PCS noise).** PCS spreads small, often round
+amounts over barely touched counties: $5k, $15k, $20k and $40k are the most
+common values. In most events 50–75% of positive county rows are at or below
+$250k, and they hold only 0.1–5% of the dollars. Read as exact, they imply
+damage ratios orders of magnitude too low and drag the low-wind bands down.
+A row is **below materiality** when its on-levelled loss is under $250k, or it
+has fewer than 25 claims when the source carries counts (ASSUMPTION, both
+`MATERIALITY_*` in `loss_calibration.py`). Reported zeros are included.
+Such a row is interval-censored: the true loss is only known to be in
+`[0, U]` with `U = max(reported, $250k)`, so
+
+    r_i = max(0, log(model_i + ε_i) − log(U_i + ε_i))
+
+It costs nothing while the model stays under `U`, and is penalised like any
+other row above it. The rows stay in every event total. They are excluded from
+`countyLogRms`, the holdout county sigma and `impliedDrByBand`, and are
+flagged `belowMateriality` in the backtest.
+
 PCS basis caveat: PCS includes private-market flood and surge and excludes
 NFIP and LAE, while the modelled loss is wind only. Flood-dominated events
-therefore read as wind underestimates.
+therefore read as wind underestimates. `--exclude-flood` drops counties where
+the modelled peak is under 64 kt, no ASOS station saw 34 kt sustained, and
+there are 2 or more flood reports or riverine high-water marks. Otherwise,
+leave whole events out with `--events`.
 
-ASSUMPTION: until flood is modelled, flood-dominated events should be
-excluded from the fit with `--events` rather than allowed to steepen the wind
-curve.
+### Post-event evidence
+
+`backend/scripts/build_event_evidence.py` writes
+`mockdata/event_evidence/<stormId>.json` for each event with losses. It is
+served through `services/event_evidence.py` into the backtest. Evidence is
+diagnostic and never changes a loss. It covers the states with reported loss,
+from 12 h before the track comes within 250 nm of one of their counties to
+48 h after it leaves.
+
+- **IEM ASOS**: peak sustained wind (2-min) and peak gust per station, after QC:
+  - a sustained value above the same report's gust is dropped;
+  - a sustained value with no gust, and every gust, needs a report within 90 minutes at ≥ 60% of it.
+
+  The modelled wind at the same point comes from the same engine (`compute_impact` with one pseudo county per station). A station whose record stops within 3 h of closest approach, while the model has ≥ 64 kt there, is a probable outage and is left out of the bias.
+- **NCEI Storm Events**: tornado, flood (flash flood, flood, heavy rain), surge (storm surge/tide, coastal flood) and wind reports, with the NWS property-damage estimate. Zone reports are mapped to counties through the NWS zone–county correlation file, with damage split evenly across the zone's counties.
+- **USGS STN**: surveyed high-water marks per county: coastal vs riverine, and the maximum height above ground.
+
+**Wind bias** = median over stations of `observed sustained / (modelled × windFactor)`.
+Only stations where either value is ≥ 30 kt count. The backtest also splits
+out-of-field dollars by the first reported peril in that county, in the order
+tornado, flood, surge, wind (`footprintMissByPeril`).
+
+Findings across the 15 PCS events, on the built-in book TIV (2026-10). Columns:
+- *obs / model* is the ASOS bias over all qualifying stations.
+- *> 50 kt* is the same ratio where the modelled land wind is above 50 kt.
+- *KCC / PCS* is the KCC modelled total over the on-levelled PCS total.
+- *Out of field* is the share of PCS county dollars outside the wind field, with its leading reported perils.
+
+| Storm | obs / model | > 50 kt | stations | KCC / PCS | Out of field (leading perils) |
+|---|---|---|---|---|---|
+| Beryl 2024 | 0.80 | 0.77 | 30 | 0.85 | 14% (no report 8%, tornado 3%) |
+| Debby 2024 | 0.64 | – | 117 | 0.30 | 80% (flood 25%, tornado 21%, wind 17%) |
+| Florence 2018 | 0.61 | 0.59 | 83 | 0.28 | 33% (flood 29%) |
+| Isaias 2020 | 0.62 | 0.72 | 181 | 2.90 | 13% (wind 7%) |
+| Ida 2021 | 0.66 | 0.57 | 99 | 0.17 | 23% (flood 18%) |
+| Ian 2022 | 0.73 | 0.67 | 144 | 1.46 | 1% |
+| Helene 2024 | 0.70 | 0.50 | 236 | 0.38 | 29% (flood 18%, wind 7%) |
+| Irma 2017 | 0.78 | 0.69 | 136 | 0.55 | 3% |
+| Laura 2020 | 0.87 | 0.56 | 38 | 0.57 | 6% |
+| Michael 2018 | 0.68 | 0.69 | 205 | 1.13 | 5% |
+| Milton 2024 | 0.75 | 0.70 | 70 | 1.32 | 0.5% |
+| Maria 2017 | (2 usable; PR network failed) | | 2 | 1.24 | 0% |
+| Sally 2020 | 0.72 | 1.05 | 31 | 0.39 | 15% (flood 5%) |
+| Delta 2020 | 0.90 | 0.86 | 34 | 0.12 | 26% (flood 8%, 9 stations at TS force outside the field) |
+| Zeta 2020 | 0.72 | 0.55 | 131 | 2.33 | 27% (wind 22%) |
+
+What it says:
+- **The modelled land wind runs hot: about 1.4× airport observations in a typical event.** The obs / model median is 0.72, over a range of 0.61–0.90. About 4% of that is 2-min versus 1-min averaging, and failed anemometers pull the observed peaks down a little. The rest is real: `windFactor` 0.80 plus the radii profile overstate open-terrain wind inland. The vendor curves therefore see too much wind and need a lower curve to compensate. A calibrated set absorbs the average.
+- **The event-to-event spread is the nuance.** With damage rising roughly as wind^5, a 0.61 versus 0.90 bias is a factor of about 7 in loss. Florence, Isaias, Debby and Ida, slow or weakening storms with broad wind fields, have the most over-modelled wind. Delta and Laura, compact landfalling majors, have the least. `calibrate_damage_curves.py --wind-correction evidence` scales each event's wind by its bias relative to the all-event median, clamped to 0.7–1.3. The curve then learns vulnerability rather than one storm's wind-field error.
+- **Most remaining out-of-field loss is flood or tornado, not missing wind.** Florence, Ida, Helene and Debby carry 18–29% of their dollars in counties with flood reports or riverine high-water marks. Debby adds 21% under tornadoes. No wind curve should fit these.
+- **Underestimates are flood events.** Florence, Ida, Helene and Debby all read below 0.4 even with the full wind field. Delta at 0.12 is the exception: it is a wind-field size problem, because 9 stations saw tropical-storm-force wind with no modelled wind.
+
+Sources not yet integrated:
+- NHC Tropical Cyclone Report station tables: official peaks, including stations that failed in ASOS.
+- HRD / H*Wind and HAFS analysed surface wind fields.
+- FCMP and Texas Tech portable towers.
+- ERA5 10 m gusts, for coverage away from airports.
+- MRMS and Stage IV rainfall, to put a number on flood.
+- NWS Damage Assessment Toolkit surveys: tornado tracks and straight-line wind.
+- FEMA Individual Assistance and NFIP claims by county, to split flood from wind.
 
 ### On-levelling industry losses
 

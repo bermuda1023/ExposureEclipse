@@ -28,6 +28,7 @@ mockdata/
 ├── industry_losses/*.csv     ← supplied PCS-style event losses (see below)
 ├── industry_tiv/<year>.csv   ← supplied industry TIV vintages (see below)
 ├── damage_curves/*.json      ← calibrated curve sets (calibrate_damage_curves.py)
+├── event_evidence/<id>.json  ← ASOS / Storm Events / USGS HWM per storm (build_event_evidence.py)
 └── geo/                      ← tiny country + CRESTA features only
                                  (state + county come from Mapbox tilesets,
                                   not GeoJSON)
@@ -171,6 +172,15 @@ priced at. The PCS importer writes the first PCS event date.
 - Optional `adjustments.csv`: analyst multipliers (see `adjustments.example.csv`).
 
 See `docs/CALCULATIONS.md §On-levelling industry losses`.
+
+`event_evidence/<stormId>.json` — post-event evidence written by
+`python backend/scripts/build_event_evidence.py [stormId ...]`:
+- ASOS station peaks next to the modelled wind, and the event wind bias.
+- NCEI Storm Events reports by county and peril.
+- USGS high-water marks.
+
+All sources are public and need no key. The backtest uses the file when it exists.
+See `docs/CALCULATIONS.md §Post-event evidence`.
 
 `damage_curves/*.json` — written by
 `python backend/scripts/calibrate_damage_curves.py` (`--dry-run` to preview).
