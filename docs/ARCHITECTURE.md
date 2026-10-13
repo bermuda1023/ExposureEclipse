@@ -212,7 +212,7 @@ nav** — power-user URL only. Re-link if you want it surfaced.
 |---|---|---|
 | `DATA_PROVIDER` | `mock` | `mock` \| `hybrid` \| `sqlserver` \| `databricks` |
 | `MOCK_DATA_DIR` | `../mockdata` | catalog + mock fact fixtures |
-| `FACT_CACHE_MAX_DATASETS` | `256` | LRU cap on cached EDMs |
+| `FACT_CACHE_MAX_DATASETS` | `1024` | LRU cap on cached EDMs |
 | `FACT_CACHE_TTL_SECONDS` | `3600` | `0` = no time expiry |
 | `FACT_LOAD_MAX_WORKERS` | `16` | parallel multi-EDM loads |
 | `SQLSERVER_SERVERS_FILE` | `../mockdata/sql_servers.json` | multi-host registry |

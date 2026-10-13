@@ -8,11 +8,11 @@ import type {
   PivotResponse,
 } from "./types";
 
-export const fetchMap = (req: MapRequest) =>
-  apiPost<MapResponse>("/exposures/map", req);
+export const fetchMap = (req: MapRequest, signal?: AbortSignal) =>
+  apiPost<MapResponse>("/exposures/map", req, signal);
 
-export const fetchDetail = (req: DetailRequest) =>
-  apiPost<DetailResponse>("/exposures/detail", req);
+export const fetchDetail = (req: DetailRequest, signal?: AbortSignal) =>
+  apiPost<DetailResponse>("/exposures/detail", req, signal);
 
-export const fetchPivot = (req: PivotRequest) =>
-  apiPost<PivotResponse>("/exposures/pivot", req);
+export const fetchPivot = (req: PivotRequest, signal?: AbortSignal) =>
+  apiPost<PivotResponse>("/exposures/pivot", req, signal);

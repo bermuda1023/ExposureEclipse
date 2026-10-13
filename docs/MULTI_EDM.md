@@ -84,7 +84,7 @@ Env:
 | `SQLSERVER_SERVERS_FILE` | Path to the JSON map |
 | `SQLSERVER_SERVERS_JSON` | Inline JSON (optional) |
 | `SQLSERVER_DEFAULT_USER` / `PASSWORD` / `DRIVER` | Defaults for incomplete entries |
-| `FACT_CACHE_MAX_DATASETS` | LRU size (default 256) |
+| `FACT_CACHE_MAX_DATASETS` | LRU size (default 1024) |
 | `FACT_CACHE_TTL_SECONDS` | Refresh window (default 3600; `0` = LRU only) |
 | `FACT_LOAD_MAX_WORKERS` | Parallelism (default 16) |
 

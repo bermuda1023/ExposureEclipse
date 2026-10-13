@@ -12,6 +12,7 @@ import { useFiltersStore } from "../../state/filters";
 import { useSelectionStore } from "../../state/selection";
 import { useViewStore } from "../../state/view";
 import { useEffectiveScope } from "../../state/useEffectiveScope";
+import { useDebouncedValue } from "../../state/useDebouncedValue";
 import {
   AggregationLevel,
   Measure,
@@ -83,7 +84,7 @@ export function Pivot() {
 
   // Pivot fires for any scope the map fires for, including portfolio mode.
   const request = useMemo<PivotRequest | null>(() => {
-    if (measures.length === 0) return null;
+    if (measures.length === 0 || scope.isEmpty) return null;
     return {
       cedentId: scope.cedentId,
       chainId: scope.chainId,
@@ -109,6 +110,7 @@ export function Pivot() {
     scope.chainId,
     scope.programmeId,
     scope.chainIds,
+    scope.isEmpty,
     comparisonProgrammeId,
     perils,
     rows,
@@ -123,7 +125,8 @@ export function Pivot() {
     filters.yearBuilt,
   ]);
 
-  const { data, isLoading, error } = usePivotData(request);
+  const debouncedRequest = useDebouncedValue(request);
+  const { data, isLoading, error } = usePivotData(debouncedRequest);
 
   const colKeys = useMemo(() => {
     if (!data) return [];

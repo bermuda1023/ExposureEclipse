@@ -31,6 +31,8 @@ export interface EffectiveScope {
   hasExplicit: boolean;
   /** True iff one of the scope filter chips is currently active. */
   hasScopeFilter: boolean;
+  /** True when an explicit office/filter selection resolves to no chains. */
+  isEmpty: boolean;
 }
 
 export function useEffectiveScope(): EffectiveScope {
@@ -72,6 +74,9 @@ export function useEffectiveScope(): EffectiveScope {
     const hasExplicit = Boolean(cedentId || chainId || programmeId || officeChainIds.length > 0);
     const hasScopeFilter =
       scopeOffices.length + scopeRegions.length + scopeUnderwriters.length > 0;
+    const isEmpty =
+      Boolean(officeKey && officeChainIds.length === 0) ||
+      Boolean(hasScopeFilter && scopeChainIds.length === 0);
 
     let chainIds: string[] | undefined;
     if (programmeId || chainId || cedentId) {
@@ -91,6 +96,7 @@ export function useEffectiveScope(): EffectiveScope {
       chainIds,
       hasExplicit,
       hasScopeFilter,
+      isEmpty,
     };
   }, [
     cedentId,

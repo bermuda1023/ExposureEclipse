@@ -54,7 +54,7 @@ class JsonCatalogProvider(ExposureDataProvider):
         *,
         fact_cache: FactCache | None = None,
         max_workers: int = 16,
-        cache_max_datasets: int = 256,
+        cache_max_datasets: int = 1024,
         cache_ttl_seconds: float = 3600.0,
     ) -> None:
         self._root = resolve_data_dir(data_dir)

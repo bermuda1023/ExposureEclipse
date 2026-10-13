@@ -89,6 +89,23 @@ def _not_found(code: ErrorCode, message: str, details: dict) -> HTTPException:
     )
 
 
+def _currency_for_scope(currencies: set[str]) -> str:
+    """Return the sole scope currency or block unsafe cross-currency aggregation."""
+    if len(currencies) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": ErrorCode.CURRENCY_MISMATCH.value,
+                "message": (
+                    "Selected programmes use different currencies and cannot be "
+                    "aggregated without an explicit conversion model."
+                ),
+                "details": {"currencies": sorted(currencies)},
+            },
+        )
+    return next(iter(currencies)) if currencies else "USD"
+
+
 def _load_batch_warnings(batch: FactBatch, provider: ExposureDataProvider) -> list[Warning]:
     """Surface load failures and hybrid SQL→mock fallbacks."""
     warnings: list[Warning] = []
@@ -107,10 +124,6 @@ def _load_batch_warnings(batch: FactBatch, provider: ExposureDataProvider) -> li
     fallbacks = getattr(provider, "last_fallback_reasons", None)
     if isinstance(fallbacks, dict) and fallbacks:
         # Only mention datasets that appear in this batch
-        relevant = {
-            k: v for k, v in fallbacks.items() if k in batch.by_id or k in batch.failed_dataset_ids
-        }
-        # Prefer datasets we just loaded that have fallback markers
         relevant = {k: v for k, v in fallbacks.items() if k in batch.by_id}
         if relevant:
             warnings.append(
@@ -200,15 +213,9 @@ def resolve_view(
                         currencies.add(prog.edm.currency)
         facts, load_warnings = facts_for_dataset_ids(provider, dataset_ids)
         warnings: list[Warning] = list(load_warnings)
-        if len(currencies) > 1:
-            warnings.append(make_warning(WarningCode.WARN_CURRENCY_MISMATCH))
-        currency = next(iter(currencies)) if len(currencies) == 1 else "MIXED"
-        method = (
-            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
-            if len(dataset_ids) > 1
-            else None
-        )
-        if method is not None:
+        currency = _currency_for_scope(currencies)
+        method = CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
+        if len(dataset_ids) > 1:
             warnings.append(make_warning(WarningCode.WARN_DATASET_GROUP_MAX_ACROSS_PERILS))
         return ResolvedView(
             facts=facts,
@@ -231,7 +238,7 @@ def resolve_view(
         return ResolvedView(
             facts=facts,
             currency=prog.edm.currency,
-            combination_method=None,
+            combination_method=CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN,
             base_dataset_id=prog.dataset_id,
             comparison_dataset_id=resolve_comparison_dataset_id(provider, payload),
             warnings=load_warnings,
@@ -260,7 +267,7 @@ def resolve_view(
         return ResolvedView(
             facts=facts,
             currency=current.edm.currency,
-            combination_method=None,
+            combination_method=CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN,
             base_dataset_id=current.dataset_id,
             comparison_dataset_id=comparison_id,
             warnings=load_warnings,
@@ -288,13 +295,9 @@ def resolve_view(
             currencies.add(current.edm.currency)
         facts, load_warnings = facts_for_dataset_ids(provider, dataset_ids)
         warnings = list(load_warnings)
-        if len(currencies) > 1:
-            warnings.append(make_warning(WarningCode.WARN_CURRENCY_MISMATCH))
-        currency = next(iter(currencies)) if len(currencies) == 1 else "MIXED"
-        method = (
-            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN if len(chains) > 1 else None
-        )
-        if method is not None:
+        currency = _currency_for_scope(currencies)
+        method = CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
+        if len(dataset_ids) > 1:
             warnings.append(make_warning(WarningCode.WARN_DATASET_GROUP_MAX_ACROSS_PERILS))
         return ResolvedView(
             facts=facts,
@@ -324,15 +327,9 @@ def resolve_view(
             currencies.add(current.edm.currency)
         facts, load_warnings = facts_for_dataset_ids(provider, dataset_ids)
         warnings = list(load_warnings)
-        if len(currencies) > 1:
-            warnings.append(make_warning(WarningCode.WARN_CURRENCY_MISMATCH))
-        currency = next(iter(currencies)) if len(currencies) == 1 else "MIXED"
-        method = (
-            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
-            if len(cedent.chains) > 1
-            else None
-        )
-        if method is not None:
+        currency = _currency_for_scope(currencies)
+        method = CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
+        if len(dataset_ids) > 1:
             warnings.append(make_warning(WarningCode.WARN_DATASET_GROUP_MAX_ACROSS_PERILS))
         return ResolvedView(
             facts=facts,
@@ -355,7 +352,7 @@ def resolve_view(
         return ResolvedView(
             facts=facts,
             currency=prog.edm.currency,
-            combination_method=None,
+            combination_method=CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN,
             base_dataset_id=prog.dataset_id,
             comparison_dataset_id=resolve_comparison_dataset_id(provider, payload),
             warnings=load_warnings,

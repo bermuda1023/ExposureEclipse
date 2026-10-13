@@ -47,7 +47,7 @@ class CacheStats:
 class FactCache(Generic[T]):
     """Thread-safe LRU + TTL cache with single-flight ``get_or_load``."""
 
-    def __init__(self, *, max_datasets: int = 256, ttl_seconds: float = 3600.0) -> None:
+    def __init__(self, *, max_datasets: int = 1024, ttl_seconds: float = 3600.0) -> None:
         self._max = max(1, max_datasets)
         self._ttl = max(0.0, ttl_seconds)
         self._lock = threading.RLock()
@@ -127,7 +127,8 @@ class FactCache(Generic[T]):
                 self._misses += 1
 
         if not leader:
-            event.wait(timeout=300.0)
+            if not event.wait(timeout=300.0):
+                raise TimeoutError(f"Timed out waiting for in-flight fact load: {key}")
             cached = self.get(key)
             if cached is not None:
                 return cached
@@ -135,7 +136,8 @@ class FactCache(Generic[T]):
                 err = self._in_flight_errors.pop(key, None)
             if err is not None:
                 raise err
-            # Leader vanished without result — retry as leader (bounded by stack).
+            # The leader exited without publishing a value or error. Retry once
+            # through the normal election path; do not start a competing load.
             return self.get_or_load(key, loader)
 
         try:

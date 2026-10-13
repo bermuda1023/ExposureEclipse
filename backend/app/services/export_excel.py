@@ -114,10 +114,17 @@ def build_export_xlsx(payload: dict, provider: ExposureDataProvider) -> bytes:
     if pivot_dict.get("measures"):
         pivot_req = PivotRequest.model_validate(
             {
+                "programmeId": payload.get("programmeId"),
+                "chainId": payload.get("chainId"),
+                "chainIds": payload.get("chainIds") or [],
+                "cedentId": payload.get("cedentId"),
                 "datasetId": payload.get("datasetId"),
                 "datasetGroupId": payload.get("datasetGroupId"),
+                "comparisonProgrammeId": payload.get("comparisonProgrammeId"),
                 "comparisonDatasetId": payload.get("comparisonDatasetId"),
                 "filters": payload.get("filters") or {},
+                "perils": payload.get("perils") or [],
+                "currencyAssumption": payload.get("currencyAssumption"),
                 "combinationMethod": payload.get("combinationMethod"),
                 **pivot_dict,
             },

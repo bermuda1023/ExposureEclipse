@@ -37,7 +37,7 @@ Optional (defaults are fine for mock):
 
 | Var | Default | Notes |
 |---|---|---|
-| `FACT_CACHE_MAX_DATASETS` | `256` | LRU size per lambda instance |
+| `FACT_CACHE_MAX_DATASETS` | `1024` | LRU size per API process |
 | `FACT_CACHE_TTL_SECONDS` | `3600` | per-instance only |
 | `FACT_LOAD_MAX_WORKERS` | `16` | parallel fact loads |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:5173,…` | comma-separated allowed origins; change when hosting API separately |

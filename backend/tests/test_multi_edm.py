@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import types
 
 import pytest
 from fastapi.testclient import TestClient
@@ -206,6 +207,61 @@ def test_connection_registry_odbc_string() -> None:
     assert "SERVER=sql01.local,1433" in s
     assert "DATABASE=Re_BER_27_Farmers_BDA_EDM_01" in s
     assert "UID=u" in s
+
+
+def test_connection_registry_connects_distinct_databases_concurrently(
+    monkeypatch,
+) -> None:
+    reg = ConnectionRegistry()
+    reg.register(ServerConnectionConfig(server_name="S", host="sql.local"))
+    state = {"active": 0, "max_active": 0}
+    state_lock = threading.Lock()
+    first_started = threading.Event()
+
+    class FakeCursor:
+        def execute(self, _sql):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeConnection:
+        timeout = 0
+
+        def cursor(self):
+            return FakeCursor()
+
+        def close(self):
+            return None
+
+    def fake_connect(_connection_string, timeout):
+        assert timeout == 15
+        with state_lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            first_started.set()
+        time.sleep(0.08)
+        with state_lock:
+            state["active"] -= 1
+        return FakeConnection()
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "pyodbc",
+        types.SimpleNamespace(connect=fake_connect),
+    )
+    threads = [
+        threading.Thread(target=reg.connect, args=("S", database))
+        for database in ("EDM_A", "EDM_B")
+    ]
+    threads[0].start()
+    assert first_started.wait(timeout=1)
+    threads[1].start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert state["max_active"] == 2
 
 
 # ───────────────────────── mock lazy + parallel ─────────────────────────
