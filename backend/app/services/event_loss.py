@@ -153,7 +153,7 @@ def resolve_storm(storm_id: str) -> tuple[Storm, str] | None:
 @lru_cache(maxsize=64)
 def _historical_impacts(storm_id: str, multiplier: float) -> tuple[CountyImpact, ...]:
     storm = next(s for s in fetch_storms() if s.storm_id.upper() == storm_id.upper())
-    impacts, *_ = compute_impact(storm, multiplier=multiplier)
+    impacts, *_ = compute_impact(storm, multiplier=multiplier, ts_field=True)
     return tuple(impacts)
 
 
