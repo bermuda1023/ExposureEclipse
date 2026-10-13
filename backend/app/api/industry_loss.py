@@ -20,6 +20,7 @@ from ..services.damage_curves import default_curve_set_id, get_curve_set, load_c
 from ..services.event_loss import event_loss, lognormal_band, resolve_storm, storm_impacts
 from ..services.industry_losses import (
     LOSS_SEGMENTS,
+    EventActuals,
     IndustryDataError,
     actuals_for,
     load_actuals,
@@ -79,6 +80,23 @@ def _tiv_source(tiv) -> dict:
     return {"kind": tiv.kind, "year": tiv.year, "file": tiv.file, "currency": tiv.currency}
 
 
+def _actual_basis(actuals: EventActuals) -> dict:
+    """Reported totals plus what the figure does and does not include."""
+    return {
+        "total": actuals.total(),
+        "bySegment": actuals.segment_totals(),
+        "unallocated": actuals.unallocated_total(),
+        "claimsBySegment": actuals.claims or None,
+        "states": actuals.states(),
+        "asOfDate": actuals.as_of,
+        "source": actuals.source,
+        "includesFlood": actuals.includes_flood,
+        "includesSurge": actuals.includes_surge,
+        "includesNfip": actuals.includes_nfip,
+        "includesLae": actuals.includes_lae,
+    }
+
+
 @router.get("/damage-curves")
 def list_damage_curves() -> dict:
     return {
@@ -131,15 +149,17 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
     }
     actual_block = None
     if actuals is not None:
-        seg_tot = actuals.segment_totals()
-        actual_block = {
-            "total": actuals.total(),
-            "bySegment": seg_tot,
-            "asOfDate": actuals.as_of,
-            "source": actuals.source,
-            "includesFlood": actuals.includes_flood,
-            "includesSurge": actuals.includes_surge,
-        }
+        actual_block = _actual_basis(actuals)
+        unalloc = actuals.unallocated_total()
+        if unalloc > 0.01 * actuals.total():
+            notes.append(
+                f"{unalloc / actuals.total():.0%} of reported loss is not placed in a county; it "
+                "counts in the totals but not in the county backtest."
+            )
+        if actuals.includes_flood or actuals.includes_surge:
+            notes.append(
+                "Reported loss includes private-market flood and surge; the modelled loss is wind only."
+            )
 
     return {
         "stormId": storm.storm_id,
@@ -194,11 +214,8 @@ def list_industry_losses() -> dict:
             {
                 "stormId": e.storm_id,
                 "currency": e.currency,
-                "total": e.total(),
-                "bySegment": e.segment_totals(),
+                **_actual_basis(e),
                 "counties": len({gid for gid, _ in e.county}),
-                "asOfDate": e.as_of,
-                "source": e.source,
                 "files": e.files,
             }
             for e in sorted(events.values(), key=lambda ev: ev.storm_id)

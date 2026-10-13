@@ -35,6 +35,33 @@ export interface TivSource {
   currency: string;
 }
 
+export interface ActualsBasis {
+  total: number;
+  bySegment: Record<LossSegment, number>;
+  /** Reported loss not placed in any county (PCS "County Not Available"). */
+  unallocated: number;
+  claimsBySegment: Partial<Record<LossSegment, number>> | null;
+  states: string[];
+  asOfDate: string | null;
+  source: string | null;
+  includesFlood: boolean | null;
+  includesSurge: boolean | null;
+  includesNfip: boolean | null;
+  includesLae: boolean | null;
+}
+
+export function actualsBasisLabel(a: ActualsBasis): string {
+  const parts: string[] = [];
+  const flag = (value: boolean | null, label: string) => {
+    if (value === true) parts.push(`incl. ${label}`);
+    else if (value === false) parts.push(`excl. ${label}`);
+  };
+  flag(a.includesFlood, a.includesNfip === false ? "private flood" : "flood");
+  flag(a.includesNfip, "NFIP");
+  flag(a.includesLae, "LAE");
+  return parts.join(" · ");
+}
+
 export interface IndustryLossResponse {
   stormId: string;
   stormName: string;
@@ -58,14 +85,7 @@ export interface IndustryLossResponse {
     bySegment: Record<LossSegment, LossBand & { tiv: number }>;
     countiesWithLoss: number;
   };
-  actuals: {
-    total: number;
-    bySegment: Record<LossSegment, number>;
-    asOfDate: string | null;
-    source: string | null;
-    includesFlood: boolean | null;
-    includesSurge: boolean | null;
-  } | null;
+  actuals: ActualsBasis | null;
   counties: Array<
     LossBand & {
       geographyId: string;

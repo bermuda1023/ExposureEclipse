@@ -26,10 +26,15 @@ const response: IndustryLossResponse = {
   actuals: {
     total: 50e9,
     bySegment: { RESIDENTIAL: 32e9, COMMERCIAL: 16e9, AUTO: 2e9 },
+    unallocated: 0,
+    claimsBySegment: null,
+    states: ["FL"],
     asOfDate: "2024-06-30",
     source: "PCS",
-    includesFlood: false,
-    includesSurge: null,
+    includesFlood: true,
+    includesSurge: true,
+    includesNfip: false,
+    includesLae: false,
   },
   counties: [],
   notes: ["No 2026 TIV supplied; using the 2022 vintage."],
@@ -66,6 +71,7 @@ describe("IndustryLossSection", () => {
     expect(screen.getByText("×1.20 mean")).toBeTruthy(); // 60 / 50
     expect(screen.getByText(/using the 2022 vintage/)).toBeTruthy();
     expect(screen.getByText(/actuals PCS as of 2024-06-30/)).toBeTruthy();
+    expect(screen.getByText(/incl\. private flood · excl\. NFIP · excl\. LAE/)).toBeTruthy();
   });
 
   it("asks for the backtest only when opened", () => {

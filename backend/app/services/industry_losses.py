@@ -4,7 +4,8 @@ Two drop-in folders under ``mockdata/``:
 
 ``industry_losses/*.csv`` — one or more events per file::
 
-    stormId,geographyId,segment,loss,currency[,asOfDate,source,includesFlood,includesSurge]
+    stormId,geographyId,segment,loss,currency[,claims,asOfDate,source,
+        includesFlood,includesSurge,includesNfip,includesLae,unallocated]
 
 ``industry_tiv/<year>.csv`` — the exposure the losses are measured against::
 
@@ -13,6 +14,10 @@ Two drop-in folders under ``mockdata/``:
 ``geographyId`` is ``US-FL-12086``, a raw 5-digit county GEOID, or a state id
 ``US-FL``. Segment is ``RESIDENTIAL``, ``COMMERCIAL`` or ``AUTO``. A storm with
 no loss file has no actuals; it is never read as a zero loss.
+
+A state row with ``unallocated=true`` is loss the reporter could not place in
+a county (PCS "County Not Available"). It always adds to the state and event
+totals but never enters county matching or the curve fit.
 """
 
 from __future__ import annotations
@@ -36,6 +41,10 @@ LOSSES_DIR = "industry_losses"
 TIV_DIR = "industry_tiv"
 
 
+# PCS reports the US Virgin Islands; the county-geometry map does not carry it.
+FIPS_TO_USPS: dict[str, str] = {**STATE_FIPS_TO_USPS, "72": "PR", "78": "VI"}
+
+
 class IndustryDataError(ValueError):
     """A supplied file is malformed. The message names the file and line."""
 
@@ -55,20 +64,20 @@ def normalize_geography(raw: str) -> Geo | None:
     digits = s.replace("-", "")
     if digits.isdigit() and len(digits) in (4, 5):
         geoid = digits.zfill(5)
-        usps = STATE_FIPS_TO_USPS.get(geoid[:2])
+        usps = FIPS_TO_USPS.get(geoid[:2])
         if usps is None:
             return None
         return Geo("COUNTY", f"US-{usps}-{geoid}", usps)
     parts = s.split("-")
     if len(parts) == 3 and parts[0] == "US" and parts[2].isdigit():
         geoid = parts[2].zfill(5)
-        usps = STATE_FIPS_TO_USPS.get(geoid[:2])
+        usps = FIPS_TO_USPS.get(geoid[:2])
         if usps is None or usps != parts[1]:
             return None
         return Geo("COUNTY", f"US-{usps}-{geoid}", usps)
-    if len(parts) == 2 and parts[0] == "US" and len(parts[1]) == 2:
+    if len(parts) == 2 and parts[0] == "US" and parts[1] in FIPS_TO_USPS.values():
         return Geo("STATE", s, parts[1])
-    if len(s) == 2 and s.isalpha() and s in STATE_FIPS_TO_USPS.values():
+    if len(s) == 2 and s.isalpha() and s in FIPS_TO_USPS.values():
         return Geo("STATE", f"US-{s}", s)
     return None
 
@@ -120,14 +129,21 @@ class EventActuals:
     county: dict[tuple[str, str], float] = field(default_factory=dict)
     # (state, segment) -> loss from explicit state rows.
     state_rows: dict[tuple[str, str], float] = field(default_factory=dict)
+    # (state, segment) -> loss not placed in any county; always additive.
+    unallocated: dict[tuple[str, str], float] = field(default_factory=dict)
+    # segment -> reported claim count, when the source carries one.
+    claims: dict[str, float] = field(default_factory=dict)
     as_of: str | None = None
     source: str | None = None
     includes_flood: bool | None = None
     includes_surge: bool | None = None
+    includes_nfip: bool | None = None
+    includes_lae: bool | None = None
     files: list[str] = field(default_factory=list)
 
     def segment_totals(self) -> dict[str, float]:
-        """Event loss by segment. County rows win; state rows fill states with no county rows."""
+        """Event loss by segment. County rows win over state rows for the same
+        state; unallocated rows always add."""
         out = {seg: 0.0 for seg in LOSS_SEGMENTS}
         county_states: set[tuple[str, str]] = set()
         for (gid, seg), loss in self.county.items():
@@ -136,10 +152,21 @@ class EventActuals:
         for (state, seg), loss in self.state_rows.items():
             if (state, seg) not in county_states:
                 out[seg] += loss
+        for (_state, seg), loss in self.unallocated.items():
+            out[seg] += loss
         return out
 
     def total(self) -> float:
         return sum(self.segment_totals().values())
+
+    def unallocated_total(self) -> float:
+        return sum(self.unallocated.values())
+
+    def states(self) -> list[str]:
+        found = {gid.split("-")[1] for gid, _ in self.county}
+        found.update(state for state, _ in self.state_rows)
+        found.update(state for state, _ in self.unallocated)
+        return sorted(found)
 
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -180,16 +207,27 @@ def load_actuals() -> dict[str, EventActuals]:
                 event.files.append(path.name)
             event.as_of = (row.get("asOfDate") or "").strip() or event.as_of
             event.source = (row.get("source") or "").strip() or event.source
-            flood = _flag(row.get("includesFlood"))
-            surge = _flag(row.get("includesSurge"))
-            event.includes_flood = flood if flood is not None else event.includes_flood
-            event.includes_surge = surge if surge is not None else event.includes_surge
-            if geo.level == "COUNTY":
-                key = (geo.geography_id, seg)
-                event.county[key] = event.county.get(key, 0.0) + loss
-            else:
+            for attr, column in (("includes_flood", "includesFlood"),
+                                 ("includes_surge", "includesSurge"),
+                                 ("includes_nfip", "includesNfip"),
+                                 ("includes_lae", "includesLae")):
+                value = _flag(row.get(column))
+                if value is not None:
+                    setattr(event, attr, value)
+            if (row.get("claims") or "").strip():
+                event.claims[seg] = event.claims.get(seg, 0.0) + _money(row["claims"], where)
+            if _flag(row.get("unallocated")):
+                if geo.level != "STATE":
+                    raise IndustryDataError(f"{where}: unallocated rows must use a state geographyId")
+                target = event.unallocated
                 key = (geo.state, seg)
-                event.state_rows[key] = event.state_rows.get(key, 0.0) + loss
+            elif geo.level == "COUNTY":
+                target = event.county
+                key = (geo.geography_id, seg)
+            else:
+                target = event.state_rows
+                key = (geo.state, seg)
+            target[key] = target.get(key, 0.0) + loss
     return events
 
 

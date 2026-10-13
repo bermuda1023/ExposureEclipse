@@ -102,6 +102,36 @@ def test_actuals_load_and_totals(data_dir) -> None:
     assert industry_losses.actuals_for("AL012000") is None
 
 
+def test_actuals_unallocated_claims_and_basis_flags(data_dir) -> None:
+    _write(
+        data_dir / "industry_losses" / "pcs.csv",
+        """
+        stormId,geographyId,segment,loss,claims,currency,source,includesFlood,includesSurge,includesNfip,includesLae,unallocated
+        AL112017,US-FL-12087,RESIDENTIAL,1000,10,USD,PCS 1744,true,true,false,false,
+        AL112017,US-VI-78010,COMMERCIAL,500,5,USD,PCS 1744,true,true,false,false,
+        AL112017,US-PR-72127,AUTO,0,0,USD,PCS 1744,true,true,false,false,
+        AL112017,US-FL,RESIDENTIAL,200,2,USD,PCS 1744,true,true,false,false,true
+        """,
+    )
+    ev = industry_losses.actuals_for("AL112017")
+    # Unallocated adds even though FL residential has county rows.
+    assert ev.segment_totals() == {"RESIDENTIAL": 1200, "COMMERCIAL": 500, "AUTO": 0}
+    assert ev.unallocated_total() == 200
+    assert ev.claims == {"RESIDENTIAL": 12, "COMMERCIAL": 5, "AUTO": 0}
+    assert ev.states() == ["FL", "PR", "VI"]
+    assert (ev.includes_flood, ev.includes_nfip, ev.includes_lae) == (True, False, False)
+    assert ("US-PR-72127", "AUTO") in ev.county  # a reported zero is kept as a known zero
+
+
+def test_unallocated_row_must_be_state(data_dir) -> None:
+    _write(
+        data_dir / "industry_losses" / "bad.csv",
+        "stormId,geographyId,segment,loss,currency,unallocated\nAL092022,US-FL-12071,AUTO,1,USD,true",
+    )
+    with pytest.raises(IndustryDataError, match="unallocated rows must use a state"):
+        industry_losses.load_actuals()
+
+
 def test_actuals_reject_bad_segment(data_dir) -> None:
     _write(
         data_dir / "industry_losses" / "bad.csv",

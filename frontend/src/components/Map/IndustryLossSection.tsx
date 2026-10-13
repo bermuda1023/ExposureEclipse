@@ -7,7 +7,7 @@
 
 import { useMemo, useState } from "react";
 import { useDamageCurves, useIndustryBacktest, useIndustryLoss } from "../../api/hooks";
-import { LOSS_SEGMENTS, type LossSegment } from "../../api/industryLoss";
+import { LOSS_SEGMENTS, actualsBasisLabel, type LossSegment } from "../../api/industryLoss";
 import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatMoneyCompact } from "../../lib/format";
 
@@ -156,6 +156,7 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
               : "built-in Industry book"}
             {data.actuals?.source ? ` · actuals ${data.actuals.source}` : ""}
             {data.actuals?.asOfDate ? ` as of ${data.actuals.asOfDate}` : ""}
+            {data.actuals && actualsBasisLabel(data.actuals) ? ` (${actualsBasisLabel(data.actuals)})` : ""}
           </div>
           {[...data.notes, ...(hasSliceEdits ? ["Wind-slice edits are not applied to industry loss; county scale is."] : [])].map(
             (note) => (
