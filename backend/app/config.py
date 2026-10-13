@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # ── Multi-EDM fact plane ──────────────────────────────────────
     # Cap on cached EDMs (each holds its full pre-aggregated fact list).
-    fact_cache_max_datasets: int = 256
+    fact_cache_max_datasets: int = 1024
     # 0 = no TTL expiry (only LRU eviction).
     fact_cache_ttl_seconds: float = 3600.0
     # Parallel fan-out when loading many EDMs (portfolio / cedent / office).

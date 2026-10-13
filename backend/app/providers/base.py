@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from threading import Lock
 from typing import Protocol, runtime_checkable
 
 from ..models.cedent import Cedent, Programme, ProgrammeChain
@@ -64,14 +65,16 @@ class ExposureDataProvider(ABC):
         from .parallel_load import load_many
 
         errors: list[LoadError] = []
+        errors_lock = Lock()
 
         def loader(ds_id: str) -> list[ExposureFactNormalized]:
             try:
                 return self.get_facts_for_dataset(ds_id)
             except Exception as exc:
-                errors.append(
-                    LoadError(dataset_id=ds_id, message=f"{type(exc).__name__}: {exc}")
-                )
+                with errors_lock:
+                    errors.append(
+                        LoadError(dataset_id=ds_id, message=f"{type(exc).__name__}: {exc}")
+                    )
                 return []
 
         by_id = load_many(

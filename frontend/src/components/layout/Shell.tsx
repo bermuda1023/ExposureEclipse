@@ -24,6 +24,7 @@ import { useViewStore } from "../../state/view";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import { useLiveStormStore } from "../../state/liveStorm";
 import { useEffectiveScope } from "../../state/useEffectiveScope";
+import { useDebouncedValue } from "../../state/useDebouncedValue";
 // Mapbox GL JS is ~1.8 MB minified — lazy-load so it stays off the critical path.
 const MapView = lazy(() =>
   import("../Map/MapView").then((m) => ({ default: m.MapView })),
@@ -67,6 +68,7 @@ export function Shell() {
   // hurricane impact) sees the SAME set of programmes.
 
   const mapRequest = useMemo<MapRequest | null>(() => {
+    if (scope.isEmpty) return null;
     return {
       cedentId: scope.cedentId,
       chainId: scope.chainId,
@@ -92,6 +94,7 @@ export function Shell() {
     scope.chainId,
     scope.programmeId,
     scope.chainIds,
+    scope.isEmpty,
     comparisonProgrammeId,
     aggregationLevel,
     metric,
@@ -106,7 +109,8 @@ export function Shell() {
     filters.yearBuilt,
   ]);
 
-  const mapQuery = useMapData(mapRequest);
+  const debouncedMapRequest = useDebouncedValue(mapRequest);
+  const mapQuery = useMapData(debouncedMapRequest);
   const featureWarnings = mapQuery.data?.features.flatMap((f) => f.warnings) ?? [];
   const allWarnings = [...(mapQuery.data?.warnings ?? []), ...featureWarnings];
   const cedentId = useSelectionStore((s) => s.cedentId);

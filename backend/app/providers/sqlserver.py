@@ -25,7 +25,7 @@ class SqlServerExposureDataProvider(JsonCatalogProvider):
         max_workers: int = 16,
         evolution_table_pattern: str = "{edm}__EVOLUTION",
         fallback_mock: bool = True,
-        cache_max_datasets: int = 256,
+        cache_max_datasets: int = 1024,
         cache_ttl_seconds: float = 3600.0,
     ) -> None:
         super().__init__(
@@ -64,7 +64,7 @@ class SqlServerExposureDataProvider(JsonCatalogProvider):
                 if rows:
                     self.last_fallback_reasons[dataset_id] = "no programme in catalog; used mock file"
                 return rows
-            return []
+            raise KeyError(f"Dataset {dataset_id!r} has no programme in the catalog")
 
         edm = programme.edm
         if edm.server_name in self._registry:
@@ -100,7 +100,9 @@ class SqlServerExposureDataProvider(JsonCatalogProvider):
             edm.server_name,
             dataset_id,
         )
-        return []
+        raise RuntimeError(
+            f"Server {edm.server_name!r} is not registered for dataset {dataset_id!r}"
+        )
 
     def _evolution_table_name(self, edm_database_name: str) -> str:
         return self._table_pattern.format(edm=edm_database_name)
@@ -119,27 +121,27 @@ class SqlServerExposureDataProvider(JsonCatalogProvider):
         if any(c in safe for c in (";", "--", "/*", "*/")):
             raise ValueError(f"Refusing unsafe table name: {safe!r}")
 
-        conn = self._registry.connect(server_name, database_name)
         raw_rows: list[dict] | None = None
         source_table = safe
-        for candidate in ("ee_exposure_facts", safe):
-            cur = conn.cursor()
-            try:
-                cur.execute(f"SELECT * FROM [{candidate}]")
-                raw_rows = rows_from_cursor(cur)
-                source_table = candidate
-                cur.close()
-                break
-            except Exception:
+        with self._registry.connection(server_name, database_name) as conn:
+            for candidate in ("ee_exposure_facts", safe):
+                cur = conn.cursor()
                 try:
+                    cur.execute(f"SELECT * FROM [{candidate}]")
+                    raw_rows = rows_from_cursor(cur)
+                    source_table = candidate
                     cur.close()
+                    break
                 except Exception:
-                    pass
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                continue
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    continue
         if raw_rows is None:
             raise RuntimeError(
                 f"No readable fact table on {server_name}/{database_name} "

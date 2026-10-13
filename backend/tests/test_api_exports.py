@@ -101,6 +101,45 @@ def test_export_map_data_matches_api():
         )
 
 
+def test_export_pivot_preserves_navigation_and_peril_scope():
+    client = TestClient(app)
+    payload = _payload(
+        datasetId=None,
+        programmeId="prog-farmers-bda-2027",
+        perils=["WS"],
+        selectedGeographyId=None,
+    )
+    pivot_resp = client.post(
+        "/api/exposures/pivot",
+        json={
+            "programmeId": payload["programmeId"],
+            "perils": payload["perils"],
+            **payload["pivot"],
+            "filters": {},
+        },
+    )
+    assert pivot_resp.status_code == 200, pivot_resp.text
+    expected = {
+        (
+            *cell["rowKey"],
+            *cell["colKey"],
+            cell["values"]["TIV"],
+            cell["values"]["LOCATION_COUNT"],
+        )
+        for cell in pivot_resp.json()["cells"]
+    }
+
+    export_resp = client.post("/api/exports/excel", json=payload)
+    assert export_resp.status_code == 200, export_resp.text
+    workbook = load_workbook(io.BytesIO(export_resp.content))
+    actual = {
+        tuple(row)
+        for row in workbook["Pivot Output"].iter_rows(min_row=2, values_only=True)
+        if any(value is not None for value in row)
+    }
+    assert actual == expected
+
+
 def test_export_too_large_returns_413(monkeypatch):
     # Force a tiny EXPORT_MAX_ROWS so the row-budget guard fires.
     monkeypatch.setenv("EXPORT_MAX_ROWS", "1")

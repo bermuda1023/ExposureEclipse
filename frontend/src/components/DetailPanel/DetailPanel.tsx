@@ -9,9 +9,11 @@
  */
 
 import { useMemo } from "react";
-import { useCedents, useDetailData } from "../../api/hooks";
+import { useDetailData } from "../../api/hooks";
 import { useFiltersStore } from "../../state/filters";
 import { useSelectionStore } from "../../state/selection";
+import { useEffectiveScope } from "../../state/useEffectiveScope";
+import { useDebouncedValue } from "../../state/useDebouncedValue";
 import { useViewStore } from "../../state/view";
 import { formatCount, formatMoneyCompact, formatMoneyFull, formatPercent } from "../../lib/format";
 import { WarningsPanel } from "../layout/WarningsPanel";
@@ -38,10 +40,7 @@ export function DetailPanel() {
 }
 
 function CountyDetail() {
-  const cedentId = useSelectionStore((s) => s.cedentId);
-  const officeKey = useSelectionStore((s) => s.officeKey);
-  const chainId = useSelectionStore((s) => s.chainId);
-  const programmeId = useSelectionStore((s) => s.programmeId);
+  const scope = useEffectiveScope();
   const comparisonProgrammeId = useSelectionStore((s) => s.comparisonProgrammeId);
   const aggregationLevel = useViewStore((s) => s.aggregationLevel);
   const metric = useViewStore((s) => s.metric);
@@ -49,23 +48,14 @@ function CountyDetail() {
   const selectedGeographyId = useViewStore((s) => s.selectedGeographyId);
   const setSelected = useViewStore((s) => s.setSelectedGeographyId);
   const filters = useFiltersStore();
-  const cedentsQuery = useCedents();
-
-  const officeChainIds = useMemo<string[]>(() => {
-    if (!officeKey || !cedentsQuery.data) return [];
-    const cedent = cedentsQuery.data.cedents.find((c) => c.cedentId === officeKey.cedentId);
-    if (!cedent) return [];
-    return cedent.chains.filter((ch) => ch.office === officeKey.office).map((ch) => ch.chainId);
-  }, [officeKey, cedentsQuery.data]);
 
   const request = useMemo<DetailRequest | null>(() => {
-    if (!selectedGeographyId) return null;
-    if (!cedentId && !chainId && !programmeId && officeChainIds.length === 0) return null;
+    if (!selectedGeographyId || scope.isEmpty) return null;
     return {
-      cedentId,
-      chainId,
-      chainIds: officeChainIds.length > 0 ? officeChainIds : undefined,
-      programmeId,
+      cedentId: scope.cedentId,
+      chainId: scope.chainId,
+      chainIds: scope.chainIds,
+      programmeId: scope.programmeId,
       aggregationLevel,
       metric,
       geographyId: selectedGeographyId,
@@ -83,10 +73,11 @@ function CountyDetail() {
     };
   }, [
     selectedGeographyId,
-    cedentId,
-    chainId,
-    programmeId,
-    officeChainIds,
+    scope.cedentId,
+    scope.chainId,
+    scope.chainIds,
+    scope.programmeId,
+    scope.isEmpty,
     comparisonProgrammeId,
     aggregationLevel,
     metric,
@@ -100,7 +91,8 @@ function CountyDetail() {
     filters.yearBuilt,
   ]);
 
-  const { data, isLoading, error } = useDetailData(request);
+  const debouncedRequest = useDebouncedValue(request);
+  const { data, isLoading, error } = useDetailData(debouncedRequest);
 
   if (!selectedGeographyId) {
     return (

@@ -9,8 +9,8 @@ Config sources (later wins nothing — file is primary, env default fills gaps):
 * ``SQLSERVER_SERVERS_FILE`` → JSON map of serverName → connection settings
 * ``SQLSERVER_DEFAULT_*`` env vars applied when a server entry omits credentials
 
-Connection strings are built per (server, database) at query time so we do not
-hold a pool open for every EDM — only per *server* via a simple pool.
+Connection strings are built per (server, database) at query time. Connections
+are retained per database until application shutdown.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,7 @@ class ConnectionRegistry:
     def __init__(self) -> None:
         self._servers: dict[str, ServerConnectionConfig] = {}
         self._pools: dict[tuple[str, str], _PooledConnection] = {}
+        self._key_locks: dict[tuple[str, str], threading.Lock] = {}
         self._lock = threading.RLock()
         self._probe_cache: dict[str, tuple[bool, str, float]] = {}
 
@@ -171,14 +173,6 @@ class ConnectionRegistry:
 
         Requires ``pyodbc``. Reuses one connection per (server, database).
         """
-        try:
-            import pyodbc  # type: ignore[import-untyped]
-        except ImportError as exc:  # pragma: no cover — optional dep
-            raise RuntimeError(
-                "pyodbc is required for SQL Server access. "
-                "Install with: pip install 'peril-vista-backend[sql]'"
-            ) from exc
-
         cfg = self.get(server_name)
         if cfg is None:
             raise KeyError(
@@ -188,29 +182,56 @@ class ConnectionRegistry:
 
         key = (server_name, database)
         with self._lock:
-            pooled = self._pools.get(key)
-            if pooled is not None:
-                try:
-                    # cheap liveness check
-                    cur = pooled.conn.cursor()
-                    cur.execute("SELECT 1")
-                    cur.close()
-                    return pooled.conn
-                except Exception:
-                    self._close_pool_unlocked(key)
+            key_lock = self._key_locks.setdefault(key, threading.Lock())
 
-            conn_str = cfg.odbc_connect_string(database)
-            conn = pyodbc.connect(conn_str, timeout=15)
+        # Serialize only callers for this database. Cold connects to distinct
+        # EDM databases remain concurrent.
+        with key_lock:
+            with self._lock:
+                pooled = self._pools.get(key)
+            if pooled is not None:
+                with pooled.lock:
+                    try:
+                        cur = pooled.conn.cursor()
+                        cur.execute("SELECT 1")
+                        cur.close()
+                        return pooled.conn
+                    except Exception:
+                        with self._lock:
+                            self._close_pool_unlocked(key)
+
+            try:
+                import pyodbc  # type: ignore[import-untyped]
+            except ImportError as exc:  # pragma: no cover — optional dep
+                raise RuntimeError(
+                    "pyodbc is required for SQL Server access. "
+                    "Install with: pip install 'peril-vista-backend[sql]'"
+                ) from exc
+
+            conn = pyodbc.connect(cfg.odbc_connect_string(database), timeout=15)
             conn.timeout = 60
-            self._pools[key] = _PooledConnection(
+            pooled = _PooledConnection(
                 server_name=server_name, database=database, conn=conn
             )
+            with self._lock:
+                self._pools[key] = pooled
             return conn
+
+    @contextmanager
+    def connection(self, server_name: str, database: str):
+        """Yield a pooled connection with exclusive DB-API access."""
+        conn = self.connect(server_name, database)
+        key = (server_name, database)
+        with self._lock:
+            pooled = self._pools[key]
+        with pooled.lock:
+            yield conn
 
     def close_all(self) -> None:
         with self._lock:
             for key in list(self._pools.keys()):
                 self._close_pool_unlocked(key)
+            self._key_locks.clear()
 
     def _close_pool_unlocked(self, key: tuple[str, str]) -> None:
         pooled = self._pools.pop(key, None)
@@ -226,10 +247,10 @@ class ConnectionRegistry:
         if server_name not in self._servers:
             return False, f"Server '{server_name}' not registered"
         try:
-            conn = self.connect(server_name, database)
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.close()
+            with self.connection(server_name, database) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
             return True, "ok"
         except Exception as exc:
             return False, f"{type(exc).__name__}: {exc}"

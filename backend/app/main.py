@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -48,12 +49,28 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Release provider-owned connection pools when the process exits."""
+    yield
+    from .providers import get_provider
+
+    if not get_provider.cache_info().currsize:
+        return
+    provider = get_provider()
+    registry = getattr(provider, "connection_registry", None)
+    if registry is not None:
+        registry.close_all()
+
+
 app = FastAPI(
     title=f"{BRAND_NAME} API",
     version="0.1.0",
     description="Property Cat exposure management workbench — backend API.",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -63,6 +80,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 api = APIRouter(prefix="/api")
 

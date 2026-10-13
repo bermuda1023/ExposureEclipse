@@ -57,7 +57,7 @@ export const useMapData = (
 ) =>
   useQuery<MapResponse>({
     queryKey: req ? queryKeys.map(req) : ["exposures", "map", null],
-    queryFn: () => fetchMap(req as MapRequest),
+    queryFn: ({ signal }) => fetchMap(req as MapRequest, signal),
     enabled: Boolean(req) && (opts?.enabled ?? true),
     ...opts,
   });
@@ -65,14 +65,14 @@ export const useMapData = (
 export const useDetailData = (req: DetailRequest | null) =>
   useQuery<DetailResponse>({
     queryKey: req ? queryKeys.detail(req) : ["exposures", "detail", null],
-    queryFn: () => fetchDetail(req as DetailRequest),
+    queryFn: ({ signal }) => fetchDetail(req as DetailRequest, signal),
     enabled: Boolean(req),
   });
 
 export const usePivotData = (req: PivotRequest | null) =>
   useQuery<PivotResponse>({
     queryKey: req ? queryKeys.pivot(req) : ["exposures", "pivot", null],
-    queryFn: () => fetchPivot(req as PivotRequest),
+    queryFn: ({ signal }) => fetchPivot(req as PivotRequest, signal),
     enabled: Boolean(req),
   });
 

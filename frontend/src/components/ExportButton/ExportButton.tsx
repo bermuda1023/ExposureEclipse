@@ -70,9 +70,11 @@ export function ExportButton() {
             setBusy(false);
           }
         }}
-        disabled={busy}
+        disabled={busy || scope.isEmpty}
         title={
-          scope.hasExplicit
+          scope.isEmpty
+            ? "No programmes match the current scope filters"
+            : scope.hasExplicit
             ? "Export the current selection to Excel"
             : scope.hasScopeFilter
               ? "Export the filtered scope to Excel"

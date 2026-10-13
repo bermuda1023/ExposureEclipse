@@ -95,5 +95,5 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 export const apiGet = <T>(path: string, query?: RequestOptions["query"]) =>
   request<T>(path, { method: "GET", query });
 
-export const apiPost = <T>(path: string, body?: unknown) =>
-  request<T>(path, { method: "POST", body });
+export const apiPost = <T>(path: string, body?: unknown, signal?: AbortSignal) =>
+  request<T>(path, { method: "POST", body, signal });

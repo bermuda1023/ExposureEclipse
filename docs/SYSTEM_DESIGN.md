@@ -381,7 +381,7 @@ Env knobs (see `backend/app/config.py` / `.env.example`):
 
 | Var | Default | Role |
 |---|---|---|
-| `FACT_CACHE_MAX_DATASETS` | 256 | LRU size |
+| `FACT_CACHE_MAX_DATASETS` | 1024 | LRU size |
 | `FACT_CACHE_TTL_SECONDS` | 3600 | `0` = LRU only |
 | `FACT_LOAD_MAX_WORKERS` | 16 | Parallel fan-out (concrete providers) |
 | `SQLSERVER_SERVERS_FILE` | `../mockdata/sql_servers.json` | Registry path |

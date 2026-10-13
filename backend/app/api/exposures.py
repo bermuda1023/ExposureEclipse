@@ -31,7 +31,6 @@ from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..models.cedent import Cedent, Programme, ProgrammeChain
 from ..models.enums import (
     AggregationLevel,
     CombinationMethod,
@@ -51,7 +50,6 @@ from ..models.exposure import (
     DetailResponse,
     DetailSummary,
     ExposureFactNormalized,
-    ExposureFilters,
     MapFeature,
     MapRequest,
     MapResponse,
@@ -84,14 +82,6 @@ router = APIRouter(prefix="/exposures", tags=["exposures"])
 # ───────────────────────────── helpers ─────────────────────────────
 
 
-_LEVEL_TO_ATTR: dict[AggregationLevel, str] = {
-    AggregationLevel.COUNTRY: "country",
-    AggregationLevel.STATE: "statecode",
-    AggregationLevel.COUNTY: "county",
-    AggregationLevel.CRESTA: "cresta",
-}
-
-
 # Pivot dimension key → fact attribute. Includes the AggregationLevel codes
 # (so rows/columns may carry "STATE", "COUNTY", etc.) and the broader dimension
 # names listed in API_SPEC.md §pivot.
@@ -118,19 +108,11 @@ _PIVOT_DIM_TO_ATTR: dict[str, str] = {
 }
 
 
-from ..services.view_resolve import (  # noqa: E402 — keep resolve out of this router module
+from ..services.view_resolve import (
     ResolvedView as _ResolvedView,
-    facts_for_dataset_ids as _facts_for_dataset_ids_with_warnings,
     require_at_most_one_target as _require_exactly_one_target,
-    resolve_comparison_dataset_id as _resolve_comparison_dataset_id,
     resolve_view as _resolve_view,
 )
-
-
-def _facts_for_dataset_ids(provider, dataset_ids):
-    """Back-compat: facts only (warnings attached inside resolve_view)."""
-    facts, _warnings = _facts_for_dataset_ids_with_warnings(provider, dataset_ids)
-    return facts
 
 
 def _apply_peril_filter(
@@ -227,6 +209,83 @@ def _segment_for_market_share(facts: Sequence[ExposureFactNormalized]) -> Occupa
     return None
 
 
+def _scope_aggregates(
+    facts: Sequence[ExposureFactNormalized],
+    grain: Sequence[str],
+    method: CombinationMethod | None,
+    *,
+    base_dataset_id: str | None = None,
+) -> tuple[dict[tuple, float], dict[tuple, int]]:
+    """Aggregate one scope consistently for current, prior, and portfolio facts."""
+    if method is not None and method != CombinationMethod.KEEP_PERILS_SEPARATE:
+        tiv = combine_at_grain(
+            facts,
+            grain,
+            method,
+            distinct_segments_confirmed=True,
+            base_dataset_id=base_dataset_id,
+        )
+        locations = (
+            location_count_at_max_peril(facts, grain)
+            if method == CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN
+            else aggregate_location_count(facts, grain)
+        )
+        return tiv, locations
+    return aggregate_tiv(facts, grain), aggregate_location_count(facts, grain)
+
+
+def _is_portfolio_request(payload: MapRequest | DetailRequest) -> bool:
+    return not any(
+        (
+            payload.programme_id,
+            payload.chain_id,
+            payload.chain_ids,
+            payload.cedent_id,
+            payload.dataset_id,
+            payload.dataset_group_id,
+        )
+    )
+
+
+def _portfolio_aggregates(
+    provider: ExposureDataProvider,
+    payload: MapRequest | DetailRequest,
+    resolved: _ResolvedView,
+    level: AggregationLevel,
+    grain: Sequence[str],
+) -> tuple[dict[tuple, float], list[Warning]]:
+    """Build a currency-safe denominator using the same peril/filter semantics."""
+    portfolio_facts = (
+        resolved.facts if _is_portfolio_request(payload) else provider.get_portfolio_facts()
+    )
+    portfolio_facts = _apply_peril_filter(portfolio_facts, payload.perils)
+
+    currencies = {f.currency for f in portfolio_facts if f.currency}
+    excluded = sorted(currency for currency in currencies if currency != resolved.currency)
+    portfolio_facts = [f for f in portfolio_facts if f.currency == resolved.currency]
+
+    portfolio_at_level, _ = _county_fallback_if_needed(portfolio_facts, level)
+    portfolio_filtered = apply_filters(portfolio_at_level, payload.filters)
+    portfolio_tiv, _ = _scope_aggregates(
+        portfolio_filtered,
+        grain,
+        CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN,
+    )
+    warnings: list[Warning] = []
+    if excluded:
+        warnings.append(
+            make_warning(
+                WarningCode.WARN_CURRENCY_MISMATCH,
+                context={
+                    "includedCurrency": resolved.currency,
+                    "excludedCurrencies": excluded,
+                    "scope": "portfolio denominator",
+                },
+            )
+        )
+    return portfolio_tiv, warnings
+
+
 # ───────────────────────────── /map ─────────────────────────────
 
 
@@ -247,7 +306,6 @@ def exposures_map(
     level = payload.aggregation_level
     facts_at_level, county_fallback = _county_fallback_if_needed(raw_facts, level)
 
-    geo_attr = _LEVEL_TO_ATTR[level]
     grain: tuple[str, ...] = ("geography_id",)
 
     deal_facts = apply_filters(facts_at_level, payload.filters)
@@ -267,35 +325,27 @@ def exposures_map(
         )
 
     # ─── Deal-side TIV / location-count (group-aware) ───
-    if combination_method is not None and combination_method != CombinationMethod.KEEP_PERILS_SEPARATE:
-        try:
-            deal_tiv_by_geo = combine_at_grain(
-                deal_facts,
-                grain,
-                combination_method,
-                distinct_segments_confirmed=True,  # group already gated at creation
-                base_dataset_id=base_dataset_id,
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "code": ErrorCode.VALIDATION_ERROR.value,
-                    "message": str(exc),
-                },
-            ) from exc
-        if combination_method == CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN:
-            deal_loc_by_geo = location_count_at_max_peril(deal_facts, grain)
-        else:
-            deal_loc_by_geo = aggregate_location_count(deal_facts, grain)
-    else:
-        deal_tiv_by_geo = aggregate_tiv(deal_facts, grain)
-        deal_loc_by_geo = aggregate_location_count(deal_facts, grain)
+    try:
+        deal_tiv_by_geo, deal_loc_by_geo = _scope_aggregates(
+            deal_facts,
+            grain,
+            combination_method,
+            base_dataset_id=base_dataset_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": ErrorCode.VALIDATION_ERROR.value,
+                "message": str(exc),
+            },
+        ) from exc
 
     # ─── Portfolio denominators (geo-only) ───
-    portfolio_facts = provider.get_portfolio_facts()
-    portfolio_at_level, _ = _county_fallback_if_needed(portfolio_facts, level)
-    portfolio_tiv_by_geo = aggregate_tiv(portfolio_at_level, grain)
+    portfolio_tiv_by_geo, portfolio_warnings = _portfolio_aggregates(
+        provider, payload, resolved, level, grain
+    )
+    top_warnings.extend(portfolio_warnings)
     total_portfolio_tiv = sum(portfolio_tiv_by_geo.values())
     total_deal_tiv = sum(deal_tiv_by_geo.values())
 
@@ -323,8 +373,11 @@ def exposures_map(
         )
         prior_at_level, _ = _county_fallback_if_needed(prior_raw, level)
         prior_filtered = apply_filters(prior_at_level, payload.filters)
-        prior_tiv_by_geo = aggregate_tiv(prior_filtered, grain)
-        prior_loc_by_geo = aggregate_location_count(prior_filtered, grain)
+        prior_tiv_by_geo, prior_loc_by_geo = _scope_aggregates(
+            prior_filtered,
+            grain,
+            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN,
+        )
         prior_total_deal_tiv = sum(prior_tiv_by_geo.values())
     else:
         top_warnings.append(make_warning(WarningCode.WARN_PRIOR_DATASET_NOT_SELECTED))
@@ -426,9 +479,9 @@ def exposures_map(
                 MapFeature(
                     geography_id=geography_id,
                     geography_name=None,
-                    metric_value=None if payload.metric != MetricKey.TIV else 0.0,
-                    tiv=0.0,
-                    location_count=0,
+                    metric_value=None,
+                    tiv=None,
+                    location_count=None,
                     yoy_change=yoy_value,
                     yoy_status=yoy_st,
                 )
@@ -504,29 +557,21 @@ def exposures_detail(
     grain: tuple[str, ...] = ("geography_id",)
 
     # Deal TIV / loc-count (group-aware)
-    if combination_method is not None and combination_method != CombinationMethod.KEEP_PERILS_SEPARATE:
-        deal_tiv_by_geo = combine_at_grain(
-            deal_facts,
-            grain,
-            combination_method,
-            distinct_segments_confirmed=True,
-            base_dataset_id=base_dataset_id,
-        )
-        if combination_method == CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN:
-            deal_loc_by_geo = location_count_at_max_peril(deal_facts, grain)
-        else:
-            deal_loc_by_geo = aggregate_location_count(deal_facts, grain)
-    else:
-        deal_tiv_by_geo = aggregate_tiv(deal_facts, grain)
-        deal_loc_by_geo = aggregate_location_count(deal_facts, grain)
+    deal_tiv_by_geo, deal_loc_by_geo = _scope_aggregates(
+        deal_facts,
+        grain,
+        combination_method,
+        base_dataset_id=base_dataset_id,
+    )
 
     deal_tiv = deal_tiv_by_geo.get((geo_id,), 0.0)
     loc_count = int(deal_loc_by_geo.get((geo_id,), 0))
     total_deal_tiv = sum(deal_tiv_by_geo.values())
 
-    portfolio_facts = provider.get_portfolio_facts()
-    portfolio_at_level, _ = _county_fallback_if_needed(portfolio_facts, level)
-    portfolio_tiv_by_geo = aggregate_tiv(portfolio_at_level, grain)
+    portfolio_tiv_by_geo, portfolio_warnings = _portfolio_aggregates(
+        provider, payload, resolved, level, grain
+    )
+    top_warnings.extend(portfolio_warnings)
     portfolio_geo_tiv = portfolio_tiv_by_geo.get((geo_id,), 0.0)
     total_portfolio_tiv = sum(portfolio_tiv_by_geo.values())
 
@@ -567,20 +612,34 @@ def exposures_detail(
         )
         prior_at_level, _ = _county_fallback_if_needed(prior_raw, level)
         prior_filtered = apply_filters(prior_at_level, payload.filters)
-        prior_tiv_by_geo = aggregate_tiv(prior_filtered, grain)
+        prior_tiv_by_geo, _ = _scope_aggregates(
+            prior_filtered,
+            grain,
+            CombinationMethod.MAX_ACROSS_PERILS_AT_VIEW_GRAIN,
+        )
         prior_geo_tiv = prior_tiv_by_geo.get((geo_id,))
-        yoy_value, yoy_st = yoy_change(deal_tiv if deal_tiv != 0 else None, prior_geo_tiv)
+        yoy_value, yoy_st = yoy_change(deal_tiv, prior_geo_tiv)
     else:
         top_warnings.append(make_warning(WarningCode.WARN_PRIOR_DATASET_NOT_SELECTED))
 
     # ─── Breakdowns (within the selected geography) ───
     breakdowns = DetailBreakdowns(
-        peril=_breakdown_rows(geo_facts, "peril"),
-        occupancy=_breakdown_rows(geo_facts, "occupancy_segment"),
-        distance_to_coast=_breakdown_rows(geo_facts, "distance_to_coast"),
-        geocoding=_breakdown_rows(geo_facts, "geocoding_quality"),
-        stories=_breakdown_rows(geo_facts, "number_of_stories"),
-        construction=_breakdown_rows(geo_facts, "construction"),
+        peril=_breakdown_rows(geo_facts, "peril", combination_method, base_dataset_id),
+        occupancy=_breakdown_rows(
+            geo_facts, "occupancy_segment", combination_method, base_dataset_id
+        ),
+        distance_to_coast=_breakdown_rows(
+            geo_facts, "distance_to_coast", combination_method, base_dataset_id
+        ),
+        geocoding=_breakdown_rows(
+            geo_facts, "geocoding_quality", combination_method, base_dataset_id
+        ),
+        stories=_breakdown_rows(
+            geo_facts, "number_of_stories", combination_method, base_dataset_id
+        ),
+        construction=_breakdown_rows(
+            geo_facts, "construction", combination_method, base_dataset_id
+        ),
     )
 
     return DetailResponse(
@@ -623,17 +682,25 @@ def exposures_detail(
 def _breakdown_rows(
     facts: Sequence[ExposureFactNormalized],
     attr: str,
+    method: CombinationMethod | None,
+    base_dataset_id: str | None,
 ) -> list[BreakdownRow]:
     """Group facts by ``attr`` and emit TIV + loc count per key."""
-    tiv: dict[str, float] = defaultdict(float)
-    loc: dict[str, int] = defaultdict(int)
-    for f in facts:
-        raw = getattr(f, attr, None)
-        if raw is None or raw == "":
-            continue
-        key = raw.value if hasattr(raw, "value") else str(raw)
-        tiv[key] += float(f.tiv or 0.0)
-        loc[key] += int(f.location_count or 0)
+    usable = [f for f in facts if getattr(f, attr, None) not in (None, "")]
+    tiv_by_key, loc_by_key = _scope_aggregates(
+        usable,
+        (attr,),
+        method,
+        base_dataset_id=base_dataset_id,
+    )
+    tiv = {
+        (key[0].value if hasattr(key[0], "value") else str(key[0])): value
+        for key, value in tiv_by_key.items()
+    }
+    loc = {
+        (key[0].value if hasattr(key[0], "value") else str(key[0])): value
+        for key, value in loc_by_key.items()
+    }
     return [
         BreakdownRow(key=k, tiv=tiv[k], location_count=loc[k])
         for k in sorted(tiv.keys())
