@@ -1,0 +1,37 @@
+{
+  "builtAt": "2026-10-13T18:17:13+00:00",
+  "urls": {
+    "hu_2010": "https://www2.census.gov/programs-surveys/popest/datasets/2010-2020/housing/HU-EST2020_ALL.csv",
+    "hu_2020": "https://www2.census.gov/programs-surveys/popest/tables/2020-2025/housing/totals/CO-EST2025-HU.xlsx",
+    "pop_2010": "https://www2.census.gov/programs-surveys/popest/datasets/2010-2020/counties/totals/co-est2020-alldata.csv",
+    "pop_2020": "https://www2.census.gov/programs-surveys/popest/datasets/2020-2025/counties/totals/co-est2025-alldata.csv",
+    "qcew": "https://data.bls.gov/cew/data/api/{year}/a/industry/{industry}.csv",
+    "fred": "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
+  },
+  "fredSeries": {
+    "PPI_RES_INPUTS": "WPUIP2311001",
+    "PPI_NONRES_INPUTS": "WPUIP2312001",
+    "CPI_USED_VEHICLES": "CUSR0000SETA02"
+  },
+  "qcew": {
+    "years": [
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ],
+    "suppressedCountyYears": 165
+  },
+  "latestMonth": "2026-08",
+  "years": [
+    2015,
+    2025
+  ]
+}
