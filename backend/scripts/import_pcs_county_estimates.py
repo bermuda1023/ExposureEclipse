@@ -27,6 +27,7 @@ import re
 import sys
 import warnings
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,7 +60,7 @@ HEADER = ["FIPSCode", "County", "ResidentialClaims", "ResidentialDollars",
           "AutoClaims", "AutoDollars", "CommercialClaims", "CommercialDollars"]
 # (segment, claims index, dollars index) into the six values after FIPS + County.
 SEGMENT_COLUMNS = (("RESIDENTIAL", 0, 1), ("AUTO", 2, 3), ("COMMERCIAL", 4, 5))
-CSV_COLUMNS = ["stormId", "geographyId", "segment", "loss", "claims", "currency", "source",
+CSV_COLUMNS = ["stormId", "geographyId", "segment", "loss", "claims", "currency", "eventDate", "source",
                "includesFlood", "includesSurge", "includesNfip", "includesLae", "unallocated"]
 TOLERANCE = 0.5
 
@@ -92,6 +93,17 @@ class Workbook:
         if not years:
             raise PcsFormatError(f"{self.path.name}: no year in DATES {self.dates!r}")
         return int(years[0])
+
+    @property
+    def first_date(self) -> date | None:
+        """First date in 'September 27, 2022 To October 1, 2022'."""
+        m = re.match(r"\s*([A-Za-z]{3})[A-Za-z]*\.?\s+(\d{1,2}),\s*((?:19|20)\d{2})", self.dates)
+        if not m:
+            return None
+        try:
+            return datetime.strptime(" ".join(m.groups()), "%b %d %Y").date()
+        except ValueError:
+            return None
 
     @property
     def storm_name(self) -> str:
@@ -227,11 +239,14 @@ def csv_rows(book: Workbook, storm_id: str) -> list[dict[str, str]]:
     source = f"PCS {book.serial}" + (f" estimate {rev}" if rev else "")
     flags = {"includesFlood": "true", "includesSurge": "true",
              "includesNfip": "false", "includesLae": "false"}
+    first = book.first_date
+    event_date = first.isoformat() if first else ""
 
     def row(geo: str, seg: str, loss: float, claims: float, unallocated: bool) -> dict[str, str]:
         return {"stormId": storm_id, "geographyId": geo, "segment": seg,
                 "loss": f"{loss:.0f}", "claims": f"{claims:g}", "currency": "USD",
-                "source": source, **flags, "unallocated": "true" if unallocated else ""}
+                "eventDate": event_date, "source": source, **flags,
+                "unallocated": "true" if unallocated else ""}
 
     out: list[dict[str, str]] = []
     for sheet in book.sheets:
