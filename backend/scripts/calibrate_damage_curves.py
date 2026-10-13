@@ -28,10 +28,12 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.services.curve_fit import FitOptions, Observation, fit_with_holdout
 from app.services.damage_curves import (
+    BAND_MID,
     BAND_MPH_LO,
     DEFAULT_SIGMA_COUNTY,
     DEFAULT_SIGMA_EVENT,
     curves_dir,
+    insured_prior,
     load_curve_sets,
 )
 from app.services.event_loss import resolve_storm, storm_impacts
@@ -56,6 +58,10 @@ def main() -> None:
     parser.add_argument("--ridge", type=float, default=FitOptions().ridge)
     parser.add_argument("--alpha-event", type=float, default=FitOptions().alpha_event)
     parser.add_argument("--multiplier", type=float, default=2.5)
+    parser.add_argument(
+        "--wind-factor", type=float, default=None,
+        help="marine-to-land wind factor (default: the prior set's)",
+    )
     parser.add_argument("--id", help="curve set id (default calibrated-YYYYMMDD)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -65,6 +71,7 @@ def main() -> None:
     if not wanted:
         raise SystemExit("No events in mockdata/industry_losses/. Add a CSV first.")
     prior = load_curve_sets()[args.prior]
+    wind_factor = args.wind_factor if args.wind_factor is not None else prior.wind_factor
 
     obs: dict[str, list[Observation]] = {seg: [] for seg in LOSS_SEGMENTS}
     event_meta: list[dict] = []
@@ -80,7 +87,7 @@ def main() -> None:
         if tiv.currency != act.currency:
             raise SystemExit(f"{storm_id}: actuals {act.currency} vs TIV {tiv.currency}")
         impacts = storm_impacts(storm, source, args.multiplier)
-        matched = match_event(act, impacts, tiv)
+        matched = match_event(act, impacts, tiv, wind_factor)
         for seg in LOSS_SEGMENTS:
             obs[seg].extend(matched.observations[seg])
         miss = sum(a for _g, _s, a in matched.footprint_miss)
@@ -107,7 +114,7 @@ def main() -> None:
     county_sig: list[tuple[float, int]] = []
     event_errs: list[float] = []
     for seg in LOSS_SEGMENTS:
-        prior_curve = prior.segments[seg]
+        prior_curve = insured_prior(prior, seg)
         if len(obs[seg]) < MIN_OBS_PER_SEGMENT:
             segments[seg] = list(prior_curve)
             fit_meta[seg] = {"status": "prior", "nObs": len(obs[seg])}
@@ -134,9 +141,9 @@ def main() -> None:
             "impliedDrByBand": implied_dr_by_band(obs[seg]),
         }
         print(f"  {seg}: {res.n_obs} counties, {res.iterations} iterations")
-        print("    mph   prior%    fit%   weight")
-        for lo, p, f, w in zip(BAND_MPH_LO, prior_curve, res.curve, res.band_weight):
-            print(f"    {lo:>3}  {p * 100:7.2f} {f * 100:7.2f}   {w:.3f}")
+        print("    land mph   prior%    fit%   weight")
+        for mid, p, f, w in zip(BAND_MID, prior_curve, res.curve, res.band_weight):
+            print(f"    {mid:>8.1f}  {p * 100:7.2f} {f * 100:7.2f}   {w:.3f}")
         for ev, e in errs.items():
             tag = "holdout" if res.oos_event_errors else "in-sample"
             print(f"    {ev} event total x{math.exp(e):.2f} ({tag})")
@@ -164,10 +171,13 @@ def main() -> None:
         "createdAt": now.isoformat(timespec="seconds"),
         "bandsMphLo": list(BAND_MPH_LO),
         "segments": {seg: [round(v, 6) for v in vals] for seg, vals in segments.items()},
+        "windFactor": wind_factor,
+        "deductible": {},
         "sigmaLogCounty": round(sigma_county, 4),
         "sigmaLogEvent": round(sigma_event, 4),
         "fit": {
             "prior": args.prior,
+            "target": "insured loss (deductible learned in the curve)",
             "ridge": args.ridge,
             "alphaEvent": args.alpha_event,
             "multiplier": args.multiplier,

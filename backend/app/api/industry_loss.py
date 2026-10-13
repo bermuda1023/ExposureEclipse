@@ -111,9 +111,11 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
     if result.missing_tiv:
         notes.append(f"{len(result.missing_tiv)} counties in the wind field have no industry TIV.")
     if curve.kind == "vendor":
+        ded = ", ".join(f"{seg.lower()} {v:.1%}" for seg, v in curve.deductible.items())
         notes.append(
-            "Uncalibrated curve: commercial uses the residential Form V-1 curve and auto uses 15% "
-            "of it. The band is a default spread, not a fitted one."
+            f"Uncalibrated Form V-1 curve. Storm wind is marine exposure, taken to land at "
+            f"x{curve.wind_factor:.2f}. Deductibles as a share of TIV: {ded}. Commercial uses the "
+            "residential curve and auto 15% of it. The band is a default spread, not a fitted one."
         )
     if actuals is not None and actuals.currency != currency:
         raise _error(422, "CURRENCY_MISMATCH",
@@ -147,9 +149,13 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
         "currency": currency,
         "multiplier": req.multiplier,
         "curveSet": {"id": curve.id, "label": curve.label, "kind": curve.kind,
+                     "windFactor": curve.wind_factor, "deductible": curve.deductible,
                      "sigmaLogCounty": sig_c, "sigmaLogEvent": sig_e},
         "tivSource": _tiv_source(tiv),
-        "formula": "loss = exposedFraction x TIV[segment] x sum_bands(areaFraction x DR[segment](band))",
+        "formula": (
+            "loss = exposedFraction x TIV[segment] x sum_bands(areaFraction x "
+            "insuredDR[segment](marineMph x windFactor))"
+        ),
         "summary": {
             "total": lognormal_band(result.total, sig_e),
             "bySegment": by_seg,

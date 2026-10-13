@@ -16,6 +16,8 @@ export interface CurveSetInfo {
   kind: "vendor" | "calibrated";
   bandsMphLo: number[];
   segments: Partial<Record<LossSegment, number[]>>;
+  windFactor: number;
+  deductible: Partial<Record<LossSegment, number>>;
   sigmaLogCounty: number;
   sigmaLogEvent: number;
   createdAt: string | null;
@@ -40,7 +42,15 @@ export interface IndustryLossResponse {
   trackSource: "ibtracs" | "live";
   currency: string;
   multiplier: number;
-  curveSet: { id: string; label: string; kind: string; sigmaLogCounty: number; sigmaLogEvent: number };
+  curveSet: {
+    id: string;
+    label: string;
+    kind: string;
+    windFactor: number;
+    deductible: Partial<Record<LossSegment, number>>;
+    sigmaLogCounty: number;
+    sigmaLogEvent: number;
+  };
   tivSource: TivSource;
   formula: string;
   summary: {

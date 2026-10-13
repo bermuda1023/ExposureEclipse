@@ -1,14 +1,25 @@
-"""Damage-ratio curve sets by segment and 10 mph wind band.
+"""Damage-ratio curve sets by segment, on the Form V-1 10 mph bands.
 
-A curve set maps ``segment -> [DR per band]`` on the Florida Form V-1 bands
-(41-50 mph … 161-170 mph), as decimals. Built-in sets come from the Form
-V-1 Part A tables. Calibrated sets are JSON files written by
-``backend/scripts/calibrate_damage_curves.py`` into ``mockdata/damage_curves/``.
+A curve set maps ``segment -> [DR at each band midpoint]`` (45.5, 55.5 …
+165.5 mph), as decimals. DR between midpoints is linear; below the first
+midpoint it ramps to zero at 39 mph.
+
+The storm wind field is marine exposure: IBTrACS / NHC intensity is the
+1-minute sustained wind over open water. Form V-1 curves are defined on wind
+over land, so each set carries ``wind_factor``:
+
+    curve_mph = marine_mph x wind_factor
+
+Vendor sets are ground-up building damage. They also carry a deductible per
+segment (fraction of TIV), applied per location with a beta spread of DR
+around the mean, so the output is insured loss (the PCS basis). Calibrated
+sets are fitted straight to insured loss, so their deductible is zero.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -16,6 +27,8 @@ from pathlib import Path
 from .industry_losses import LOSS_SEGMENTS, data_dir
 
 BAND_MPH_LO: tuple[int, ...] = (41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141, 151, 161)
+BAND_MID: tuple[float, ...] = tuple(lo + 4.5 for lo in BAND_MPH_LO)
+ZERO_DAMAGE_MPH = 39.0
 
 # Florida Commission Form V-1 Part A, building damage / building exposure (%).
 # Same table as frontend/src/state/damageAssumptions.ts.
@@ -31,6 +44,22 @@ _VENDOR_LABEL = {"air": "AIR (Form V-1)", "kcc": "KCC (Form V-1)", "rms": "RMS (
 # is mostly flood, which a wind curve does not see).
 UNCALIBRATED_SEGMENT_SCALE: dict[str, float] = {"RESIDENTIAL": 1.0, "COMMERCIAL": 1.0, "AUTO": 0.15}
 
+# ASSUMPTION: marine 1-minute sustained wind to wind over land. Published
+# marine-to-open-terrain ratios run about 0.83-0.87; airport observations
+# under landfalling eyewalls (Ian at Fort Myers and Punta Gorda, Michael)
+# sit nearer 0.75. 0.80 is the middle of that range. Calibration replaces it.
+DEFAULT_WIND_FACTOR = 0.80
+
+# ASSUMPTION: deductible as a fraction of segment TIV. Residential: 2% of
+# Coverage A hurricane deductible, Coverage A about 65% of HO TIV. Commercial:
+# named-storm deductibles of 2-5% of insured value. Auto: comprehensive
+# deductible on an average vehicle.
+DEFAULT_DEDUCTIBLE: dict[str, float] = {"RESIDENTIAL": 0.013, "COMMERCIAL": 0.03, "AUTO": 0.03}
+
+# ASSUMPTION: location DR around the county mean is Beta with precision 9
+# (CV about 2 at a 2% mean, about 0.5 at 30%).
+DEFAULT_BETA_PRECISION = 9.0
+
 # ASSUMPTION: lognormal spread around the point estimate before any
 # calibration exists. Replaced by fitted residual spreads in calibrated sets.
 DEFAULT_SIGMA_COUNTY = 0.9
@@ -39,24 +68,95 @@ DEFAULT_SIGMA_EVENT = 0.45
 CURVES_DIR = "damage_curves"
 
 
+def interp_weights(curve_mph: float) -> list[tuple[int, float]]:
+    """Linear weights on band midpoints so DR(mph) = sum(w x DR_b)."""
+    if curve_mph <= ZERO_DAMAGE_MPH:
+        return []
+    if curve_mph <= BAND_MID[0]:
+        return [(0, (curve_mph - ZERO_DAMAGE_MPH) / (BAND_MID[0] - ZERO_DAMAGE_MPH))]
+    if curve_mph >= BAND_MID[-1]:
+        return [(len(BAND_MID) - 1, 1.0)]
+    i = int((curve_mph - BAND_MID[0]) // 10)
+    t = (curve_mph - BAND_MID[i]) / (BAND_MID[i + 1] - BAND_MID[i])
+    return [(i, 1.0 - t), (i + 1, t)]
+
+
+def _beta_excess(mu: float, d: float, phi: float) -> float:
+    """E[max(0, X - d)] for X ~ Beta(mean mu, precision phi)."""
+    if d <= 0:
+        return mu
+    if mu <= 0:
+        return 0.0
+    if mu >= 1:
+        return 1.0 - d
+    a, b = mu * phi, (1.0 - mu) * phi
+    log_norm = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+    # Simpson on [d, 1). The integrand is finite at d; near 1 it can be
+    # singular when b < 1, which only happens above a 89% mean.
+    n = 400
+    hi = 1.0 - 1e-9
+    h = (hi - d) / n
+    total = 0.0
+    for k in range(n + 1):
+        x = d + k * h
+        val = (x - d) * math.exp(log_norm + (a - 1) * math.log(x) + (b - 1) * math.log1p(-x))
+        total += val * (1 if k in (0, n) else (4 if k % 2 else 2))
+    return max(0.0, min(mu, total * h / 3.0))
+
+
+_MU_GRID: tuple[float, ...] = tuple(10 ** (-5 + 5 * k / 240) for k in range(241))
+
+
+@lru_cache(maxsize=32)
+def _excess_table(d: float, phi: float) -> tuple[float, ...]:
+    return tuple(_beta_excess(min(mu, 0.999), d, phi) for mu in _MU_GRID)
+
+
+def insured_dr(mu: float, deductible: float, phi: float = DEFAULT_BETA_PRECISION) -> float:
+    """Mean insured DR for a ground-up mean ``mu`` after a per-location deductible."""
+    if deductible <= 0 or mu <= 0:
+        return max(0.0, mu)
+    table = _excess_table(round(deductible, 6), round(phi, 4))
+    if mu <= _MU_GRID[0]:
+        return table[0] * mu / _MU_GRID[0]
+    if mu >= _MU_GRID[-1]:
+        return table[-1]
+    x = (math.log10(mu) + 5) * 240 / 5
+    i = min(int(x), len(_MU_GRID) - 2)
+    t = x - i
+    return table[i] * (1 - t) + table[i + 1] * t
+
+
 @dataclass(slots=True)
 class CurveSet:
     id: str
     label: str
     kind: str  # "vendor" | "calibrated"
-    segments: dict[str, list[float]]  # segment -> DR per BAND_MPH_LO band (0..1)
+    segments: dict[str, list[float]]  # segment -> DR at each BAND_MID (0..1)
+    wind_factor: float = DEFAULT_WIND_FACTOR
+    deductible: dict[str, float] = field(default_factory=dict)  # segment -> fraction of TIV
+    beta_precision: float = DEFAULT_BETA_PRECISION
     sigma_log_county: float = DEFAULT_SIGMA_COUNTY
     sigma_log_event: float = DEFAULT_SIGMA_EVENT
     created_at: str | None = None
     fit: dict = field(default_factory=dict)
 
-    def dr(self, segment: str, mph_lo: int) -> float:
+    def weights(self, marine_mph: float) -> list[tuple[int, float]]:
+        return interp_weights(marine_mph * self.wind_factor)
+
+    def ground_up_dr(self, segment: str, marine_mph: float) -> float:
         curve = self.segments.get(segment)
-        if not curve or mph_lo < BAND_MPH_LO[0]:
+        if not curve:
             return 0.0
-        if mph_lo >= BAND_MPH_LO[-1]:
-            return curve[-1]
-        return curve[(mph_lo - BAND_MPH_LO[0]) // 10]
+        return sum(w * curve[b] for b, w in self.weights(marine_mph))
+
+    def dr(self, segment: str, marine_mph: float) -> float:
+        """Insured DR at one marine wind speed."""
+        return insured_dr(
+            self.ground_up_dr(segment, marine_mph),
+            self.deductible.get(segment, 0.0),
+            self.beta_precision,
+        )
 
     def to_wire(self) -> dict:
         return {
@@ -65,6 +165,9 @@ class CurveSet:
             "kind": self.kind,
             "bandsMphLo": list(BAND_MPH_LO),
             "segments": {seg: [round(v, 6) for v in vals] for seg, vals in self.segments.items()},
+            "windFactor": self.wind_factor,
+            "deductible": self.deductible,
+            "betaPrecision": self.beta_precision,
             "sigmaLogCounty": self.sigma_log_county,
             "sigmaLogEvent": self.sigma_log_event,
             "createdAt": self.created_at,
@@ -83,7 +186,18 @@ def _vendor_set(vendor: str) -> CurveSet:
         label=_VENDOR_LABEL[vendor],
         kind="vendor",
         segments={seg: [v * UNCALIBRATED_SEGMENT_SCALE[seg] for v in base] for seg in LOSS_SEGMENTS},
+        deductible=dict(DEFAULT_DEDUCTIBLE),
     )
+
+
+def insured_prior(curve: CurveSet, segment: str) -> list[float]:
+    """The set's curve after its deductible, at each band midpoint. Used as the
+    prior for a fit, whose target is insured loss."""
+    d = curve.deductible.get(segment, 0.0)
+    return [
+        max(1e-5, insured_dr(v, d, curve.beta_precision))
+        for v in curve.segments[segment]
+    ]
 
 
 def curve_set_from_json(payload: dict) -> CurveSet:
@@ -100,6 +214,9 @@ def curve_set_from_json(payload: dict) -> CurveSet:
         label=str(payload.get("label") or payload["id"]),
         kind=str(payload.get("kind") or "calibrated"),
         segments=segments,
+        wind_factor=float(payload.get("windFactor", DEFAULT_WIND_FACTOR)),
+        deductible={k: float(v) for k, v in (payload.get("deductible") or {}).items()},
+        beta_precision=float(payload.get("betaPrecision", DEFAULT_BETA_PRECISION)),
         sigma_log_county=float(payload.get("sigmaLogCounty", DEFAULT_SIGMA_COUNTY)),
         sigma_log_event=float(payload.get("sigmaLogEvent", DEFAULT_SIGMA_EVENT)),
         created_at=payload.get("createdAt"),
@@ -118,9 +235,10 @@ def load_curve_sets() -> dict[str, CurveSet]:
     if folder.is_dir():
         for path in sorted(folder.glob("*.json")):
             curve = curve_set_from_json(json.loads(path.read_text(encoding="utf-8")))
-            # Segments the calibration had no data for keep the KCC shape.
+            # Segments the calibration had no data for keep the insured KCC shape.
             for seg in LOSS_SEGMENTS:
-                curve.segments.setdefault(seg, list(out["kcc"].segments[seg]))
+                if seg not in curve.segments:
+                    curve.segments[seg] = insured_prior(out["kcc"], seg)
             out[curve.id] = curve
     return out
 

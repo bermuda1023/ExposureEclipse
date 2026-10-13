@@ -1,9 +1,12 @@
 """Industry loss for one storm: county wind mix x segment TIV x damage curve.
 
-    county_loss[seg] = exposed_fraction x tiv[seg] x sum_b(areaFraction_b x DR[seg](band_b))
+    county_loss[seg] = exposed_fraction x tiv[seg]
+                       x sum_b(areaFraction_b x insuredDR[seg](mph_b x windFactor))
 
 ``areaFraction_b`` is the share of the county polygon whose peak local wind
-sits in 10 mph band ``b`` (``CountyImpact.speed_bins``). The point estimate
+sits in 10 mph band ``b`` (``CountyImpact.speed_bins``); ``mph_b`` is the
+band midpoint in marine exposure. ``windFactor`` takes it to wind over land
+and the deductible turns ground-up into insured DR (``damage_curves``). The point estimate
 is treated as the mean of a lognormal; P10/P50/P90 use the curve set's
 county or event log-spread. Event bands are NOT the sum of county bands
 (that would assume every county errs the same way).
@@ -15,7 +18,6 @@ import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from .county_wind import mph_band
 from .damage_curves import CurveSet
 from .hurricane_impact import CountyImpact, compute_impact
 from .ibtracs import Storm, fetch_storms
@@ -37,18 +39,31 @@ def lognormal_band(mean: float, sigma: float) -> dict[str, float]:
     }
 
 
-def county_bins(impact: CountyImpact) -> list[tuple[int, float]]:
-    """(mph_lo, area_fraction) for one county. Centroid-only impacts use max wind."""
+KT_TO_MPH = 1.15078
+
+
+def county_bins(impact: CountyImpact) -> list[tuple[float, float]]:
+    """(marine mph, area_fraction) for one county, at each 10 mph band midpoint.
+    The open-ended top band uses its strongest sample. Centroid-only impacts
+    use the county's max wind."""
+    out: list[tuple[float, float]] = []
     if impact.speed_bins:
-        return [(b.mph_lo, b.area_fraction) for b in impact.speed_bins if b.area_fraction > 0]
+        for b in impact.speed_bins:
+            if b.area_fraction <= 0 or b.mph_lo <= 0:
+                continue
+            mph = b.mph_lo + 4.5
+            if b.mph_lo >= 161:
+                mph = max(mph, b.max_wind_kt * KT_TO_MPH)
+            out.append((mph, b.area_fraction))
+        return out
     if impact.max_wind_kt >= 34:
-        return [(mph_band(impact.max_wind_kt)[0], 1.0)]
+        return [(impact.max_wind_kt * KT_TO_MPH, 1.0)]
     return []
 
 
-def effective_dr(bins: list[tuple[int, float]], curve: CurveSet, segment: str) -> float:
-    """Damage ratio on the whole county TIV for this wind mix."""
-    return sum(frac * curve.dr(segment, lo) for lo, frac in bins)
+def effective_dr(bins: list[tuple[float, float]], curve: CurveSet, segment: str) -> float:
+    """Insured damage ratio on the whole county TIV for this wind mix."""
+    return sum(frac * curve.dr(segment, mph) for mph, frac in bins)
 
 
 @dataclass(slots=True)

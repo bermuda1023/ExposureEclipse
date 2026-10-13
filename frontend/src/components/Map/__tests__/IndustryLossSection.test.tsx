@@ -11,7 +11,7 @@ const response: IndustryLossResponse = {
   trackSource: "ibtracs",
   currency: "USD",
   multiplier: 2.5,
-  curveSet: { id: "calibrated-x", label: "Calibrated X", kind: "calibrated", sigmaLogCounty: 0.4, sigmaLogEvent: 0.3 },
+  curveSet: { id: "calibrated-x", label: "Calibrated X", kind: "calibrated", windFactor: 0.8, deductible: {}, sigmaLogCounty: 0.4, sigmaLogEvent: 0.3 },
   tivSource: { kind: "supplied", year: 2022, file: "2022.csv", currency: "USD" },
   formula: "",
   summary: {

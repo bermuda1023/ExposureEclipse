@@ -19,26 +19,19 @@ import math
 from dataclasses import dataclass, field
 
 from .curve_fit import Observation
-from .damage_curves import BAND_MPH_LO, CurveSet
+from .damage_curves import BAND_MID, CurveSet, interp_weights
 from .event_loss import EventLoss, county_bins, event_loss
 from .hurricane_impact import CountyImpact
 from .industry_losses import LOSS_SEGMENTS, EventActuals, IndustryTiv
 
 
-def band_index(mph_lo: int) -> int | None:
-    if mph_lo < BAND_MPH_LO[0]:
-        return None
-    if mph_lo >= BAND_MPH_LO[-1]:
-        return len(BAND_MPH_LO) - 1
-    return (mph_lo - BAND_MPH_LO[0]) // 10
-
-
-def indexed_bins(impact: CountyImpact) -> list[tuple[int, float]]:
+def indexed_bins(impact: CountyImpact, wind_factor: float) -> list[tuple[int, float]]:
+    """Per-band weights so ground-up DR = sum(w x DR_b). Linear in the curve,
+    which is what the fit needs."""
     out: dict[int, float] = {}
-    for lo, frac in county_bins(impact):
-        idx = band_index(lo)
-        if idx is not None:
-            out[idx] = out.get(idx, 0.0) + frac
+    for mph, frac in county_bins(impact):
+        for idx, w in interp_weights(mph * wind_factor):
+            out[idx] = out.get(idx, 0.0) + frac * w
     return sorted(out.items())
 
 
@@ -53,6 +46,7 @@ def match_event(
     actuals: EventActuals,
     impacts: list[CountyImpact],
     tiv: IndustryTiv,
+    wind_factor: float,
 ) -> Matched:
     by_gid = {imp.geography_id: imp for imp in impacts}
     out = Matched(observations={seg: [] for seg in LOSS_SEGMENTS})
@@ -60,7 +54,7 @@ def match_event(
         segs = tiv.county.get(gid) or {}
         value = float(segs.get(seg, 0.0))
         imp = by_gid.get(gid)
-        bins = indexed_bins(imp) if imp is not None else []
+        bins = indexed_bins(imp, wind_factor) if imp is not None else []
         if not bins:
             if loss > 0:
                 out.footprint_miss.append((gid, seg, loss))
@@ -96,7 +90,7 @@ def backtest(
     """Modelled vs reported for one event, by segment and county."""
     modelled: EventLoss = event_loss(impacts, tiv, curve)
     by_gid = {c.impact.geography_id: c for c in modelled.counties}
-    matched = match_event(actuals, impacts, tiv)
+    matched = match_event(actuals, impacts, tiv, curve.wind_factor)
     actual_seg = actuals.segment_totals()
 
     segments: dict[str, dict] = {}
@@ -176,7 +170,7 @@ def backtest(
 
 
 def implied_dr_by_band(observations: list[Observation]) -> list[dict]:
-    """Diagnostic: actual / TIV for counties whose wind sits mostly in one band."""
+    """Diagnostic: actual / TIV for counties whose land wind sits mostly on one band midpoint."""
     out: dict[int, list[float]] = {}
     for o in observations:
         if not o.bins:
@@ -188,7 +182,7 @@ def implied_dr_by_band(observations: list[Observation]) -> list[dict]:
     for b in sorted(out):
         vals = sorted(out[b])
         rows.append({
-            "mphLo": BAND_MPH_LO[b],
+            "curveMph": BAND_MID[b],
             "n": len(vals),
             "median": vals[len(vals) // 2],
             "min": vals[0],

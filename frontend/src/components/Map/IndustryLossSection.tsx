@@ -149,7 +149,8 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
           </table>
 
           <div style={{ fontSize: "0.62rem", color: "var(--ink-500)", lineHeight: 1.4 }}>
-            Curve <strong>{data.curveSet.label}</strong> ({data.curveSet.kind}) · TIV{" "}
+            Curve <strong>{data.curveSet.label}</strong> ({data.curveSet.kind}) · land wind ×
+            {data.curveSet.windFactor.toFixed(2)} · TIV{" "}
             {data.tivSource.kind === "supplied"
               ? `supplied ${data.tivSource.year} (${data.tivSource.file})`
               : "built-in Industry book"}

@@ -230,16 +230,29 @@ below is computed on the backend.
 For each county in the storm's wind field and each segment
 (`RESIDENTIAL`, `COMMERCIAL`, `AUTO`):
 
-    loss[seg] = exposedFraction × TIV[seg] × Σ_b areaFraction_b × DR[seg](band_b)
+    loss[seg] = exposedFraction × TIV[seg] × Σ_b areaFraction_b × insuredDR[seg](mph_b × windFactor)
 
 - `areaFraction_b` = share of the county polygon whose peak local wind is in
-  10 mph band `b` (Form V-1 bands 41–50 … 161–170 mph), from `compute_impact`
-  `speed_bins`. Same wind field as the impact panel, live or historical.
+  10 mph band `b`, from `compute_impact` `speed_bins`. `mph_b` is the band
+  midpoint. Same wind field as the impact panel, live or historical.
+- **Marine to land.** IBTrACS / NHC intensity, and so the whole wind field, is
+  the 1-minute sustained wind over open water. Form V-1 curves are defined on
+  wind over land. `windFactor` (default 0.80, ASSUMPTION: published
+  marine-to-open-terrain ratios are 0.83–0.87, eyewall airport observations
+  about 0.75) converts it. Leaving it out roughly doubled Ian: with no
+  conversion and no deductible KCC gave about $204B.
 - `TIV[seg]` = supplied industry TIV vintage for the storm year
   (`industry_tiv/<year>.csv`), else the built-in Industry book (no auto).
-- `DR[seg]` = curve set (`services/damage_curves.py`). Built-ins are Form V-1
-  AIR / KCC / RMS. ASSUMPTION until calibrated: commercial = residential curve,
-  auto = 15% of it.
+- `DR[seg]` = curve set (`services/damage_curves.py`), linear between the
+  Form V-1 band midpoints (45.5 … 165.5 mph over land), zero at 39 mph.
+  Built-ins are Form V-1 AIR / KCC / RMS. ASSUMPTION until calibrated:
+  commercial = residential curve, auto = 15% of it.
+- **Insured, not ground-up.** Vendor curves are ground-up. Each segment's
+  deductible (fraction of TIV; ASSUMPTION residential 1.3% ≈ 2% of Cov A,
+  commercial 3%, auto 3%) is applied per location, with location DR ~
+  Beta(mean = county DR, precision 9): `insuredDR = E[max(0, X − d)]`.
+  Calibrated sets are fitted to insured loss directly, so they carry no
+  deductible.
 
 **Uncertainty.** The point estimate is the mean of a lognormal. County bands
 use `sigmaLogCounty`, segment and event bands use `sigmaLogEvent`:
@@ -261,7 +274,11 @@ each reported county loss in an event is an observation
     R_e = log(Σ model) − log(Σ actual) per event       event-total error
 
 - `w_i ∝ sqrt(actual_i)` (normalised to mean 1), `ε_i` = 0.01% of TIV,
-  `α = 1`, `λ = 0.05`, prior = KCC. All assumptions, overridable on the CLI.
+  `α = 1`, `λ = 0.05`, prior = KCC after its deductible. All assumptions,
+  overridable on the CLI (`--wind-factor` too).
+- Each county's wind mix becomes per-node weights through the same
+  `windFactor` interpolation the engine uses, so model loss stays linear in
+  the curve values.
 - Projected gradient descent; after each step DR is projected to a
   non-decreasing curve (pool-adjacent-violators) inside [1e-5, 1].
 - With ≥ 2 events every event is re-fitted out (leave-one-event-out).

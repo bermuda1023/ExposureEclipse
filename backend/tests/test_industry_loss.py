@@ -136,21 +136,53 @@ def test_tiv_falls_back_to_book_when_nothing_supplied(data_dir) -> None:
 # ─────────────────────────────── event loss ───────────────────────────────
 
 
+def _plain(curve_id: str = "kcc"):
+    """Copy of a built-in set with no land factor and no deductible."""
+    base = get_curve_set(curve_id)
+    return damage_curves.CurveSet(
+        id="plain", label="plain", kind="vendor",
+        segments={k: list(v) for k, v in base.segments.items()},
+        wind_factor=1.0, deductible={},
+    )
+
+
 def test_event_loss_sums_bins_by_segment(data_dir) -> None:
-    kcc = get_curve_set("kcc")
+    curve = _plain()
     imp = _impact("US-FL-12071", [(101, 0.5), (121, 0.25)])
     tiv = IndustryTiv(
         kind="supplied", year=2022, currency="USD",
         county={"US-FL-12071": {"RESIDENTIAL": 1_000.0, "COMMERCIAL": 400.0, "AUTO": 100.0}},
     )
-    res = event_loss.event_loss([imp], tiv, kcc)
+    res = event_loss.event_loss([imp], tiv, curve)
     k = vendor_curve("kcc")
-    dr = 0.5 * k[BAND_MPH_LO.index(101)] + 0.25 * k[BAND_MPH_LO.index(121)]
+    # Band midpoints 105.5 and 125.5 mph sit exactly on curve nodes 6 and 8.
+    dr = 0.5 * k[6] + 0.25 * k[8]
     assert res.by_segment["RESIDENTIAL"] == pytest.approx(1_000 * dr)
     assert res.by_segment["COMMERCIAL"] == pytest.approx(400 * dr)
     assert res.by_segment["AUTO"] == pytest.approx(100 * dr * 0.15)
-    half = event_loss.event_loss([imp], tiv, kcc, {"12071": 0.5})
+    half = event_loss.event_loss([imp], tiv, curve, {"12071": 0.5})
     assert half.total == pytest.approx(res.total * 0.5)
+
+
+def test_wind_factor_moves_marine_wind_onto_land_curve() -> None:
+    curve = _plain()
+    curve.wind_factor = 0.8
+    k = vendor_curve("kcc")
+    # 125.5 mph marine x 0.8 = 100.4 mph over land, between nodes 95.5 and 105.5.
+    t = (100.4 - 95.5) / 10
+    assert curve.ground_up_dr("RESIDENTIAL", 125.5) == pytest.approx(k[5] * (1 - t) + k[6] * t)
+    assert curve.ground_up_dr("RESIDENTIAL", 45.0) == 0.0  # 36 mph over land: no damage
+
+
+def test_deductible_turns_ground_up_into_insured() -> None:
+    assert damage_curves.insured_dr(0.3, 0.0) == 0.3
+    high = damage_curves.insured_dr(0.5, 0.013)
+    assert 0.48 < high < 0.5
+    low = damage_curves.insured_dr(0.005, 0.013)
+    assert 0 < low < 0.005  # some locations still exceed the deductible
+    assert damage_curves.insured_dr(0.02, 0.03) < damage_curves.insured_dr(0.02, 0.013)
+    kcc = get_curve_set("kcc")
+    assert kcc.dr("RESIDENTIAL", 150.0) < kcc.ground_up_dr("RESIDENTIAL", 150.0)
 
 
 def test_event_loss_reports_counties_without_tiv() -> None:
@@ -231,8 +263,9 @@ def test_calibrated_set_becomes_default(data_dir) -> None:
     assert damage_curves.default_curve_set_id() == "calibrated-test"
     cs = get_curve_set(None)
     assert cs.sigma_log_event == 0.2
-    # Segments missing from the file fall back to the KCC shape.
-    assert cs.segments["AUTO"] == get_curve_set("kcc").segments["AUTO"]
+    # Segments missing from the file fall back to the insured KCC shape.
+    assert cs.segments["AUTO"] == damage_curves.insured_prior(get_curve_set("kcc"), "AUTO")
+    assert cs.wind_factor == damage_curves.DEFAULT_WIND_FACTOR
 
 
 # ─────────────────────────────── API ───────────────────────────────
