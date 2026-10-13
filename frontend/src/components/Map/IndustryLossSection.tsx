@@ -7,7 +7,13 @@
 
 import { useMemo, useState } from "react";
 import { useDamageCurves, useIndustryBacktest, useIndustryLoss } from "../../api/hooks";
-import { LOSS_SEGMENTS, actualsBasisLabel, type LossSegment } from "../../api/industryLoss";
+import {
+  LOSS_SEGMENTS,
+  actualsBasisLabel,
+  type CountyEvidence,
+  type LossSegment,
+  type MissPeril,
+} from "../../api/industryLoss";
 import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatMoneyCompact } from "../../lib/format";
 
@@ -16,6 +22,24 @@ const SEGMENT_LABEL: Record<LossSegment, string> = {
   COMMERCIAL: "Commercial",
   AUTO: "Auto",
 };
+
+const MISS_PERIL_LABEL: Record<MissPeril, string> = {
+  tornado: "tornado",
+  flood: "flood",
+  surge: "surge",
+  wind: "wind reports",
+  noEvidence: "no report",
+};
+
+function evidenceText(ev: CountyEvidence | null): string {
+  if (!ev) return "";
+  const parts: string[] = [];
+  if (ev.asosMaxSustainedKt) parts.push(`ASOS ${ev.asosMaxSustainedKt} kt`);
+  if (ev.tornadoes) parts.push(`${ev.tornadoes} tornado${ev.tornadoes > 1 ? "es" : ""}`);
+  if (ev.floodReports || ev.hwmRiverine) parts.push("flood");
+  if (ev.surgeReports || ev.hwmCoastal) parts.push("surge");
+  return parts.length ? ` · ${parts.join(", ")}` : "";
+}
 
 function ratioText(modelled: number, actual: number): string {
   if (!(actual > 0)) return "—";
@@ -207,6 +231,26 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
                 under {formatMoneyCompact(backtest.data.materiality.lossBelow, backtest.data.materiality.currency)}{" "}
                 are treated as allocation noise: an upper bound, not a damage ratio.
               </div>
+              {backtest.data.evidence?.windBias?.medianObsOverModel != null && (
+                <div
+                  style={{ fontSize: "0.62rem", color: "var(--ink-600)" }}
+                  title="ASOS peak sustained wind divided by the modelled land wind at the same stations (median over stations that saw 30 kt or more). Below 1 means the modelled field is stronger than observed."
+                >
+                  Observed / modelled wind at {backtest.data.evidence.windBias.n} ASOS stations: ×
+                  {backtest.data.evidence.windBias.medianObsOverModel.toFixed(2)}
+                </div>
+              )}
+              {backtest.data.footprintMissByPeril && materialMisses + noiseMisses > 0 && (
+                <div style={{ fontSize: "0.62rem", color: "var(--ink-600)" }}>
+                  Out-of-field loss by reported peril:{" "}
+                  {Object.entries(backtest.data.footprintMissByPeril)
+                    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+                    .map(([peril, amount]) =>
+                      `${MISS_PERIL_LABEL[peril as MissPeril]} ${formatMoneyCompact(amount ?? 0, backtest.data!.currency)}`,
+                    )
+                    .join(" · ")}
+                </div>
+              )}
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.68rem" }}>
                 <thead>
                   <tr style={{ color: "var(--ink-500)", textAlign: "left" }}>
@@ -227,6 +271,7 @@ export function IndustryLossSection({ stormId }: { stormId: string }) {
                             ? ` · implied DR ${(row.impliedDr * 100).toFixed(2)}%`
                             : ""}
                           {row.belowMateriality ? " · below materiality" : ""}
+                          {evidenceText(row.evidence)}
                         </div>
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>

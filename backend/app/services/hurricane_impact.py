@@ -821,6 +821,8 @@ def compute_impact(
     multiplier: float = DAMAGING_WIND_MULTIPLIER,
     model_wind=None,
     ts_field: bool = False,
+    centroids: dict[str, CountyMeta] | None = None,
+    samples: dict[str, list[tuple[float, float]]] | None = None,
 ) -> tuple[
     list[CountyImpact],
     list[FootprintPoint],
@@ -840,9 +842,15 @@ def compute_impact(
     hurricane strength. Without it a historical storm only scores its 64 kt
     field, so wind loss in the 34-63 kt skirt (most of Debby, Isaias, inland
     Helene) is invisible to loss estimation and calibration.
+
+    ``centroids`` / ``samples`` replace the county grid, e.g. one pseudo
+    county per weather station to read the modelled wind at that point.
     """
-    centroids = county_centroids()
-    samples = county_area_samples()
+    if centroids is None:
+        centroids = county_centroids()
+        samples = county_area_samples()
+    elif samples is None:
+        samples = {}
     painted: dict[str, _Paint] = {}
     footprint: list[FootprintPoint] = []
     stamps: list[_Stamp] = []

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from ..services.damage_curves import default_curve_set_id, get_curve_set, load_curve_sets
+from ..services.event_evidence import load_evidence
 from ..services.event_loss import event_loss, lognormal_band, resolve_storm, storm_impacts
 from ..services.industry_losses import (
     LOSS_SEGMENTS,
@@ -258,7 +259,7 @@ def industry_loss_backtest(
     on_level_info = None
     if on_level:
         actuals, on_level_info = onlevel_actuals(actuals, tiv.as_of)
-    result = backtest(actuals, impacts, tiv, curve)
+    result = backtest(actuals, impacts, tiv, curve, load_evidence(storm.storm_id))
     return {
         "stormId": storm.storm_id,
         "stormName": storm.name,

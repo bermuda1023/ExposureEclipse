@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services import damage_curves, event_loss, industry_losses, onlevel
+from app.services import damage_curves, event_evidence, event_loss, industry_losses, onlevel
 from app.services.county_wind import SpeedBin
 from app.services.curve_fit import (
     Observation,
@@ -38,6 +38,7 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(damage_curves, "data_dir", lambda: tmp_path)
     industry_losses.clear_caches()
     onlevel.clear_caches()
+    event_evidence.clear_caches()
     damage_curves.load_curve_sets.cache_clear()
     yield tmp_path
     industry_losses.clear_caches()
@@ -465,11 +466,40 @@ def test_api_backtest(data_dir, fake_storm) -> None:
             "segment": "RESIDENTIAL",
             "actual": 200_000_000,
             "belowMateriality": False,
+            "evidencePeril": None,
         }
     ]
     assert body["materiality"]["currency"] == "USD"
     assert {c["geographyId"] for c in body["unreportedCounties"]} == {"US-FL-12115"}
+    assert body["evidence"] is None and body["footprintMissByPeril"] is None
     assert client.get("/api/industry-losses/AL012000/backtest").status_code == 404
+
+
+def test_api_backtest_explains_misses_with_evidence(data_dir, fake_storm) -> None:
+    _seed_files(data_dir)
+    (data_dir / "event_evidence").mkdir()
+    (data_dir / "event_evidence" / "AL092022.json").write_text(json.dumps({
+        "stormId": "AL092022",
+        "currency": "USD",
+        "windBias": {"n": 12, "medianObsOverModel": 0.8},
+        "stormEventTotals": {"flood": {"n": 3, "damage": 1e6}},
+        "stations": [],
+        "counties": {
+            "US-FL-12105": {
+                "stormEvents": {"flood": {"n": 3, "damage": 1e6, "mentionsStorm": 3}},
+                "hwm": {"n": 2, "coastal": 0, "riverine": 2, "maxHeightAboveGroundFt": 4.1},
+            },
+            "US-FL-12071": {"asos": {"n": 1, "maxSustainedKt": 70.0, "maxGustKt": 110.0,
+                                     "modelLandKt": 92.0}},
+        },
+    }))
+    body = client.get("/api/industry-losses/AL092022/backtest?curveSetId=kcc").json()
+    assert body["evidence"]["windBias"]["medianObsOverModel"] == 0.8
+    assert body["footprintMisses"][0]["evidencePeril"] == "flood"
+    assert body["footprintMissByPeril"] == {"flood": 200_000_000}
+    lee = next(r for r in body["counties"] if r["geographyId"] == "US-FL-12071")
+    assert lee["evidence"]["asosMaxSustainedKt"] == 70.0
+    assert lee["evidence"]["tornadoes"] == 0
 
 
 def test_api_damage_curves(data_dir) -> None:

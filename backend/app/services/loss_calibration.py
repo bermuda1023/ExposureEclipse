@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 
 from .curve_fit import Observation
 from .damage_curves import BAND_MID, CurveSet, interp_weights
+from .event_evidence import county_evidence, miss_peril
+from .event_evidence import summary as evidence_summary
 from .event_loss import EventLoss, county_bins, event_loss
 from .hurricane_impact import CountyImpact
 from .industry_losses import LOSS_SEGMENTS, EventActuals, IndustryTiv
@@ -112,8 +114,13 @@ def backtest(
     impacts: list[CountyImpact],
     tiv: IndustryTiv,
     curve: CurveSet,
+    evidence: dict | None = None,
 ) -> dict:
-    """Modelled vs reported for one event, by segment and county."""
+    """Modelled vs reported for one event, by segment and county.
+
+    ``evidence`` (see ``event_evidence``) adds observed wind and reported
+    perils per county, and splits out-of-field dollars by the peril that
+    was reported there."""
     modelled: EventLoss = event_loss(impacts, tiv, curve)
     by_gid = {c.impact.geography_id: c for c in modelled.counties}
     matched = match_event(actuals, impacts, tiv, curve.wind_factor)
@@ -171,6 +178,7 @@ def backtest(
             "inWindField": imp is not None and bool(county_bins(imp)),
             "claims": actuals.county_claims.get((gid, seg)),
             "belowMateriality": below_materiality(act, actuals.county_claims.get((gid, seg))),
+            "evidence": county_evidence(evidence, gid),
         })
     rows.sort(key=lambda r: -abs(r["modelled"] - r["actual"]))
 
@@ -203,9 +211,12 @@ def backtest(
                 "segment": s,
                 "actual": a,
                 "belowMateriality": below_materiality(a, actuals.county_claims.get((g, s))),
+                "evidencePeril": miss_peril(county_evidence(evidence, g)) if evidence else None,
             }
             for g, s, a in matched.footprint_miss
         ],
+        "footprintMissByPeril": _miss_by_peril(matched.footprint_miss, evidence),
+        "evidence": evidence_summary(evidence),
         "materiality": {
             "lossBelow": MATERIALITY_LOSS,
             "claimsBelow": MATERIALITY_CLAIMS,
@@ -216,6 +227,16 @@ def backtest(
         ],
         "missingTivCounties": len(modelled.missing_tiv),
     }
+
+
+def _miss_by_peril(misses: list[tuple[str, str, float]], evidence: dict | None) -> dict | None:
+    if not evidence:
+        return None
+    out: dict[str, float] = {}
+    for gid, _seg, loss in misses:
+        peril = miss_peril(county_evidence(evidence, gid))
+        out[peril] = out.get(peril, 0.0) + loss
+    return out
 
 
 def implied_dr_by_band(observations: list[Observation]) -> list[dict]:

@@ -134,6 +134,44 @@ export interface BacktestCountyRow {
   claims: number | null;
   /** Under the materiality cut: scored as an upper bound, not an exact DR. */
   belowMateriality: boolean;
+  evidence: CountyEvidence | null;
+}
+
+/** Observed post-event evidence for one county (ASOS, NCEI Storm Events, USGS HWMs). */
+export interface CountyEvidence {
+  asosMaxSustainedKt: number | null;
+  asosMaxGustKt: number | null;
+  /** Modelled land wind at the same stations, for a like-for-like read. */
+  asosModelLandKt: number | null;
+  tornadoes: number;
+  maxEf: number | null;
+  floodReports: number;
+  surgeReports: number;
+  windReports: number;
+  hwmCount: number;
+  hwmRiverine: number;
+  hwmCoastal: number;
+  hwmMaxHeightAboveGroundFt: number | null;
+}
+
+export type MissPeril = "tornado" | "flood" | "surge" | "wind" | "noEvidence";
+
+export interface EventEvidenceSummary {
+  builtAt: string | null;
+  window: { start: string; end: string } | null;
+  sources: Record<string, string | null>;
+  windBias: {
+    n: number;
+    medianObsOverModel?: number;
+    p25ObsOverModel?: number | null;
+    p75ObsOverModel?: number | null;
+    medianGustFactor?: number | null;
+    medianObsOverModelAbove50Kt?: number | null;
+    observedTsOutsideModel?: number;
+  } | null;
+  stormEventTotals: Record<string, { n: number; damage: number }> | null;
+  currency: string;
+  stations: number;
 }
 
 export interface BacktestResponse {
@@ -163,7 +201,15 @@ export interface BacktestResponse {
   >;
   counties: BacktestCountyRow[];
   unreportedCounties: Array<{ geographyId: string; name: string; state: string; modelled: number; maxWindKt: number }>;
-  footprintMisses: Array<{ geographyId: string; segment: LossSegment; actual: number; belowMateriality: boolean }>;
+  footprintMisses: Array<{
+    geographyId: string;
+    segment: LossSegment;
+    actual: number;
+    belowMateriality: boolean;
+    evidencePeril: MissPeril | null;
+  }>;
+  footprintMissByPeril: Partial<Record<MissPeril, number>> | null;
+  evidence: EventEvidenceSummary | null;
   materiality: { lossBelow: number; claimsBelow: number; currency: string };
   exposureGaps: Array<{ geographyId: string; segment: LossSegment; actual: number }>;
   missingTivCounties: number;
