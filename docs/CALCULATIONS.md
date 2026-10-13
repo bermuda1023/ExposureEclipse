@@ -302,6 +302,62 @@ ASSUMPTION: until flood is modelled, flood-dominated events should be
 excluded from the fit with `--events` rather than allowed to steepen the wind
 curve.
 
+### On-levelling industry losses
+
+`services/onlevel.py`. A PCS loss is priced in event-year dollars on the
+event-year exposure. The industry TIV is valued at its own date: a supplied
+vintage uses its `asOfDate`, defaulting to July 1 of the vintage year, and the
+built-in book uses 2026-01-01. Every reported row is therefore scaled by the
+growth in insured value in its county and segment:
+
+    onLevelLoss = reportedLoss x V(target) / V(eventDate)
+
+The damage ratio is not trended; that is what calibration learns. `V` is
+built from public indices in `mockdata/onlevel/`, baked by
+`backend/scripts/build_onlevel_indices.py`:
+
+| Segment | V | Why |
+|---|---|---|
+| RESIDENTIAL | HU × (0.55 PPI residential inputs + 0.45 state construction pay) | units × replacement cost; contents and ALE are a share of Coverage A |
+| COMMERCIAL | 0.62 × EMP × (0.55 PPI nonres inputs + 0.45 construction pay) + 0.38 × county payroll | building follows floor space × build cost; contents and BI are declared values that follow economic activity |
+| AUTO | POP × CPI used cars and trucks | vehicles follow people; comprehensive pays actual cash value |
+
+The inputs are:
+- HU and POP: Census PEP July-1 estimates, with the 2010- and 2020-based series chain-linked at 2020.
+- EMP and payroll: BLS QCEW private-sector annual averages.
+- Construction pay: QCEW NAICS 23 average annual pay by state.
+- PPI and CPI: FRED monthly series, read at the event month and the target month.
+
+Annual values sit at mid-year and are interpolated linearly. Past the newest
+year they are extrapolated at the last growth rate for at most 1.5 years.
+After the newest month, monthly series hold their latest value.
+
+House prices and GDP deflators are not used, because land is not insured and
+insured value is replacement cost.
+
+Each component falls back from county to state to flat (1.0), and the level
+used is reported:
+- A county with fewer than 500 private employees uses state employment and payroll.
+- Connecticut's pre-2022 counties use state values, because the Census and QCEW replaced them with planning regions.
+- Puerto Rico and USVI unit counts are held flat. This is an ASSUMPTION: Census municipio housing has no pre-2020 series, and the stock barely grew after Maria. Their own construction pay and the national cost indices still apply.
+- Unallocated state rows use the state factor.
+
+ASSUMPTIONS:
+- The 55/45 materials/labour split.
+- The 62/38 commercial building/contents+BI split, which is the built-in book's mix.
+- New stock is assumed to be as vulnerable as the stock it adds to. Newer code-built homes are stronger, so the on-levelled loss slightly overstates.
+
+`mockdata/onlevel/adjustments.csv` (template `adjustments.example.csv`) holds
+optional analyst multipliers by storm, geography and segment, applied after the
+index. An example is taking out Florida assignment-of-benefits litigation
+creep that the 2019 and 2022–23 reforms would not repeat today. Every
+adjustment used is listed in the response.
+
+The factors are applied by default in `POST /api/hurricanes/{id}/industry-loss`
+(`onLevel: false` to switch off), in the backtest (`?onLevel=false`), and in
+`calibrate_damage_curves.py` (`--no-onlevel`). Reported totals stay visible as
+`actuals.onLevel.reportedTotal`.
+
 ## Hazard climatology blend (tornado + hail)
 
 Naive KDE of SPC point reports produces an obvious population-density

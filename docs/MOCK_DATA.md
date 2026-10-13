@@ -158,6 +158,20 @@ The loss for a storm uses the vintage of its year, else the latest earlier
 vintage, else the earliest later one. With no supplied vintage the built-in
 book is used (no auto).
 
+A TIV file may carry `asOfDate` (YYYY-MM-DD, the valuation date). Reported
+losses are on-levelled to it; without it the vintage is taken as valued on
+July 1 of its year. Loss files may carry `eventDate`, the date the loss is
+priced at. The PCS importer writes the first PCS event date.
+
+`onlevel/` — exposure-growth indices for on-levelling losses, written by
+`python backend/scripts/build_onlevel_indices.py`:
+- `county_indices.csv`: HU, POP, EMP, WAGES and CONS_PAY by county and state, 2015–latest.
+- `monthly_indices.csv`: PPI residential and nonresidential construction inputs, and CPI used vehicles.
+- `sources.json`: URLs, series IDs and build date.
+- Optional `adjustments.csv`: analyst multipliers (see `adjustments.example.csv`).
+
+See `docs/CALCULATIONS.md §On-levelling industry losses`.
+
 `damage_curves/*.json` — written by
 `python backend/scripts/calibrate_damage_curves.py` (`--dry-run` to preview).
 The newest calibrated set becomes the API default.

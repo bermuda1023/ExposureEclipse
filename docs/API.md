@@ -317,11 +317,12 @@ sigmaLogEvent, createdAt, fit }] }`. Default = newest calibrated set, else `kcc`
 
 ### `POST /api/hurricanes/{stormId}/industry-loss`
 
-Body (all optional): `{ curveSetId, multiplier, exposedFraction: {geoid: 0..1} }`.
-Works for live NHC storms and IBTrACS history (historical wind fields are cached).
+Body (all optional): `{ curveSetId, multiplier, exposedFraction: {geoid: 0..1},
+onLevel: true }`. Works for live NHC storms and IBTrACS history (historical
+wind fields are cached).
 
 Response: `stormId, stormName, year, trackSource, currency, curveSet, tivSource
-{kind, year, file, currency}, formula, summary {total: Band, bySegment: {seg:
+{kind, year, file, currency, asOfDate}, formula, summary {total: Band, bySegment: {seg:
 Band + tiv}, countiesWithLoss}, actuals | null, counties[{geographyId, name,
 state, maxWindKt, exposedFraction, segments {seg: {tiv, loss, dr}}, ...Band}],
 notes[]`. `Band = {mean, p10, p50, p90}` (lognormal around the mean).
@@ -332,6 +333,14 @@ notes[]`. `Band = {mean, p10, p50, p90}` (lognormal around the mean).
 - `states`, `asOfDate`, `source`
 - `includesFlood`, `includesSurge`, `includesNfip`, `includesLae`: true,
   false, or null when unknown
+- `eventDate`
+- `onLevel`: null when switched off or no indices are installed. Otherwise
+  `{eventDate, targetDate, reportedTotal, reportedBySegment, factor,
+  factorBySegment, rowsByQuantityLevel, adjustments[], indicesBuiltAt,
+  latestMonth, method}`.
+
+When `onLevel` is set, `total` and `bySegment` are on-levelled to
+`tivSource.asOfDate`. See `docs/CALCULATIONS.md §On-levelling industry losses`.
 
 Currency mismatch between actuals and TIV → 422 `CURRENCY_MISMATCH`.
 
@@ -340,9 +349,10 @@ Currency mismatch between actuals and TIV → 422 `CURRENCY_MISMATCH`.
 Events that have supplied actuals: `{ events: [{stormId, currency, counties,
 files, ...the actuals fields above}] }`.
 
-### `GET /api/industry-losses/{stormId}/backtest?curveSetId=&multiplier=`
+### `GET /api/industry-losses/{stormId}/backtest?curveSetId=&multiplier=&onLevel=true`
 
-Modelled vs reported for one event: `total {actual, modelled, ratio,
+Modelled vs reported for one event, with reported losses on-levelled unless
+`onLevel=false` (`onLevel` block as above). The response contains: `total {actual, modelled, ratio,
 logError}`, `segments {seg: {actual, modelled, ratio, logError, countiesScored,
 countyLogRms, countyLogMedian, shareOfActualInWindField}}`, `counties[]`
 (sorted by absolute miss, with `impliedDr` = actual / TIV), `unreportedCounties`,
