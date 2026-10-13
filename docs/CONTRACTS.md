@@ -132,6 +132,7 @@ ERT carries an `Occupancy` (e.g. `Permanent`) and an `OccupancyGroup` (e.g. `Res
 | `RESIDENTIAL` | Residential | e.g. `Res-MFD`, `Res-SFD` |
 | `COMMERCIAL` | Commercial | |
 | `INDUSTRIAL` | Industrial | |
+| `AUTO` | Auto | Industry loss + industry TIV only (PCS-style split). Never part of property TIV or market share. |
 | `UNKNOWN` | Unknown | Shown separately, never force-mapped (OPEN_QUESTIONS #14) |
 
 `OccupancyGroup` values are passed through from ERT (e.g. `Res-MFD`, `Res-SFD`, …) — the

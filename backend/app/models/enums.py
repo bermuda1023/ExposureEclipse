@@ -99,6 +99,7 @@ class OccupancySegment(str, Enum):
     RESIDENTIAL = "RESIDENTIAL"
     COMMERCIAL = "COMMERCIAL"
     INDUSTRIAL = "INDUSTRIAL"
+    AUTO = "AUTO"
     UNKNOWN = "UNKNOWN"
 
 

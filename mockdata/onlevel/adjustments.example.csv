@@ -1,0 +1,8 @@
+# Optional analyst multipliers applied after the index on-level.
+# Copy to adjustments.csv to use. stormId / geographyId / segment accept * as a wildcard;
+# geographyId may be a state (US-FL) or a county (US-FL-12086). Factors multiply.
+# Typical use: take out loss development that would not recur today, e.g. Florida
+# assignment-of-benefits litigation creep in Irma before the 2019 and 2022-23 reforms.
+# Example (remove the leading # to use):
+# AL112017,US-FL,RESIDENTIAL,0.85,AOB litigation creep removed after 2019/2022 FL reforms
+stormId,geographyId,segment,factor,reason

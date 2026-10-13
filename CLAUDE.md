@@ -35,6 +35,16 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
   probabilistic loss band; per-county **exposed-fraction overrides**
   (`countyOverrides` store) let an underwriter override partial-county
   exposure. Both persist to localStorage.
+- **Industry loss (calibrated)** — `POST /api/hurricanes/{id}/industry-loss`
+ computes industry loss by residential / commercial / auto on the backend for
+ live and historical storms: county wind-band mix × supplied industry TIV
+ vintage (`mockdata/industry_tiv/<year>.csv`, else the built-in book) × a
+ versioned damage-curve set. Marine storm wind is converted to land wind
+ (`windFactor`) and vendor curves are taken to insured loss via per-segment
+ deductibles. Curves are fitted to supplied PCS county losses
+ (`mockdata/industry_losses/*.csv`) by `backend/scripts/calibrate_damage_curves.py`.
+ Bands are lognormal, using the fitted spread. `/api/industry-losses/{id}/backtest`
+ compares modelled with actual losses. See `docs/CALCULATIONS.md §Industry loss`.
 - **Live + replay storms** — `/api/live/storms`. NHC `CurrentStorms.json`
   for active storms; IBTrACS-derived replay for retired ones. Bundle adds
   observed track, advisory history (synthetic forecast cone), NWS active

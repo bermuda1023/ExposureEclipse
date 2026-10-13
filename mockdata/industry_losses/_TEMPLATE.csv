@@ -1,0 +1,7 @@
+# Template. One row per storm x county x segment. Lines starting with # are ignored.
+# segment: RESIDENTIAL | COMMERCIAL | AUTO. geographyId: US-FL-12071, 12071, or a state US-FL.
+# unallocated=true marks a state row of loss not placed in a county; it always adds to totals.
+# PCS workbooks: python backend/scripts/import_pcs_county_estimates.py <files>.xlsx
+# Example (remove the leading # to use):
+# AL092022,US-FL-12071,RESIDENTIAL,8123000000,120000,USD,,PCS 2261 estimate 16,true,true,false,false,
+stormId,geographyId,segment,loss,claims,currency,asOfDate,source,includesFlood,includesSurge,includesNfip,includesLae,unallocated

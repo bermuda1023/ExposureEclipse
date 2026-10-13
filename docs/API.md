@@ -301,6 +301,79 @@ browser. See `frontend/src/state/{damageAssumptions,countyOverrides}.ts`.
 Same request shape as `/impact`. Streams an `.xlsx` workbook (Summary +
 Impacted Counties sheets, per-county breakdown with the Rmax source per row).
 
+## Industry loss (calibrated against supplied PCS losses)
+
+Industry loss does not use the left-rail selection. It always runs on the
+industry TIV: `mockdata/industry_tiv/<year>.csv` for the storm year (else the
+latest earlier vintage, else the earliest later one), falling back to the
+built-in Industry book (residential + commercial, no auto). See
+`docs/CALCULATIONS.md §Industry loss` and `docs/MOCK_DATA.md §Industry losses`.
+
+### `GET /api/damage-curves`
+
+`{ defaultId, curveSets: [{ id, label, kind: "vendor"|"calibrated", bandsMphLo,
+segments: {RESIDENTIAL|COMMERCIAL|AUTO: [DR per band]}, sigmaLogCounty,
+sigmaLogEvent, createdAt, fit }] }`. Default = newest calibrated set, else `kcc`.
+
+### `POST /api/hurricanes/{stormId}/industry-loss`
+
+Body (all optional): `{ curveSetId, multiplier, exposedFraction: {geoid: 0..1},
+onLevel: true }`. Works for live NHC storms and IBTrACS history (historical
+wind fields are cached).
+
+Response: `stormId, stormName, year, trackSource, currency, curveSet, tivSource
+{kind, year, file, currency, asOfDate}, formula, summary {total: Band, bySegment: {seg:
+Band + tiv}, countiesWithLoss}, actuals | null, counties[{geographyId, name,
+state, maxWindKt, exposedFraction, segments {seg: {tiv, loss, dr}}, ...Band}],
+notes[]`. `Band = {mean, p10, p50, p90}` (lognormal around the mean).
+`actuals` is filled when the storm has a supplied loss file. Its fields are:
+- `total`, `bySegment`
+- `unallocated`: loss not placed in a county
+- `claimsBySegment`: null when no claims were supplied
+- `states`, `asOfDate`, `source`
+- `includesFlood`, `includesSurge`, `includesNfip`, `includesLae`: true,
+  false, or null when unknown
+- `eventDate`
+- `fx`: null unless the source was supplied in another currency and
+  converted on import. Otherwise `{reportedCurrency, fxRate, fxDate,
+  fxSource, reportedTotal}`, where `fxRate` is in actuals-currency units per
+  unit of `reportedCurrency` and `reportedTotal` is in `reportedCurrency`
+  before on-levelling. A note states the conversion.
+- `onLevel`: null when switched off or no indices are installed. Otherwise
+  `{eventDate, targetDate, reportedTotal, reportedBySegment, factor,
+  factorBySegment, rowsByQuantityLevel, adjustments[], indicesBuiltAt,
+  latestMonth, method}`.
+
+When `onLevel` is set, `total` and `bySegment` are on-levelled to
+`tivSource.asOfDate`. See `docs/CALCULATIONS.md §On-levelling industry losses`.
+
+Currency mismatch between actuals and TIV → 422 `CURRENCY_MISMATCH`.
+
+### `GET /api/industry-losses`
+
+Events that have supplied actuals: `{ events: [{stormId, currency, counties,
+files, ...the actuals fields above}] }`.
+
+### `GET /api/industry-losses/{stormId}/backtest?curveSetId=&multiplier=&onLevel=true`
+
+Modelled vs reported for one event, with reported losses on-levelled unless
+`onLevel=false` (`onLevel` block as above). The response contains: `total {actual, modelled, ratio,
+logError}`, `segments {seg: {actual, modelled, ratio, logError, countiesScored,
+countiesMaterial, countiesBelowMateriality, countiesAboveMaterialityCeiling,
+countyLogRms, countyLogMedian, shareOfActualInWindField}}`, `counties[]`
+(sorted by absolute miss, with `impliedDr` = actual / TIV, `claims`,
+`belowMateriality`, and `evidence` = observed ASOS wind, tornado / flood /
+surge / wind report counts and high-water marks for the county),
+`unreportedCounties`, `footprintMisses` (reported loss outside the modelled
+wind field, each with `belowMateriality` and `evidencePeril`),
+`footprintMissByPeril` (out-of-field dollars by reported peril), `exposureGaps`
+(reported loss with no TIV), `materiality {lossBelow, claimsBelow, currency}`
+and `evidence` (event summary: ASOS `windBias`, Storm Events totals, sources,
+window). `countyLogRms` covers material rows only. `evidence`,
+`footprintMissByPeril` and `evidencePeril` are null when no evidence file has
+been built. 404 when no actuals are supplied. See `docs/CALCULATIONS.md
+§Post-event evidence`.
+
 ## Live + replay storms
 
 | Verb | Path | Purpose |
@@ -931,6 +1004,10 @@ still work (JSON facts). Under `hybrid`/`sqlserver`, servers come from
 | GET | `/api/hurricanes` |
 | POST | `/api/hurricanes/{stormId}/impact` |
 | POST | `/api/hurricanes/{stormId}/impact/export` |
+| POST | `/api/hurricanes/{stormId}/industry-loss` |
+| GET | `/api/damage-curves` |
+| GET | `/api/industry-losses` |
+| GET | `/api/industry-losses/{stormId}/backtest` |
 | GET | `/api/live/storms` |
 | GET | `/api/live/storms/{atcfId}` |
 | GET | `/api/wildfire/active` |
