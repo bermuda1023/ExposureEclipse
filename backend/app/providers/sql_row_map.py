@@ -169,6 +169,8 @@ def _parse_segment(v: Any) -> OccupancySegment:
             return OccupancySegment.COMMERCIAL
         if s.startswith("IND"):
             return OccupancySegment.INDUSTRIAL
+        if s.startswith("AUT") or s in {"MOTOR", "VEHICLE", "VEHICLES"}:
+            return OccupancySegment.AUTO
         return OccupancySegment.UNKNOWN
 
 

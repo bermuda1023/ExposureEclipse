@@ -106,6 +106,7 @@ export interface ImpactedCounty {
   /** Informational split. The loss band uses tiv, not these fields. */
   residentialTiv?: number;
   commercialTiv?: number;
+  autoTiv?: number;
   locationCount: number;
   hasData: boolean;
   byProgramme: ImpactProgrammeContribution[];
@@ -153,9 +154,10 @@ export interface ImpactSummary {
   countiesWithData: number;
   totalTiv: number;
   totalLocationCount: number;
-  /** Informational. Losses use totalTiv, which already bundles both. */
+  /** Informational. Losses use totalTiv, which already bundles every segment. */
   residentialTiv?: number;
   commercialTiv?: number;
+  autoTiv?: number;
 }
 
 export interface HurricaneImpactResponse {

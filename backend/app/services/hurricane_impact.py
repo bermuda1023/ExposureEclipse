@@ -323,6 +323,7 @@ class CountyImpact:
     # Informational split. Loss calcs use ``tiv``, which already bundles these.
     residential_tiv: float = 0.0
     commercial_tiv: float = 0.0
+    auto_tiv: float = 0.0
     # Area of the county in each local-wind band. The peak storm intensity
     # is NOT applied to the whole county. Empty when the caller built a
     # centroid-only impact (tests).
@@ -974,7 +975,7 @@ def join_tiv(
     by_geo: dict[str, tuple[float, int]] = {}
     # Two-level index: geo -> dataset_id -> (tiv, loc)
     by_geo_prog: dict[str, dict[str, tuple[float, int]]] = {}
-    # Informational only. Residential + commercial are not separate losses.
+    # Informational only. Residential, commercial, and auto are not separate losses.
     by_geo_seg: dict[str, dict[str, float]] = {}
     for f in facts:
         gid = getattr(f, "geography_id", None)
@@ -1007,6 +1008,7 @@ def join_tiv(
             seg_map = by_geo_seg.get(imp.geography_id, {})
             imp.residential_tiv = float(seg_map.get("RESIDENTIAL", 0.0))
             imp.commercial_tiv = float(seg_map.get("COMMERCIAL", 0.0))
+            imp.auto_tiv = float(seg_map.get("AUTO", 0.0))
             prog_map = by_geo_prog.get(imp.geography_id, {})
             imp.by_programme = [
                 ProgrammeContribution(dataset_id=ds, tiv=t, location_count=lc)

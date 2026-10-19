@@ -23,6 +23,7 @@ export interface CountyReference {
   currency: string;
   industryResidentialTiv?: number | null;
   industryCommercialTiv?: number | null;
+  industryAutoTiv?: number | null;
   industryTiv?: number | null;
 }
 
@@ -93,7 +94,7 @@ export function CountyReferenceSection({
               <Row
                 label="Industry TIV"
                 value={formatMoneyCompact(data.industryTiv, data.currency)}
-                tip="Bundled residential plus commercial from the Industry client. Census housing and build-cost proxy, not RMS or AIR."
+                tip="Bundled residential, commercial, and auto from the Industry client. Supplied windstorm TIV by county."
               />
               <Row
                 label="Residential"
@@ -102,6 +103,10 @@ export function CountyReferenceSection({
               <Row
                 label="Commercial"
                 value={formatMoneyCompact(data.industryCommercialTiv ?? 0, data.currency)}
+              />
+              <Row
+                label="Auto"
+                value={formatMoneyCompact(data.industryAutoTiv ?? 0, data.currency)}
               />
             </>
           )}

@@ -300,9 +300,10 @@ def _compute_impact_payload(
             "countiesWithData": counties_with_data,
             "totalTiv": total_tiv,
             "totalLocationCount": total_loc,
-            # Informational. totalTiv already bundles both segments.
+            # Informational. totalTiv already bundles every segment.
             "residentialTiv": sum(i.residential_tiv for i in impacts),
             "commercialTiv": sum(i.commercial_tiv for i in impacts),
+            "autoTiv": sum(i.auto_tiv for i in impacts),
         },
         "counties": [
             {
@@ -340,6 +341,7 @@ def _compute_impact_payload(
                 "tiv": i.tiv,
                 "residentialTiv": i.residential_tiv,
                 "commercialTiv": i.commercial_tiv,
+                "autoTiv": i.auto_tiv,
                 "locationCount": i.location_count,
                 "hasData": i.has_data,
                 "byProgramme": [

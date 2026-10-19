@@ -376,6 +376,7 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
             ("Total TIV (in selection)", summary.get("totalTiv")),
             ("Residential TIV (information)", summary.get("residentialTiv")),
             ("Commercial TIV (information)", summary.get("commercialTiv")),
+            ("Auto TIV (information)", summary.get("autoTiv")),
             ("Total Location Count", summary.get("totalLocationCount")),
         ],
     )
@@ -398,6 +399,7 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         "Centroid Lon",
         "Residential TIV (information)",
         "Commercial TIV (information)",
+        "Auto TIV (information)",
         "Clear %",
         "TS %",
         "Cat 1 %",
@@ -424,12 +426,13 @@ def build_hurricane_impact_xlsx(impact: dict) -> bytes:
         ws.cell(row=r, column=14, value=c.get("centroidLon"))
         ws.cell(row=r, column=15, value=c.get("residentialTiv"))
         ws.cell(row=r, column=16, value=c.get("commercialTiv"))
+        ws.cell(row=r, column=17, value=c.get("autoTiv"))
         bands = {int(b.get("category")): b.get("areaFraction") for b in (c.get("windBands") or [])}
         for offset, cat in enumerate((-1, 0, 1, 2, 3, 4, 5)):
             frac = bands.get(cat)
             ws.cell(
                 row=r,
-                column=17 + offset,
+                column=18 + offset,
                 value=None if frac is None else round(float(frac) * 100.0, 1),
             )
 

@@ -1,12 +1,13 @@
-"""Industry cedant: residential and commercial are informational; calcs bundle them.
+"""Industry cedant: residential, commercial, and auto are informational.
 
 The book is a selectable WS reference cedant. It is not part of the silent
 in-force portfolio. Map TIV, detail summary, and hurricane-impact TIV are the
-sum of both segments. The segment amounts stay on the wire for display.
+sum of the three segments. The segment amounts stay on the wire for display.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,11 @@ client = TestClient(app)
 
 MIAMI = "US-FL-12086"
 GLADES = "US-FL-12043"
+# Digits read from the supplied workbook. A rebuild that drifts fails here.
+MIAMI_RES = 386_320_674_139
+MIAMI_COM = 677_318_120_794
+MIAMI_AUTO = 36_785_091_163
+MIAMI_BUNDLED = MIAMI_RES + MIAMI_COM + MIAMI_AUTO
 
 
 @pytest.fixture(scope="module")
@@ -63,6 +69,12 @@ def _fact(
         tiv=tiv,
         currency="USD",
     )
+
+
+def _source_rows() -> list[dict[str, str]]:
+    path = Path(get_settings().mock_data_dir) / "usws_tiv_by_county.csv"
+    with path.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def _bare_impact(geography_id: str = MIAMI) -> CountyImpact:
@@ -136,36 +148,39 @@ def test_industry_facts_identity_and_exact_rollups(
     state = [f for f in facts if _value(f.aggregation) == AggregationLevel.STATE.value]
     country = [f for f in facts if _value(f.aggregation) == AggregationLevel.COUNTRY.value]
 
+    expected_segments = {
+        OccupancySegment.RESIDENTIAL.value,
+        OccupancySegment.COMMERCIAL.value,
+        OccupancySegment.AUTO.value,
+    }
     by_county: dict[str, set[str]] = {}
-    res_total = 0.0
-    com_total = 0.0
+    totals = {segment: 0.0 for segment in expected_segments}
     for fact in facts:
         assert _value(fact.peril) == Peril.WS.value
         assert fact.occupancy == "All"
         assert fact.occupancy_group == "All"
+        assert fact.building == fact.tiv
+        assert fact.contents == 0
+        assert fact.bi == 0
         assert round(fact.tiv, 2) == round(fact.building + fact.contents + fact.bi, 2)
         assert round(fact.explim_gross, 2) == round(fact.tiv, 2)
         assert round(fact.explim_net, 2) == round(fact.tiv, 2)
         segment = _value(fact.occupancy_segment)
-        assert segment in {OccupancySegment.RESIDENTIAL.value, OccupancySegment.COMMERCIAL.value}
+        assert segment in expected_segments
 
     for fact in county:
-        by_county.setdefault(fact.geography_id, set()).add(_value(fact.occupancy_segment))
-        if _value(fact.occupancy_segment) == OccupancySegment.RESIDENTIAL.value:
-            res_total += fact.tiv
-        else:
-            com_total += fact.tiv
+        segment = _value(fact.occupancy_segment)
+        by_county.setdefault(fact.geography_id, set()).add(segment)
+        totals[segment] += fact.tiv
 
-    assert len(by_county) == summary["counties"]
-    assert all(
-        segments == {OccupancySegment.RESIDENTIAL.value, OccupancySegment.COMMERCIAL.value}
-        for segments in by_county.values()
-    )
-    assert round(res_total, 2) == summary["residentialTiv"]
-    assert round(com_total, 2) == summary["commercialTiv"]
-    assert round(res_total + com_total, 2) == summary["totalTiv"]
-    assert 15e12 <= res_total <= 55e12
-    assert 8e12 <= com_total <= 55e12
+    source = _source_rows()
+    assert len(by_county) == summary["counties"] == len(source)
+    assert all(segments == expected_segments for segments in by_county.values())
+    assert round(totals["RESIDENTIAL"], 2) == summary["residentialTiv"]
+    assert round(totals["COMMERCIAL"], 2) == summary["commercialTiv"]
+    assert round(totals["AUTO"], 2) == summary["autoTiv"]
+    assert round(sum(totals.values()), 2) == summary["totalTiv"]
+    assert summary["totalTiv"] > 5e12
 
     county_by_state: dict[str, float] = {}
     for fact in county:
@@ -178,12 +193,19 @@ def test_industry_facts_identity_and_exact_rollups(
     assert set(state_by) == set(county_by_state)
     for code, tiv in state_by.items():
         assert round(tiv, 2) == round(county_by_state[code], 2), code
-    assert {"FL", "CA", "NY", "PR", "AK", "HI"}.issubset(state_by)
+    assert {"FL", "NY", "TX", "LA", "HI"}.issubset(state_by)
+    assert "CA" not in state_by
+    assert "AK" not in state_by
+    assert "PR" not in state_by
     assert round(sum(fact.tiv for fact in country), 2) == round(sum(fact.tiv for fact in county), 2)
-    assert len(country) == 2
+    assert len(country) == 3
+    miami_source = next(row for row in source if row["geographyId"] == MIAMI)
+    assert int(miami_source["residentialTiv"]) == MIAMI_RES
+    assert int(miami_source["commercialTiv"]) == MIAMI_COM
+    assert int(miami_source["autoTiv"]) == MIAMI_AUTO
 
 
-def test_industry_map_and_detail_bundle_both_segments() -> None:
+def test_industry_map_and_detail_bundle_three_segments() -> None:
     mapped = client.post(
         "/api/exposures/map",
         json={
@@ -211,10 +233,12 @@ def test_industry_map_and_detail_bundle_both_segments() -> None:
     assert detail.status_code == 200, detail.text
     body = detail.json()
     occupancy = {row["key"]: row["tiv"] for row in body["breakdowns"]["occupancy"]}
-    assert set(occupancy) == {"RESIDENTIAL", "COMMERCIAL"}
-    assert occupancy["RESIDENTIAL"] > 0
-    assert occupancy["COMMERCIAL"] > 0
-    bundled = occupancy["RESIDENTIAL"] + occupancy["COMMERCIAL"]
+    assert set(occupancy) == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
+    assert occupancy["RESIDENTIAL"] == MIAMI_RES
+    assert occupancy["COMMERCIAL"] == MIAMI_COM
+    assert occupancy["AUTO"] == MIAMI_AUTO
+    bundled = occupancy["RESIDENTIAL"] + occupancy["COMMERCIAL"] + occupancy["AUTO"]
+    assert bundled == MIAMI_BUNDLED
     assert round(body["summary"]["tiv"], 2) == round(bundled, 2)
     assert round(miami["tiv"], 2) == round(bundled, 2)
 
@@ -260,9 +284,10 @@ def test_industry_map_and_detail_bundle_both_segments() -> None:
 
 
 def test_join_tiv_bundles_segments_and_ignores_state_rows() -> None:
-    """Impact TIV is one number. Residential and commercial stay informational."""
+    """Impact TIV is one number. The three segments stay informational."""
     residential = 100.0
     commercial = 250.0
+    auto = 40.0
     facts = [
         _fact(
             geography_id=MIAMI,
@@ -277,6 +302,12 @@ def test_join_tiv_bundles_segments_and_ignores_state_rows() -> None:
             tiv=commercial,
         ),
         _fact(
+            geography_id=MIAMI,
+            aggregation=AggregationLevel.COUNTY,
+            segment=OccupancySegment.AUTO,
+            tiv=auto,
+        ),
+        _fact(
             geography_id="US-FL",
             aggregation=AggregationLevel.STATE,
             segment=OccupancySegment.RESIDENTIAL,
@@ -285,14 +316,15 @@ def test_join_tiv_bundles_segments_and_ignores_state_rows() -> None:
     ]
     impact = join_tiv([_bare_impact()], facts)[0]
     assert impact.has_data is True
-    assert impact.tiv == residential + commercial
+    assert impact.tiv == residential + commercial + auto
     assert impact.residential_tiv == residential
     assert impact.commercial_tiv == commercial
+    assert impact.auto_tiv == auto
     # The server does not emit a second loss. Callers multiply this one tiv.
     assert impact.projected_loss == 0.0
     assert impact.location_count == 0
     assert len(impact.by_programme) == 1
-    assert impact.by_programme[0].tiv == residential + commercial
+    assert impact.by_programme[0].tiv == residential + commercial + auto
 
 
 def test_ied_denominator_matches_industry_book_and_stays_sane(
@@ -319,9 +351,10 @@ def test_ied_denominator_matches_industry_book_and_stays_sane(
 
     assert total("COUNTRY", "US", "RESIDENTIAL") == summary["residentialTiv"]
     assert total("COUNTRY", "US", "COMMERCIAL") == summary["commercialTiv"]
+    assert total("COUNTRY", "US", "AUTO") == summary["autoTiv"]
     assert total("COUNTRY", "US") == summary["totalTiv"]
     # No UNKNOWN row. Summing every segment must not double-count the country.
-    assert {_value(row.occupancy_segment) for row in ied} == {"RESIDENTIAL", "COMMERCIAL"}
+    assert {_value(row.occupancy_segment) for row in ied} == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
 
     facts = provider.get_facts_for_dataset("ds-industry-ws")
     fl_facts = [
@@ -330,8 +363,6 @@ def test_ied_denominator_matches_industry_book_and_stays_sane(
         if _value(fact.aggregation) == AggregationLevel.COUNTY.value and fact.statecode == "FL"
     ]
     assert round(total("STATE", "US-FL"), 2) == round(sum(fl_facts), 2)
-    assert total("STATE", "US-AK", "RESIDENTIAL") < 500e9
-    assert total("STATE", "US-CA", "RESIDENTIAL") < 15e12
 
     county_ids = {
         row.geography_id
@@ -339,23 +370,22 @@ def test_ied_denominator_matches_industry_book_and_stays_sane(
         if _value(row.geography_level) == AggregationLevel.COUNTY.value
     }
     assert "US-FL-12086" in county_ids
-    assert total("COUNTY", "US-FL-12086") == 1_015_547_324_629
-    assert total("COUNTY", "US-FL-12011") == 587_250_686_744
-    assert total("COUNTY", "US-FL-12077") == 1_467_776_153
-    # The missing-denominator example moved off Florida once the IED arrived.
-    assert "US-MS-28033" not in county_ids
+    assert total("COUNTY", "US-FL-12086") == MIAMI_BUNDLED
+    assert "US-CA-06037" not in county_ids
     assert "US-FL-12011" in county_ids
-    assert total("COUNTY", "US-AL-01001") < 50e9
 
 
 def test_county_reference_reports_industry_book_tiv() -> None:
     ref = client.get("/api/counties/US-FL-12086/reference")
     assert ref.status_code == 200, ref.text
     body = ref.json()
-    assert body["industryResidentialTiv"] > 100e9
-    assert body["industryCommercialTiv"] > 100e9
-    assert body["industryTiv"] == 1_015_547_324_629
-    assert body["industryTiv"] == body["industryResidentialTiv"] + body["industryCommercialTiv"]
+    assert body["industryResidentialTiv"] == MIAMI_RES
+    assert body["industryCommercialTiv"] == MIAMI_COM
+    assert body["industryAutoTiv"] == MIAMI_AUTO
+    assert body["industryTiv"] == MIAMI_BUNDLED
+    assert body["industryTiv"] == (
+        body["industryResidentialTiv"] + body["industryCommercialTiv"] + body["industryAutoTiv"]
+    )
 
 
 def test_industry_pivot_is_tiv_by_county() -> None:
@@ -375,13 +405,18 @@ def test_industry_pivot_is_tiv_by_county() -> None:
         for cell in cells
         if cell["rowKey"][0] == "FL" and cell["rowKey"][1] == "Miami-Dade, FL"
     ]
-    assert {cell["colKey"][0] for cell in miami} == {"RESIDENTIAL", "COMMERCIAL"}
+    assert {cell["colKey"][0] for cell in miami} == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
     bundled = sum(cell["values"]["TIV"] for cell in miami)
-    assert bundled > 400e9
-    assert pivoted.json()["grandTotal"]["TIV"] > 70e12
+    assert bundled == MIAMI_BUNDLED
+    summary = json.loads(
+        (Path(get_settings().mock_data_dir) / "industry_exposure_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert pivoted.json()["grandTotal"]["TIV"] == summary["totalTiv"]
 
 
-def test_join_tiv_on_industry_county_matches_both_segments(
+def test_join_tiv_on_industry_county_matches_three_segments(
     provider: MockExposureDataProvider,
 ) -> None:
     facts = [
@@ -390,7 +425,10 @@ def test_join_tiv_on_industry_county_matches_both_segments(
         if fact.geography_id == MIAMI
     ]
     impact = join_tiv([_bare_impact()], facts)[0]
-    assert impact.residential_tiv > 0
-    assert impact.commercial_tiv > 0
-    assert round(impact.tiv, 2) == round(impact.residential_tiv + impact.commercial_tiv, 2)
+    assert impact.residential_tiv == MIAMI_RES
+    assert impact.commercial_tiv == MIAMI_COM
+    assert impact.auto_tiv == MIAMI_AUTO
+    assert round(impact.tiv, 2) == round(
+        impact.residential_tiv + impact.commercial_tiv + impact.auto_tiv, 2
+    )
     assert impact.projected_loss == 0.0

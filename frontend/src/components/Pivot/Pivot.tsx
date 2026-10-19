@@ -193,7 +193,7 @@ export function Pivot() {
         {cedentId === "ced-industry" && (
           <>
             {" "}
-            Industry client: county TIV. Residential and commercial are separate columns and add to the county total.
+            Industry client: county TIV. Residential, commercial, and auto are separate columns and add to the county total.
           </>
         )}
       </p>

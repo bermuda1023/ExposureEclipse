@@ -41,9 +41,10 @@ def county_reference(geography_id: str) -> dict:
         "coastalExposurePct": ref.coastal_exposure_pct,
         "source": ref.source,
         "currency": "USD",
-        # Same dollars as the Industry client. Null only if the county is
-        # outside the US book. Not an RMS or AIR extract.
+        # Same dollars as the Industry client. Null when the county is not
+        # on the supplied windstorm sheet.
         "industryResidentialTiv": None if book is None else book[0],
         "industryCommercialTiv": None if book is None else book[1],
-        "industryTiv": None if book is None else book[2],
+        "industryAutoTiv": None if book is None else book[2],
+        "industryTiv": None if book is None else book[3],
     }
