@@ -112,7 +112,7 @@ def test_portfolio_denominator_matches_selected_peril_and_currency() -> None:
 
 
 def test_map_county_with_ied_gap_emits_market_share_warning() -> None:
-    """`US-MS-28033` is omitted from `mockdata/ied_industry.csv`."""
+    """Los Angeles is outside the supplied windstorm industry sheet."""
     resp = client.post(
         "/api/exposures/map",
         json={
@@ -123,7 +123,7 @@ def test_map_county_with_ied_gap_emits_market_share_warning() -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    gap = next((f for f in body["features"] if f["geographyId"] == "US-MS-28033"), None)
+    gap = next((f for f in body["features"] if f["geographyId"] == "US-CA-06037"), None)
     assert gap is not None
     assert gap["clientMarketShare"] is None
     codes = {w["code"] for w in gap["warnings"]}

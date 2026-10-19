@@ -1,4 +1,9 @@
-"""Build the Industry cedant exposure book.
+"""Retired census estimate for the Industry cedant.
+
+Do not run this. The Industry book is the supplied windstorm workbook.
+Rebuild it with ``backend/scripts/import_usws_industry.py``.
+
+Historical method, kept so the old estimate can be read:
 
 County residential and commercial insured values for wind (WS). The two
 segments are stored separately so the UI can show the split. Map TIV and
@@ -807,7 +812,12 @@ def write_ied(csv_rows: list[dict]) -> None:
 
 
 def main() -> None:
-    acs = load_acs()
+    raise SystemExit(
+        "The census estimate is no longer the Industry book. "
+        "Edit mockdata/usws_tiv_by_county.csv and run "
+        "python backend/scripts/import_usws_industry.py"
+    )
+    acs = load_acs()  # pragma: no cover
     names = load_names()
     cbp = load_cbp()
     activity_by_geo = {geoid: activity_stats(cells) for geoid, cells in cbp.items()}

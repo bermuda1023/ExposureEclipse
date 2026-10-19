@@ -83,6 +83,7 @@ export const OccupancySegment = {
   RESIDENTIAL: "RESIDENTIAL",
   COMMERCIAL: "COMMERCIAL",
   INDUSTRIAL: "INDUSTRIAL",
+  AUTO: "AUTO",
   UNKNOWN: "UNKNOWN",
 } as const;
 export type OccupancySegment = (typeof OccupancySegment)[keyof typeof OccupancySegment];

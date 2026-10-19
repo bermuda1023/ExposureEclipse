@@ -155,6 +155,7 @@ export function HurricaneImpactDetail() {
         <SegmentNote
           residential={data.summary.residentialTiv}
           commercial={data.summary.commercialTiv}
+          auto={data.summary.autoTiv}
           currency={data.currency}
         />
         <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
@@ -429,9 +430,9 @@ function FragmentRow({
         </td>
         <td style={{ ...td, textAlign: "right", color: c.hasData ? "var(--ink-900)" : "var(--ink-400)" }}>
           {c.hasData ? formatMoneyCompact(c.tiv, currency) : "—"}
-          {(c.residentialTiv ?? 0) > 0 && (c.commercialTiv ?? 0) > 0 && (
+          {((c.residentialTiv ?? 0) > 0 || (c.commercialTiv ?? 0) > 0 || (c.autoTiv ?? 0) > 0) && (
             <div style={{ fontSize: "0.58rem", color: "var(--ink-500)", fontWeight: 400 }}>
-              Res {formatMoneyCompact(c.residentialTiv, currency)} · Com {formatMoneyCompact(c.commercialTiv, currency)}
+              Res {formatMoneyCompact(c.residentialTiv ?? 0, currency)} · Com {formatMoneyCompact(c.commercialTiv ?? 0, currency)} · Auto {formatMoneyCompact(c.autoTiv ?? 0, currency)}
             </div>
           )}
           {band && (
@@ -534,17 +535,23 @@ function Stat({ label, value }: { label: string; value: string }) {
 function SegmentNote({
   residential,
   commercial,
+  auto,
   currency,
 }: {
   residential: number | undefined;
   commercial: number | undefined;
+  auto: number | undefined;
   currency: string;
 }) {
-  if ((residential ?? 0) <= 0 || (commercial ?? 0) <= 0) return null;
+  const parts = [
+    (residential ?? 0) > 0 ? `Residential ${formatMoneyCompact(residential, currency)}` : null,
+    (commercial ?? 0) > 0 ? `Commercial ${formatMoneyCompact(commercial, currency)}` : null,
+    (auto ?? 0) > 0 ? `Auto ${formatMoneyCompact(auto, currency)}` : null,
+  ].filter((part): part is string => part != null);
+  if (parts.length === 0) return null;
   return (
     <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
-      Residential {formatMoneyCompact(residential, currency)} · Commercial{" "}
-      {formatMoneyCompact(commercial, currency)}. Information only. The loss uses the bundled total.
+      {parts.join(" · ")}. Information only. The loss uses the bundled total.
     </div>
   );
 }

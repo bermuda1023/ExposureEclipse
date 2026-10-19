@@ -343,7 +343,7 @@ function CedentItem({ cedent }: { cedent: Cedent }) {
         )}
         {isIndustry && (
           <span style={{ fontSize: "0.68rem", color: "var(--ink-500)", lineHeight: 1.35 }}>
-            US property TIV by county. Residential and commercial add to one total.
+            US windstorm TIV by county. Residential, commercial, and auto add to one total.
           </span>
         )}
       </button>

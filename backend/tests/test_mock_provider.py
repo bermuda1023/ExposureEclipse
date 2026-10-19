@@ -187,20 +187,18 @@ def test_ied_has_state_rows_and_county_gap(provider: MockExposureDataProvider) -
         if row.geography_level == AggregationLevel.COUNTY.value
     }
 
-    # State coverage exists for the major cat states.
-    assert {"US-FL", "US-TX", "US-CA", "US-NY"}.issubset(state_geos)
+    # The windstorm sheet covers the Gulf and Atlantic states, not California.
+    assert {"US-FL", "US-TX", "US-NY"}.issubset(state_geos)
+    assert "US-CA" not in state_geos
 
-    # Gap: Jefferson Davis County, Mississippi has facts but no IED row.
-    # Florida is fully covered by the supplied industry book.
     fact_county_geos = {
         f.geography_id
         for f in provider.get_facts_for_dataset("ds-farmers-bda-2027")
         if f.aggregation == AggregationLevel.COUNTY.value
     }
-    assert "US-MS-28033" in fact_county_geos
-    assert "US-MS-28033" not in county_geos
+    assert "US-CA-06037" in fact_county_geos
+    assert "US-CA-06037" not in county_geos
     assert "US-FL-12086" in county_geos
-    # The contrast county IS present → the gap is intentional, not a missing fixture.
     assert "US-FL-12011" in county_geos
 
 
