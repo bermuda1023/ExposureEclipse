@@ -49,8 +49,14 @@ class FitOptions:
     ridge: float = 0.05
     max_iter: int = 3000
     tol: float = 1e-10
+    # Penalty on the second difference of log DR (0 = off).
+    smooth: float = 0.0
     # (band index, DR) pairs held at a value the data here cannot identify.
     fixed: tuple[tuple[int, float], ...] = ()
+    # Bands above the last one holding at least this share of the exposure
+    # follow the prior's shape, scaled at that band (0 = off). Without it the
+    # smoothness penalty extends the fitted log slope into bands with no data.
+    tail_min_weight: float = 0.0
 
 
 @dataclass(slots=True)
@@ -155,6 +161,17 @@ def _evaluate(
         j += opts.ridge * d * d / nb
         if want_grad:
             grad[b] += 2.0 * opts.ridge * d / nb
+    if opts.smooth > 0 and nb >= 3:
+        # Second difference of log DR: the log curve should bend, not step.
+        m = nb - 2
+        for b in range(1, nb - 1):
+            c2 = theta[b + 1] - 2.0 * theta[b] + theta[b - 1]
+            j += opts.smooth * c2 * c2 / m
+            if want_grad:
+                g = 2.0 * opts.smooth * c2 / m
+                grad[b + 1] += g
+                grad[b] -= 2.0 * g
+                grad[b - 1] += g
     return j, grad
 
 
@@ -196,6 +213,8 @@ def fit_curve(
         if moved < 1e-9 or 0 <= improvement < opts.tol:
             break
 
+    if opts.tail_min_weight > 0:
+        theta = _prior_tail(theta, prior, band_weight, opts.tail_min_weight, opts.fixed)
     curve = [math.exp(t) for t in theta]
     county_res, event_err = residuals(obs, curve)
     return FitResult(
@@ -208,6 +227,23 @@ def fit_curve(
         event_errors=event_err,
         band_weight=band_weight,
     )
+
+
+def _prior_tail(
+    theta: list[float],
+    prior: list[float],
+    band_weight: list[float],
+    min_weight: float,
+    fixed: tuple[tuple[int, float], ...],
+) -> list[float]:
+    supported = [b for b, w in enumerate(band_weight) if w >= min_weight]
+    if not supported:
+        return theta
+    last = supported[-1]
+    out = list(theta)
+    for b in range(last + 1, len(out)):
+        out[b] = theta[last] + prior[b] - prior[last]
+    return _project(out, fixed)
 
 
 def predict(o: Observation, curve: list[float]) -> float:
