@@ -247,7 +247,10 @@ export function Methodology() {
         <ul>
           <li>
             Loss is the sum across those slices of county TIV × area fraction
-            × the damage ratio for that category. Custom ratios (mean and SD)
+            × the damage ratio for that category. There are two damage
+            models: <b>Custom</b> and <b>PCS-calibrated</b>. The AIR, KCC and
+            RMS Form V-1 presets were removed; a saved choice of one opens as
+            PCS-calibrated. Custom ratios (mean and SD)
             stay editable. PCS-calibrated applies the fitted insured curve to
             the county&apos;s own 10 mph wind mix. The curve is fitted only on
             wind-dominant PCS events (list below). Its displayed range is the{" "}

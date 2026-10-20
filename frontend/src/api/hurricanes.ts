@@ -100,7 +100,7 @@ export interface ImpactedCounty {
   rmaxSource: "ibtracs" | "willoughby" | "nhc";
   /** Local-wind slices. Loss is the sum of TIV × areaFraction × that category's damage ratio. */
   windBands?: WindBand[];
-  /** Same samples in 10 mph bands. Vendor curves use these; custom uses windBands. */
+  /** Same samples in 10 mph bands. PCS-calibrated uses these; custom uses windBands. */
   speedBins?: SpeedBin[];
   tiv: number;
   /** Informational split. The loss band uses tiv, not these fields. */

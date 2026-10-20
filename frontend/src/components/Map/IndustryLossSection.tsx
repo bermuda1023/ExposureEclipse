@@ -1,8 +1,9 @@
 /**
  * Industry loss for the active storm, computed on the backend from the
  * industry TIV (supplied vintage, else the built-in book) and a damage-curve
- * set (calibrated against supplied PCS losses, else Form V-1). When the storm
- * has supplied actuals the section also shows modelled vs actual.
+ * set (calibrated against supplied PCS losses, else the uncalibrated Form V-1
+ * prior). When the storm has supplied actuals the section also shows modelled
+ * vs actual.
  */
 
 import { useMemo, useState } from "react";

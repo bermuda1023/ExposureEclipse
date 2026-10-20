@@ -318,11 +318,16 @@ a lognormal with the fitted mean: `SD = mean × sqrt(exp(σ²) − 1)`.
 
 The ratios are insured loss over total TIV on this app's marine-wind
 categories, which run about 1.4× hot over land (§Post-event evidence), so
-Cat 2–4 sit below vendor ground-up curves. A stored table still equal to the
+Cat 2–4 sit below published ground-up curves. A stored table still equal to the
 earlier all-event defaults (or the pre-calibration hand-set values) moves to
 these on load; edited tables are kept.
 
 ### PCS-calibrated chip
+
+The damage assumptions selector has two models: **Custom** (the typed category
+table) and **PCS-calibrated**. The AIR / KCC / RMS Form V-1 presets were
+removed; a stored choice of one of them loads as PCS-calibrated
+(`normalizeDamageModel`, persist version 3), and the typed table is kept.
 
 `model = "pcs"` uses the backend's default calibrated curve set instead of a
 category table. `blendCalibratedCurve` weights the residential / commercial /
@@ -393,8 +398,8 @@ For each county in the storm's wind field and each segment
 
     loss[seg] = exposedFraction × TIV[seg] × Σ_b areaFraction_b × insuredDR[seg](land_mph(mph_b))
 
-`land_mph` is `mph_b × windFactor` for vendor sets; calibrated sets add the
-observed-wind shape (§Observed-wind calibration).
+`land_mph` is `mph_b × windFactor` for the uncalibrated prior; calibrated sets
+add the observed-wind shape (§Observed-wind calibration).
 
 - `areaFraction_b` = share of the county polygon whose peak local wind is in
   10 mph band `b`, from `compute_impact` `speed_bins`. `mph_b` is the band
@@ -409,9 +414,15 @@ observed-wind shape (§Observed-wind calibration).
   (`industry_tiv/<year>.csv`), else the built-in Industry book (no auto).
 - `DR[seg]` = curve set (`services/damage_curves.py`), linear between the
   Form V-1 band midpoints (45.5 … 165.5 mph over land), zero at 39 mph.
-  Built-ins are Form V-1 AIR / KCC / RMS. ASSUMPTION until calibrated:
-  commercial = residential curve, auto = 15% of it.
-- **Insured, not ground-up.** Vendor curves are ground-up. Each segment's
+  The selectable sets are the calibrated files in `mockdata/damage_curves/`.
+  The Form V-1 KCC table is kept only as the calibration prior
+  (`prior_curve_set()`, id `form-v1-prior`): the fit's ridge target, the shape
+  for segments a fit has no data for, and the served set when no calibrated
+  file exists. AIR / KCC / RMS are no longer curve sets; a `curveSetId` of
+  `air`, `kcc` or `rms` resolves to the default calibrated set and the
+  response says so in `notes`. ASSUMPTION for the prior: commercial =
+  residential curve, auto = 15% of it.
+- **Insured, not ground-up.** The Form V-1 prior is ground-up. Each segment's
   deductible (fraction of TIV; ASSUMPTION residential 1.3% ≈ 2% of Cov A,
   commercial 3%, auto 3%) is applied per location, with location DR ~
   Beta(mean = county DR, precision 9): `insuredDR = E[max(0, X − d)]`.
@@ -424,8 +435,8 @@ use `sigmaLogCounty`, segment and event bands use `sigmaLogEvent`:
     median = mean × exp(−σ²/2);  P10/P90 = median × exp(∓1.2816 σ)
 
 Event bands are not the sum of county bands (that would assume every county
-misses in the same direction). Calibrated sets carry fitted sigmas; built-ins
-use 0.9 (county) and 0.45 (event), both assumptions.
+misses in the same direction). Calibrated sets carry fitted sigmas; the
+uncalibrated prior uses 0.9 (county) and 0.45 (event), both assumptions.
 
 ### Calibration against supplied PCS losses
 
@@ -530,7 +541,7 @@ Findings across the 15 PCS events, on the built-in book TIV (2026-10). Columns:
 | Zeta 2020 | 0.72 | 0.55 | 131 | 2.33 | 27% (wind 22%) |
 
 What it says:
-- **The modelled land wind runs hot: about 1.4× airport observations in a typical event.** The obs / model median is 0.72, over a range of 0.61–0.90. About 4% of that is 2-min versus 1-min averaging, and failed anemometers pull the observed peaks down a little. The rest is real: `windFactor` 0.80 plus the radii profile overstate open-terrain wind inland. The vendor curves therefore see too much wind and need a lower curve to compensate. A calibrated set absorbs the average.
+- **The modelled land wind runs hot: about 1.4× airport observations in a typical event.** The obs / model median is 0.72, over a range of 0.61–0.90. About 4% of that is 2-min versus 1-min averaging, and failed anemometers pull the observed peaks down a little. The rest is real: `windFactor` 0.80 plus the radii profile overstate open-terrain wind inland. The Form V-1 prior therefore sees too much wind and need a lower curve to compensate. A calibrated set absorbs the average.
 - **The event-to-event spread is the nuance.** With damage rising roughly as wind^5, a 0.61 versus 0.90 bias is a factor of about 7 in loss. Florence, Isaias, Debby and Ida, slow or weakening storms with broad wind fields, have the most over-modelled wind. Delta and Laura, compact landfalling majors, have the least. `calibrate_damage_curves.py --wind-correction evidence` scales each event's wind by its bias relative to the all-event median, clamped to 0.7–1.3. The curve then learns vulnerability rather than one storm's wind-field error.
 - **Hazard reports do not allocate PCS loss.** Florence, Ida, Helene and
   Debby carry 18–29% of their dollars in counties with flood reports or

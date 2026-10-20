@@ -62,7 +62,7 @@ vi.mock("../../../api/hooks", () => ({
       defaultId: "calibrated-x",
       curveSets: [
         { id: "calibrated-x", label: "Calibrated X" },
-        { id: "kcc", label: "KCC (Form V-1)" },
+        { id: "calibrated-y", label: "Calibrated Y" },
       ],
     },
   }),

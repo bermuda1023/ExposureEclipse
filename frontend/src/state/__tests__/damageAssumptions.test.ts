@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DAMAGE_MODEL_LABEL,
   DEFAULTS,
   applyCategory,
   blendCalibratedCurve,
@@ -7,6 +8,7 @@ import {
   calibratedPercent,
   effectiveAssumptions,
   migrateDamageAssumptions,
+  normalizeDamageModel,
 } from "../damageAssumptions";
 import type { CurveSetInfo } from "../../api/industryLoss";
 
@@ -33,9 +35,25 @@ describe("trained damage defaults", () => {
 
   it("keep a table the underwriter edited", () => {
     const edited = { ...OLD, [3]: { mean: 12, sd: 5 } };
-    const out = migrateDamageAssumptions({ byCategory: edited, model: "kcc" }, 0);
+    const out = migrateDamageAssumptions({ byCategory: edited, model: "custom" }, 0);
     expect(out.byCategory[3]).toEqual({ mean: 12, sd: 5 });
-    expect(out.model).toBe("kcc");
+    expect(out.model).toBe("custom");
+  });
+
+  it("move a stored AIR / KCC / RMS choice to PCS-calibrated and keep the table", () => {
+    const edited = { ...DEFAULTS, [3]: { mean: 12, sd: 5 } };
+    for (const model of ["air", "kcc", "rms"]) {
+      const out = migrateDamageAssumptions({ byCategory: edited, model }, 2);
+      expect(out.model).toBe("pcs");
+      expect(out.byCategory[3]).toEqual({ mean: 12, sd: 5 });
+    }
+    expect(migrateDamageAssumptions({ byCategory: edited }, 2).model).toBe("custom");
+  });
+
+  it("offer only Custom and PCS-calibrated", () => {
+    expect(Object.keys(DAMAGE_MODEL_LABEL)).toEqual(["custom", "pcs"]);
+    expect(normalizeDamageModel("kcc")).toBe("pcs");
+    expect(normalizeDamageModel("custom")).toBe("custom");
   });
 
   it("price a Cat 4 slice with the trained band", () => {
@@ -142,6 +160,8 @@ describe("PCS-calibrated curve", () => {
     expect(band.low).toBeCloseTo(band.mean * 0.8);
     expect(band.high).toBeCloseTo(band.mean * 1.25);
     expect(band.bandKind).toBe("holdout-range");
+    // A legacy vendor id still in memory prices as PCS-calibrated.
+    expect(effectiveAssumptions("kcc" as never, DEFAULTS, bins, curve)).toEqual(out);
   });
 
   it("falls back to the typed table without a curve", () => {

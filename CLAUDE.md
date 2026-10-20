@@ -46,8 +46,9 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
  live and historical storms: county wind-band mix × supplied industry TIV
  vintage (`mockdata/industry_tiv/<year>.csv`, else the built-in book) × a
  versioned damage-curve set. Marine storm wind is converted to land wind
- (`windFactor`) and vendor curves are taken to insured loss via per-segment
- deductibles. Curves are fitted to supplied PCS county losses
+ (`windFactor`). The damage selector offers only Custom and PCS-calibrated; the
+ AIR / KCC / RMS presets are gone and old `curveSetId`s for them fall back to
+ the calibrated default. Curves are fitted to supplied PCS county losses
  (`mockdata/industry_losses/*.csv`) by `backend/scripts/calibrate_damage_curves.py`,
  on modelled wind reshaped to ~2,100 ASOS airport observations
  (`services/wind_calibration.py`; per-county station correction is opt-in via
