@@ -56,6 +56,7 @@ import {
   STATE_BAR_HEIGHT_STOPS,
   barHeightExpression,
 } from "./barHeight";
+import { countyLineOpacityExpression } from "./countyLine";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ?? "";
 
@@ -267,22 +268,7 @@ export function MapView({ data, isLoading, error }: Props) {
             3,
             0,
           ],
-          "line-opacity": [
-            "case",
-            ["==", ["feature-state", "stormFocused"], true],
-            1.0,
-            ["==", ["feature-state", "stormHit"], true],
-            0.95,
-            // Fade county outlines in/out around the COUNTY_THRESHOLD so
-            // we don't see a wall of county borders at country zoom.
-            [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              COUNTY_THRESHOLD - 0.4, 0,
-              COUNTY_THRESHOLD, 0.6,
-            ],
-          ],
+          "line-opacity": countyLineOpacityExpression(COUNTY_THRESHOLD),
         },
       });
 
