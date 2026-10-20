@@ -51,6 +51,11 @@ import { liveStormHidesExposureFills, useLiveStormStore } from "../../state/live
 import { useLiveWildfireStore } from "../../state/liveWildfire";
 import { useLiveFloodStore } from "../../state/liveFlood";
 import { MapTooltip } from "./Tooltip";
+import {
+  COUNTY_BAR_HEIGHT_STOPS,
+  STATE_BAR_HEIGHT_STOPS,
+  barHeightExpression,
+} from "./barHeight";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ?? "";
 
@@ -75,9 +80,6 @@ const COUNTY_FILL = "county-fill";
 const COUNTY_LINE = "county-line";
 const STATE_BARS = "state-bars";
 const COUNTY_BARS = "county-bars";
-// Tallest column in metres at zoom 3. Halves per zoom level so the tallest
-// bar stays about the same height on screen.
-const BAR_MAX_HEIGHT_Z3 = 3_500_000;
 const BAR_PITCH = 50;
 const BAR_FALLBACK_LAND = "#f4f3f0";
 
@@ -360,22 +362,15 @@ export function MapView({ data, isLoading, error }: Props) {
       const landRaw = bg?.paint?.["background-color"];
       const land = typeof landRaw === "string" ? landRaw : BAR_FALLBACK_LAND;
       const firstSymbol = map.getStyle()?.layers?.find((l) => l.type === "symbol")?.id;
-      const barHeight = [
-        "interpolate",
-        ["exponential", 2],
-        ["zoom"],
-        3, ["*", ["coalesce", ["feature-state", "bar"], 0], BAR_MAX_HEIGHT_Z3],
-        12, ["*", ["coalesce", ["feature-state", "bar"], 0], BAR_MAX_HEIGHT_Z3 / 512],
-      ] as unknown as mapboxgl.ExpressionSpecification;
       const barColor = [
         "case",
         ["boolean", ["feature-state", "hasData"], false],
         ["coalesce", ["feature-state", "fill"], NO_DATA_COLOR],
         land,
       ] as unknown as mapboxgl.ExpressionSpecification;
-      for (const [id, tiles, env] of [
-        [STATE_BARS, STATE_TILESET, STATE_ENV],
-        [COUNTY_BARS, COUNTY_TILESET, COUNTY_ENV],
+      for (const [id, tiles, env, heightStops] of [
+        [STATE_BARS, STATE_TILESET, STATE_ENV, STATE_BAR_HEIGHT_STOPS],
+        [COUNTY_BARS, COUNTY_TILESET, COUNTY_ENV, COUNTY_BAR_HEIGHT_STOPS],
       ] as const) {
         map.addLayer(
           {
@@ -388,9 +383,9 @@ export function MapView({ data, isLoading, error }: Props) {
             layout: { visibility: "none" },
             paint: {
               "fill-extrusion-color": barColor,
-              "fill-extrusion-height": barHeight,
+              "fill-extrusion-height": barHeightExpression(heightStops),
               "fill-extrusion-base": 0,
-              "fill-extrusion-opacity": 0.92,
+              "fill-extrusion-opacity": 0.84,
               "fill-extrusion-vertical-gradient": true,
             },
           },
