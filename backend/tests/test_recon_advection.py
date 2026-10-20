@@ -299,7 +299,9 @@ def test_location_budget_refuses_the_next_grid_without_a_request(monkeypatch):
     wf._GRID_CACHE.clear()
     wf._bulk_cache.clear()
     wf._location_events.clear()
-    monkeypatch.setattr(wf, "_LOCATION_BUDGET", 6)
+    # The inclusive 0.25-degree grid has 3 x 3 = 9 cells. Admit exactly one
+    # grid, then verify that the next one is refused before an upstream call.
+    monkeypatch.setattr(wf, "_LOCATION_BUDGET", 9)
     calls = {"n": 0}
 
     def fake(lat_str, lon_str, model_key, refresh=False, **_kwargs):

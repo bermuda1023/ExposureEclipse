@@ -21,6 +21,9 @@ def test_compute_impact_uses_nhc_quadrants(monkeypatch) -> None:
         centroid_lon=-79.75,
     )
     monkeypatch.setattr(hi, "county_centroids", lambda: {"12086": county})
+    # Keep this unit test independent of real county samples cached by earlier
+    # tests in the same process; it is exercising the quadrant/centroid path.
+    monkeypatch.setattr(hi, "county_area_samples", lambda: {})
 
     storm = Storm(
         storm_id="AL012026",
