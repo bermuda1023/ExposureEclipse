@@ -117,11 +117,7 @@ export function Shell() {
   const mapQuery = useMapData(debouncedMapRequest);
   const featureWarnings = mapQuery.data?.features.flatMap((f) => f.warnings) ?? [];
   const allWarnings = [...(mapQuery.data?.warnings ?? []), ...featureWarnings];
-  const cedentId = useSelectionStore((s) => s.cedentId);
   const hasSelection = true; // portfolio mode is always a valid view
-  useEffect(() => {
-    if (cedentId === "ced-industry") setPivotOpen(true);
-  }, [cedentId]);
 
   // Anything the user actively navigated to (a clicked geography or a
   // pushed hurricane-impact view) counts as detail content worth peeking
