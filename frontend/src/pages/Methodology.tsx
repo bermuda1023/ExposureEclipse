@@ -253,7 +253,11 @@ export function Methodology() {
             NFIP; flood and high-water reports are context, not a reason to
             remove a PCS row. Residential, commercial, and auto figures are information
             only; the loss uses the bundled county TIV, spread evenly across
-            the polygon because the book is not location-level.
+            the polygon because the book is not location-level. Separate
+            residential, commercial, and auto curves were tested with each
+            event held out in turn: they do not improve event totals, so the
+            panel keeps one book-mix curve. The industry-loss engine keeps its
+            segment curves only because they improve the commercial split.
           </li>
           <li>
             The per-county <b>scale</b> is an extra haircut on top of the
