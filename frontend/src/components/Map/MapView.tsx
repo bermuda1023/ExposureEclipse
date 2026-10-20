@@ -163,6 +163,7 @@ export function MapView({ data, isLoading, error }: Props) {
       // wrong world coordinates.
       projection: "mercator",
     });
+    installMapDiagnostics(map);
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new mapboxgl.ScaleControl({ unit: "imperial" }), "bottom-left");
 
@@ -453,6 +454,7 @@ export function MapView({ data, isLoading, error }: Props) {
     return () => {
       resizeObserver.disconnect();
       cancelAnimationFrame(resizeFrame);
+      removeMapDiagnostics(map);
       map.remove();
       mapRef.current = null;
       setMapInstance(null);
@@ -831,6 +833,53 @@ function enforceDisplayPitch(map: MbMap, display: "fill" | "bars"): void {
     if (map.getPitch() < BAR_MIN_PITCH) map.setPitch(BAR_PITCH);
   } else if (map.getPitch() > 0.5) {
     map.setPitch(0);
+  }
+}
+
+type MapDiagnosticWindow = Window & {
+  __PERIL_VISTA_MAP__?: MbMap;
+  __PERIL_VISTA_MAP_DIAGNOSTICS__?: () => unknown;
+};
+
+function installMapDiagnostics(map: MbMap): void {
+  const target = window as MapDiagnosticWindow;
+  target.__PERIL_VISTA_MAP__ = map;
+  target.__PERIL_VISTA_MAP_DIAGNOSTICS__ = () => {
+    const layerIds = [STATE_FILL, COUNTY_FILL, STATE_BARS, COUNTY_BARS];
+    const barLayers = [STATE_BARS, COUNTY_BARS].filter((id) => map.getLayer(id));
+    const rendered = barLayers.length > 0
+      ? map.queryRenderedFeatures({ layers: barLayers })
+      : [];
+    return {
+      pitch: map.getPitch(),
+      zoom: map.getZoom(),
+      projection: map.getProjection()?.name,
+      layers: Object.fromEntries(
+        layerIds.map((id) => [
+          id,
+          {
+            exists: Boolean(map.getLayer(id)),
+            visibility: map.getLayer(id)
+              ? map.getLayoutProperty(id, "visibility")
+              : null,
+          },
+        ]),
+      ),
+      renderedBarFeatures: rendered.length,
+      barFeatureState: rendered.slice(0, 10).map((feature) => ({
+        id: feature.id,
+        bar: feature.state?.bar ?? null,
+        hasData: feature.state?.hasData ?? null,
+      })),
+    };
+  };
+}
+
+function removeMapDiagnostics(map: MbMap): void {
+  const target = window as MapDiagnosticWindow;
+  if (target.__PERIL_VISTA_MAP__ === map) {
+    delete target.__PERIL_VISTA_MAP__;
+    delete target.__PERIL_VISTA_MAP_DIAGNOSTICS__;
   }
 }
 
