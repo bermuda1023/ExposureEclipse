@@ -81,6 +81,7 @@ const COUNTY_LINE = "county-line";
 const STATE_BARS = "state-bars";
 const COUNTY_BARS = "county-bars";
 const BAR_PITCH = 50;
+const BAR_MIN_PITCH = 20;
 const BAR_FALLBACK_LAND = "#f4f3f0";
 
 // Zoom at which the county layer becomes the primary fill (and hover target).
@@ -394,6 +395,17 @@ export function MapView({ data, isLoading, error }: Props) {
       }
 
       styleReadyRef.current = true;
+      // `style.load` fires before this `load` callback has added our custom
+      // layers. A user who selected Bars during initial load previously ran
+      // the visibility effect too early: it found no layers, then the fills
+      // were added visible and the bars hidden. Synchronise from live store
+      // state only after every custom layer exists.
+      applyExposureVisibility(
+        map,
+        mapDisplayRef.current,
+        exposureLayersHidden(),
+      );
+      enforceDisplayPitch(map, mapDisplayRef.current);
       // First-paint sync of any data that arrived before the style was ready.
       flushFeatureState();
     });
@@ -683,25 +695,11 @@ export function MapView({ data, isLoading, error }: Props) {
   );
   useEffect(() => {
     const m = mapInstance;
-    if (!m) return;
+    if (!m || !styleReadyRef.current) return;
     const hidden =
       hazardActive !== null || wildfireHidesExposures || floodHidesExposures
         || stormHidesExposures;
-    const showBars = !hidden && mapDisplay === "bars";
-    const showFills = !hidden && mapDisplay === "fill";
-    const apply = () => {
-      for (const id of [STATE_FILL, COUNTY_FILL]) {
-        if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", showFills ? "visible" : "none");
-      }
-      for (const id of [STATE_BARS, COUNTY_BARS]) {
-        if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", showBars ? "visible" : "none");
-      }
-    };
-    if (m.isStyleLoaded()) apply();
-    else m.once("style.load", apply);
-    return () => {
-      m.off("style.load", apply);
-    };
+    applyExposureVisibility(m, mapDisplay, hidden);
   }, [
     mapInstance,
     hazardActive,
@@ -715,8 +713,15 @@ export function MapView({ data, isLoading, error }: Props) {
   useEffect(() => {
     const m = mapInstance;
     if (!m) return;
-    const target = mapDisplay === "bars" ? BAR_PITCH : 0;
-    if (Math.abs(m.getPitch() - target) > 0.5) m.easeTo({ pitch: target, duration: 600 });
+    // Camera transitions (Industry county focus, fitBounds, browser resize) and
+    // user input can cancel an in-flight easeTo. Set the pitch immediately and
+    // restore the display invariant after any later camera transition.
+    const ensurePitch = () => enforceDisplayPitch(m, mapDisplay);
+    ensurePitch();
+    m.on("moveend", ensurePitch);
+    return () => {
+      m.off("moveend", ensurePitch);
+    };
   }, [mapInstance, mapDisplay]);
 
   // ── Render ──
@@ -791,6 +796,42 @@ export function MapView({ data, isLoading, error }: Props) {
 function pickLayer(isCounty: boolean, display: "fill" | "bars"): string {
   if (display === "bars") return isCounty ? COUNTY_BARS : STATE_BARS;
   return isCounty ? COUNTY_FILL : STATE_FILL;
+}
+
+function exposureLayersHidden(): boolean {
+  return (
+    useHazardOverlayStore.getState().active !== null
+    || (useLiveWildfireStore.getState().active && useLiveWildfireStore.getState().hideExposures)
+    || (useLiveFloodStore.getState().active && useLiveFloodStore.getState().hideExposures)
+    || liveStormHidesExposureFills(useLiveStormStore.getState())
+  );
+}
+
+function applyExposureVisibility(
+  map: MbMap,
+  display: "fill" | "bars",
+  hidden: boolean,
+): void {
+  const showBars = !hidden && display === "bars";
+  const showFills = !hidden && display === "fill";
+  for (const id of [STATE_FILL, COUNTY_FILL]) {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, "visibility", showFills ? "visible" : "none");
+    }
+  }
+  for (const id of [STATE_BARS, COUNTY_BARS]) {
+    if (map.getLayer(id)) {
+      map.setLayoutProperty(id, "visibility", showBars ? "visible" : "none");
+    }
+  }
+}
+
+function enforceDisplayPitch(map: MbMap, display: "fill" | "bars"): void {
+  if (display === "bars") {
+    if (map.getPitch() < BAR_MIN_PITCH) map.setPitch(BAR_PITCH);
+  } else if (map.getPitch() > 0.5) {
+    map.setPitch(0);
+  }
 }
 
 function clamp(v: number, lo: number, hi: number): number {
