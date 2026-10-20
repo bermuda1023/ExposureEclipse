@@ -11,6 +11,14 @@ import { listCedents } from "./cedents";
 import { fetchDetail, fetchMap, fetchPivot } from "./exposures";
 import { apiGet } from "./client";
 import { getErtJobStatus } from "./jobs";
+import {
+  fetchBacktest,
+  fetchDamageCurves,
+  fetchIndustryLoss,
+  type BacktestResponse,
+  type DamageCurvesResponse,
+  type IndustryLossResponse,
+} from "./industryLoss";
 import type { CedentTreeResponse } from "./cedents";
 import type {
   DatasetStatusResponse,
@@ -74,6 +82,34 @@ export const usePivotData = (req: PivotRequest | null) =>
     queryKey: req ? queryKeys.pivot(req) : ["exposures", "pivot", null],
     queryFn: ({ signal }) => fetchPivot(req as PivotRequest, signal),
     enabled: Boolean(req),
+  });
+
+export const useDamageCurves = () =>
+  useQuery<DamageCurvesResponse>({
+    queryKey: ["damage-curves"],
+    queryFn: fetchDamageCurves,
+    staleTime: 5 * 60_000,
+  });
+
+export const useIndustryLoss = (
+  stormId: string | null,
+  curveSetId: string | null,
+  exposedFraction: Record<string, number>,
+) =>
+  useQuery<IndustryLossResponse>({
+    queryKey: ["industry-loss", stormId, curveSetId, exposedFraction],
+    queryFn: () =>
+      fetchIndustryLoss(stormId as string, { curveSetId, exposedFraction }),
+    enabled: Boolean(stormId),
+    staleTime: 60_000,
+  });
+
+export const useIndustryBacktest = (stormId: string | null, curveSetId: string | null, enabled: boolean) =>
+  useQuery<BacktestResponse>({
+    queryKey: ["industry-backtest", stormId, curveSetId],
+    queryFn: () => fetchBacktest(stormId as string, curveSetId),
+    enabled: Boolean(stormId) && enabled,
+    staleTime: 60_000,
   });
 
 /** Polls until status is terminal — BACKGROUND_JOBS_SPEC.md §"Polling guidance". */

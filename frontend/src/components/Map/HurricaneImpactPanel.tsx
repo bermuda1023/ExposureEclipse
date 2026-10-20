@@ -18,6 +18,7 @@ import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
 import { CountyWindSlices } from "./CountyWindSlices";
+import { IndustryLossSection } from "./IndustryLossSection";
 import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
 
 export function HurricaneImpactPanel() {
@@ -232,6 +233,8 @@ export function HurricaneImpactPanel() {
             {data.footprint.length > 0 && (
               <RmaxSourceLine footprint={data.footprint} />
             )}
+
+            <IndustryLossSection stormId={data.stormId} />
 
             <div
               style={{
