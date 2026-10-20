@@ -6,7 +6,9 @@
  * without touching the UI. CLAUDE.md rule 1.
  */
 
+import { useMemo } from "react";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { blendCalibratedCurve, type CalibratedCurve } from "../state/damageAssumptions";
 import { listCedents } from "./cedents";
 import { fetchDetail, fetchMap, fetchPivot } from "./exposures";
 import { apiGet } from "./client";
@@ -90,6 +92,15 @@ export const useDamageCurves = () =>
     queryFn: fetchDamageCurves,
     staleTime: 5 * 60_000,
   });
+
+/** The default calibrated curve set, blended across segments by book mix. */
+export const useCalibratedCurve = (): CalibratedCurve | null => {
+  const { data } = useDamageCurves();
+  return useMemo(
+    () => blendCalibratedCurve(data?.curveSets.find((c) => c.id === data.defaultId)),
+    [data],
+  );
+};
 
 export const useIndustryLoss = (
   stormId: string | null,

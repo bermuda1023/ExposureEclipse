@@ -15,6 +15,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import type { CurveSetInfo, LossSegment } from "../api/industryLoss";
 
 /** Saffir-Simpson key. 0 = Tropical Storm; -1 = Tropical Depression. */
 export type Sshws = -1 | 0 | 1 | 2 | 3 | 4 | 5;
@@ -33,7 +34,21 @@ export interface DamageAssumptionsState {
   reset: () => void;
 }
 
-export type DamageModel = "custom" | "air" | "kcc" | "rms";
+export type DamageModel = "custom" | "pcs" | "air" | "kcc" | "rms";
+export type VendorModel = "air" | "kcc" | "rms";
+
+/** The backend's default calibrated curve set, blended across segments by the
+ *  industry book mix: insured DR at each land-wind band midpoint. */
+export interface CalibratedCurve {
+  id: string;
+  label: string;
+  bandMid: number[];   // land mph
+  dr: number[];        // decimal 0..1
+  windFactor: number;
+  windExponent: number;
+  windFloor: number;
+  sigmaLogEvent: number;
+}
 
 /** Florida Commission Form V-1 Part A, building damage / building exposure.
  *  1-minute sustained mph. Unmitigated reference structures (wood, masonry,
@@ -64,6 +79,7 @@ const KT_TO_MPH = 1.15078;
 
 export const DAMAGE_MODEL_LABEL: Record<DamageModel, string> = {
   custom: "Custom",
+  pcs: "PCS-calibrated",
   air: "AIR",
   kcc: "KCC",
   rms: "RMS",
@@ -171,8 +187,85 @@ export interface SpeedBin {
   maxWindKt?: number;
 }
 
+const REF_MARINE_MPH = 64 * KT_TO_MPH;
+const ZERO_DAMAGE_MPH = 39;
+
+/** Same transform as backend damage_curves.land_mph. */
+export function calibratedLandMph(curve: CalibratedCurve, marineMph: number): number {
+  if (marineMph <= 0) return 0;
+  const shape = curve.windExponent ? (marineMph / REF_MARINE_MPH) ** curve.windExponent : 1;
+  return curve.windFactor * marineMph * Math.max(curve.windFloor, shape);
+}
+
+/** Insured DR (%) at one marine wind speed, linear between band midpoints. */
+export function calibratedPercent(curve: CalibratedCurve, marineMph: number): number {
+  const mph = calibratedLandMph(curve, marineMph);
+  const mids = curve.bandMid;
+  if (mph <= ZERO_DAMAGE_MPH || mids.length === 0) return 0;
+  if (mph <= mids[0]) return (100 * curve.dr[0] * (mph - ZERO_DAMAGE_MPH)) / (mids[0] - ZERO_DAMAGE_MPH);
+  for (let i = 0; i < mids.length - 1; i++) {
+    if (mph <= mids[i + 1]) {
+      const t = (mph - mids[i]) / (mids[i + 1] - mids[i]);
+      return 100 * (curve.dr[i] * (1 - t) + curve.dr[i + 1] * t);
+    }
+  }
+  return 100 * curve.dr[mids.length - 1];
+}
+
+// ASSUMPTION: the supplied industry book's TIV mix, used when a curve file
+// predates the bookMix field.
+const DEFAULT_BOOK_MIX: Record<LossSegment, number> = {
+  RESIDENTIAL: 0.478,
+  COMMERCIAL: 0.491,
+  AUTO: 0.031,
+};
+
+/** Collapse a calibrated curve set to one curve, weighting each segment by
+ *  its share of the industry book. Null for vendor sets. */
+export function blendCalibratedCurve(set: CurveSetInfo | null | undefined): CalibratedCurve | null {
+  if (!set || set.kind !== "calibrated") return null;
+  const mix = set.fit?.bookMix ?? DEFAULT_BOOK_MIX;
+  const segs = (Object.keys(set.segments) as LossSegment[]).filter(
+    (s) => (set.segments[s]?.length ?? 0) === set.bandsMphLo.length && (mix[s] ?? 0) > 0,
+  );
+  const total = segs.reduce((s, seg) => s + (mix[seg] ?? 0), 0);
+  if (total <= 0) return null;
+  const dr = set.bandsMphLo.map((_, b) =>
+    segs.reduce((s, seg) => s + ((mix[seg] ?? 0) / total) * set.segments[seg]![b], 0),
+  );
+  return {
+    id: set.id,
+    label: set.label,
+    bandMid: set.bandsMphLo.map((lo) => lo + 4.5),
+    dr,
+    windFactor: set.windFactor,
+    windExponent: set.windExponent ?? 0,
+    windFloor: set.windFloor ?? 0,
+    sigmaLogEvent: set.sigmaLogEvent,
+  };
+}
+
+/** SD (%) of a lognormal with this mean and the curve's event log-spread. */
+export function calibratedSd(curve: CalibratedCurve, meanPct: number): number {
+  const s = curve.sigmaLogEvent;
+  return meanPct * Math.sqrt(Math.exp(s * s) - 1);
+}
+
+const CATEGORY_KT: Record<number, [number, number]> = {
+  0: [34, 63], 1: [64, 82], 2: [83, 95], 3: [96, 112], 4: [113, 136], 5: [137, 160],
+};
+
+function calibratedCategoryMean(curve: CalibratedCurve, cat: Sshws): number {
+  const range = CATEGORY_KT[cat];
+  if (!range) return 0;
+  const [lo, hi] = range;
+  let sum = 0;
+  for (let k = 0; k <= 20; k++) sum += calibratedPercent(curve, (lo + ((hi - lo) * k) / 20) * KT_TO_MPH);
+  return sum / 21;
+}
+
 /** Damage ratio (%) from a Form V-1 row. Below 41 mph the table is silent. */
-export function formV1Percent(model: Exclude<DamageModel, "custom">, mphLo: number): number {
+export function formV1Percent(model: VendorModel, mphLo: number): number {
   if (mphLo < 41) return 0;
   const row = FORM_V1.find((r) => r.lo === mphLo) ?? (mphLo > 161 ? FORM_V1[FORM_V1.length - 1] : undefined);
   return row ? row[model] : 0;
@@ -180,8 +273,9 @@ export function formV1Percent(model: Exclude<DamageModel, "custom">, mphLo: numb
 
 /** Unweighted mean of the Form V-1 rows whose midpoint sits in this category.
  *  The county loss uses the county's own mix, not this average. */
-export function categoryCurveMean(model: DamageModel, cat: Sshws): number {
+export function categoryCurveMean(model: DamageModel, cat: Sshws, curve?: CalibratedCurve | null): number {
   if (model === "custom") return 0;
+  if (model === "pcs") return curve ? calibratedCategoryMean(curve, cat) : 0;
   const rows = FORM_V1.filter(
     (r) => categoryForWind(Math.round(((r.lo + r.hi) / 2) / KT_TO_MPH)) === cat,
   );
@@ -193,14 +287,31 @@ export function categoryCurveMean(model: DamageModel, cat: Sshws): number {
  * Means the loss should use. Custom keeps the typed numbers. A vendor curve
  * uses the 10 mph mix inside each category when the impact sent speed bins,
  * otherwise the category average of the published table. SD stays the user's.
+ * PCS-calibrated does the same with the backend's calibrated curve and takes
+ * its SD from the curve's event spread; without the curve it falls back to
+ * the typed numbers.
  */
 export function effectiveAssumptions(
   model: DamageModel | undefined,
   byCategory: Record<Sshws, CategoryAssumption>,
   speedBins?: SpeedBin[] | null,
+  curve?: CalibratedCurve | null,
 ): Record<Sshws, CategoryAssumption> {
   if (!model || model === "custom") return byCategory;
-  const vendor = model;
+  if (model === "pcs") {
+    if (!curve) return byCategory;
+    const out: Record<Sshws, CategoryAssumption> = { ...byCategory };
+    for (const cat of CATEGORY_ORDER) {
+      const mine = (speedBins ?? []).filter((b) => b.category === cat && b.areaFraction > 0);
+      const weight = mine.reduce((s, b) => s + b.areaFraction, 0);
+      const mean = weight > 0
+        ? mine.reduce((s, b) => s + b.areaFraction * calibratedPercent(curve, b.mphLo + 4.5), 0) / weight
+        : calibratedCategoryMean(curve, cat);
+      out[cat] = { mean, sd: calibratedSd(curve, mean) };
+    }
+    return out;
+  }
+  const vendor: VendorModel = model;
   const out: Record<Sshws, CategoryAssumption> = { ...byCategory };
   for (const cat of CATEGORY_ORDER) {
     const mine = (speedBins ?? []).filter((b) => b.category === cat && b.areaFraction > 0);

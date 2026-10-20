@@ -17,10 +17,13 @@ export interface CurveSetInfo {
   bandsMphLo: number[];
   segments: Partial<Record<LossSegment, number[]>>;
   windFactor: number;
+  windExponent?: number;
+  windFloor?: number;
   deductible: Partial<Record<LossSegment, number>>;
   sigmaLogCounty: number;
   sigmaLogEvent: number;
   createdAt: string | null;
+  fit?: { bookMix?: Partial<Record<LossSegment, number>> } | null;
 }
 
 export interface DamageCurvesResponse {

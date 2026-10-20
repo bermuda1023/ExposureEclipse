@@ -8,11 +8,13 @@ import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
   DAMAGE_MODEL_LABEL,
+  calibratedSd,
   categoryCurveMean,
   useDamageAssumptionsStore,
   type DamageModel,
   type Sshws,
 } from "../../state/damageAssumptions";
+import { useCalibratedCurve } from "../../api/hooks";
 
 interface Props {
   compact?: boolean;
@@ -24,7 +26,9 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
   const set = useDamageAssumptionsStore((s) => s.set);
   const setModel = useDamageAssumptionsStore((s) => s.setModel);
   const reset = useDamageAssumptionsStore((s) => s.reset);
-  const vendor = model !== "custom";
+  const curve = useCalibratedCurve();
+  const pcs = model === "pcs" && curve != null;
+  const vendor = model !== "custom" && (model !== "pcs" || pcs);
 
   return (
     <section
@@ -49,7 +53,9 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
             Damage assumptions
           </div>
           <div style={{ fontSize: "0.66rem", color: "var(--ink-500)", marginTop: 1 }}>
-            {vendor
+            {pcs
+              ? "Insured damage ratio fitted to 15 PCS events against observed ASOS winds. Each county uses its own wind mix. SD is the storm-to-storm holdout spread. Applied to bundled TIV."
+              : vendor
               ? "Form V-1 building damage by 10 mph of 1-minute wind, on unmitigated reference structures. Each county uses its own mix. SD is still yours. Applied to bundled TIV."
               : "Mean ± SD insured damage ratio per category, applied to TIV. Defaults are trained on 15 PCS events (2017–2024); SD is the storm-to-storm error."}
           </div>
@@ -78,6 +84,10 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
               title={
                 id === "custom"
                   ? "Your typed damage ratios, one number per category"
+                  : id === "pcs"
+                  ? curve
+                    ? `Wind-calibrated insured curve (${curve.label}), 10 mph bands`
+                    : "No calibrated curve set is loaded; uses your typed numbers"
                   : `${DAMAGE_MODEL_LABEL[id]} Form V-1 curve, 10 mph bands`
               }
               style={{
@@ -108,9 +118,10 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
         <tbody>
           {CATEGORY_ORDER.map((cat) => {
             const a = byCategory[cat];
-            const mean = vendor ? categoryCurveMean(model, cat) : a.mean;
-            const lo = pct(Math.max(0, mean - a.sd));
-            const hi = pct(Math.min(100, mean + a.sd));
+            const mean = vendor ? categoryCurveMean(model, cat, curve) : a.mean;
+            const sd = pcs ? calibratedSd(curve, mean) : a.sd;
+            const lo = pct(Math.max(0, mean - sd));
+            const hi = pct(Math.min(100, mean + sd));
             return (
               <tr key={cat} style={{ borderTop: "1px solid var(--ink-100)" }}>
                 <td style={{ ...td, fontWeight: 600 }}>{CATEGORY_LABELS[cat]}</td>
@@ -127,10 +138,14 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
                   )}
                 </td>
                 <td style={{ ...td, textAlign: "right" }}>
-                  <Input
-                    value={a.sd}
-                    onChange={(n) => set(cat, { sd: n })}
-                  />
+                  {pcs ? (
+                    <span title="Lognormal SD from the curve's leave-one-storm-out event error">{pct(sd)}</span>
+                  ) : (
+                    <Input
+                      value={a.sd}
+                      onChange={(n) => set(cat, { sd: n })}
+                    />
+                  )}
                 </td>
                 <td style={{ ...td, textAlign: "right", color: "var(--ink-500)" }}>
                   {lo}–{hi}%
