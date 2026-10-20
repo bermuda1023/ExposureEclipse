@@ -38,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.services.curve_fit import FitOptions, Observation, fit_with_holdout, predict
+from app.services.curve_fit import FitOptions, Observation, fit_with_holdout, panel_sigma, predict
 from app.services.damage_curves import (
     BAND_MID,
     BAND_MPH_LO,
@@ -313,6 +313,9 @@ def main() -> None:
     wsum = sum(w for w, _ in weighted_errs) or 1.0
     sigma_event_weighted = math.sqrt(sum(w * e * e for w, e in weighted_errs) / wsum)
 
+    # Panel band only. See curve_fit.panel_sigma.
+    sigma_panel = panel_sigma([(a, m) for a, m, _ in holdout_totals.values()])
+
     book = tiv_for_year(datetime.now(UTC).year)
     seg_tiv = {seg: sum(v.get(seg, 0.0) for v in book.county.values()) for seg in LOSS_SEGMENTS}
     book_total = sum(seg_tiv.values()) or 1.0
@@ -344,6 +347,9 @@ def main() -> None:
             # TIV share by segment in the industry book: the impact panel blends
             # the segment curves with it for a client's bundled TIV.
             "bookMix": {seg: round(v / book_total, 4) for seg, v in seg_tiv.items()},
+            # Spread the impact panel shows. The all-storm sigma stays on
+            # sigmaLogEvent for the industry-loss P10–P90.
+            "sigmaLogPanel": None if sigma_panel is None else round(sigma_panel, 4),
             "windCorrection": args.wind_correction,
             "windModel": args.wind_model,
             "countyWind": args.county_wind,

@@ -23,7 +23,11 @@ export interface CurveSetInfo {
   sigmaLogCounty: number;
   sigmaLogEvent: number;
   createdAt: string | null;
-  fit?: { bookMix?: Partial<Record<LossSegment, number>> } | null;
+  fit?: {
+    bookMix?: Partial<Record<LossSegment, number>>;
+    /** Panel ±1 SD. Holdout spread of storms priced within a factor of two. */
+    sigmaLogPanel?: number;
+  } | null;
 }
 
 export interface DamageCurvesResponse {

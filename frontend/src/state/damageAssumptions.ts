@@ -27,15 +27,14 @@ export interface CategoryAssumption {
 
 export interface DamageAssumptionsState {
   byCategory: Record<Sshws, CategoryAssumption>;
-  /** custom = the numbers below. Otherwise a Form V-1 vendor curve. */
+  /** custom = the typed numbers. pcs = the calibrated curve. */
   model: DamageModel;
   set: (cat: Sshws, partial: Partial<CategoryAssumption>) => void;
   setModel: (model: DamageModel) => void;
   reset: () => void;
 }
 
-export type DamageModel = "custom" | "pcs" | "air" | "kcc" | "rms";
-export type VendorModel = "air" | "kcc" | "rms";
+export type DamageModel = "custom" | "pcs";
 
 /** The backend's default calibrated curve set, blended across segments by the
  *  industry book mix: insured DR at each land-wind band midpoint. */
@@ -48,41 +47,15 @@ export interface CalibratedCurve {
   windExponent: number;
   windFloor: number;
   sigmaLogEvent: number;
+  /** Holdout spread used for the ±1 SD band. Tighter than sigmaLogEvent. */
+  sigmaLogPanel: number;
 }
-
-/** Florida Commission Form V-1 Part A, building damage / building exposure.
- *  1-minute sustained mph. Unmitigated reference structures (wood, masonry,
- *  manufactured, concrete), surge off. AIR 2019, KCC 2023, RMS 21.0. */
-export const FORM_V1: readonly {
-  lo: number;
-  hi: number;
-  air: number;
-  kcc: number;
-  rms: number;
-}[] = [
-  { lo: 41, hi: 50, air: 0.05, kcc: 0.11, rms: 0.13 },
-  { lo: 51, hi: 60, air: 0.12, kcc: 0.26, rms: 0.33 },
-  { lo: 61, hi: 70, air: 0.46, kcc: 0.73, rms: 1.43 },
-  { lo: 71, hi: 80, air: 0.96, kcc: 1.68, rms: 3.22 },
-  { lo: 81, hi: 90, air: 1.89, kcc: 3.79, rms: 6.97 },
-  { lo: 91, hi: 100, air: 3.55, kcc: 7.66, rms: 14.7 },
-  { lo: 101, hi: 110, air: 7.34, kcc: 14.6, rms: 25.4 },
-  { lo: 111, hi: 120, air: 20.6, kcc: 26.1, rms: 44.6 },
-  { lo: 121, hi: 130, air: 32.8, kcc: 32.6, rms: 57.5 },
-  { lo: 131, hi: 140, air: 42.1, kcc: 43.5, rms: 76.6 },
-  { lo: 141, hi: 150, air: 54.2, kcc: 52.4, rms: 85.5 },
-  { lo: 151, hi: 160, air: 61.8, kcc: 60.8, rms: 90.0 },
-  { lo: 161, hi: 170, air: 71.7, kcc: 72.1, rms: 93.9 },
-];
 
 const KT_TO_MPH = 1.15078;
 
 export const DAMAGE_MODEL_LABEL: Record<DamageModel, string> = {
   custom: "Custom",
   pcs: "PCS-calibrated",
-  air: "AIR",
-  kcc: "KCC",
-  rms: "RMS",
 };
 
 // Trained on 15 PCS county-estimate events (Irma 2017 to Milton 2024) against
@@ -127,13 +100,19 @@ function sameTable(
   );
 }
 
+/** Vendor chips are gone. A stored AIR / KCC / RMS choice becomes PCS-calibrated. */
+export function migrateModel(model: string | undefined): DamageModel {
+  if (model === "pcs" || model === "air" || model === "kcc" || model === "rms") return "pcs";
+  return "custom";
+}
+
 export function migrateDamageAssumptions(
   persisted: unknown,
   version: number,
 ): Pick<DamageAssumptionsState, "byCategory" | "model"> {
   const state = (persisted ?? {}) as Partial<DamageAssumptionsState>;
   const byCategory = state.byCategory;
-  const model = state.model ?? "custom";
+  const model = migrateModel(state.model as string | undefined);
   if (version < 1 && (!byCategory || sameTable(byCategory, PRE_CALIBRATION_DEFAULTS))) {
     return { byCategory: { ...DEFAULTS }, model };
   }
@@ -157,7 +136,7 @@ export const useDamageAssumptionsStore = create<DamageAssumptionsState>()(
     }),
     {
       name: "ee-damage-assumptions",
-      version: 1,
+      version: 2,
       // persist merges the returned fields over the live store (actions included).
       migrate: (persisted, version) =>
         migrateDamageAssumptions(persisted, version) as DamageAssumptionsState,
@@ -242,12 +221,15 @@ export function blendCalibratedCurve(set: CurveSetInfo | null | undefined): Cali
     windExponent: set.windExponent ?? 0,
     windFloor: set.windFloor ?? 0,
     sigmaLogEvent: set.sigmaLogEvent,
+    sigmaLogPanel: set.fit?.sigmaLogPanel ?? Math.min(set.sigmaLogEvent, 0.5),
   };
 }
 
-/** SD (%) of a lognormal with this mean and the curve's event log-spread. */
+/** SD (%) from the panel sigma: storms the curve prices within a factor of two.
+ *  The all-storm sigma (flood and fast-mover misses included) is wider than
+ *  the mean, so mean − SD clamps to zero. */
 export function calibratedSd(curve: CalibratedCurve, meanPct: number): number {
-  const s = curve.sigmaLogEvent;
+  const s = curve.sigmaLogPanel;
   return meanPct * Math.sqrt(Math.exp(s * s) - 1);
 }
 
@@ -264,32 +246,16 @@ function calibratedCategoryMean(curve: CalibratedCurve, cat: Sshws): number {
   return sum / 21;
 }
 
-/** Damage ratio (%) from a Form V-1 row. Below 41 mph the table is silent. */
-export function formV1Percent(model: VendorModel, mphLo: number): number {
-  if (mphLo < 41) return 0;
-  const row = FORM_V1.find((r) => r.lo === mphLo) ?? (mphLo > 161 ? FORM_V1[FORM_V1.length - 1] : undefined);
-  return row ? row[model] : 0;
-}
-
-/** Unweighted mean of the Form V-1 rows whose midpoint sits in this category.
- *  The county loss uses the county's own mix, not this average. */
+/** Category average of the calibrated curve. The county loss uses its own wind mix. */
 export function categoryCurveMean(model: DamageModel, cat: Sshws, curve?: CalibratedCurve | null): number {
-  if (model === "custom") return 0;
-  if (model === "pcs") return curve ? calibratedCategoryMean(curve, cat) : 0;
-  const rows = FORM_V1.filter(
-    (r) => categoryForWind(Math.round(((r.lo + r.hi) / 2) / KT_TO_MPH)) === cat,
-  );
-  if (rows.length === 0) return 0;
-  return rows.reduce((s, r) => s + r[model], 0) / rows.length;
+  if (model !== "pcs" || !curve) return 0;
+  return calibratedCategoryMean(curve, cat);
 }
 
 /**
- * Means the loss should use. Custom keeps the typed numbers. A vendor curve
- * uses the 10 mph mix inside each category when the impact sent speed bins,
- * otherwise the category average of the published table. SD stays the user's.
- * PCS-calibrated does the same with the backend's calibrated curve and takes
- * its SD from the curve's event spread; without the curve it falls back to
- * the typed numbers.
+ * Means the loss should use. Custom keeps the typed numbers. PCS-calibrated
+ * prices the county's own 10 mph mix on the backend curve and takes SD from
+ * the panel sigma. Without a curve it falls back to the typed numbers.
  */
 export function effectiveAssumptions(
   model: DamageModel | undefined,
@@ -297,29 +263,15 @@ export function effectiveAssumptions(
   speedBins?: SpeedBin[] | null,
   curve?: CalibratedCurve | null,
 ): Record<Sshws, CategoryAssumption> {
-  if (!model || model === "custom") return byCategory;
-  if (model === "pcs") {
-    if (!curve) return byCategory;
-    const out: Record<Sshws, CategoryAssumption> = { ...byCategory };
-    for (const cat of CATEGORY_ORDER) {
-      const mine = (speedBins ?? []).filter((b) => b.category === cat && b.areaFraction > 0);
-      const weight = mine.reduce((s, b) => s + b.areaFraction, 0);
-      const mean = weight > 0
-        ? mine.reduce((s, b) => s + b.areaFraction * calibratedPercent(curve, b.mphLo + 4.5), 0) / weight
-        : calibratedCategoryMean(curve, cat);
-      out[cat] = { mean, sd: calibratedSd(curve, mean) };
-    }
-    return out;
-  }
-  const vendor: VendorModel = model;
+  if (model !== "pcs" || !curve) return byCategory;
   const out: Record<Sshws, CategoryAssumption> = { ...byCategory };
   for (const cat of CATEGORY_ORDER) {
     const mine = (speedBins ?? []).filter((b) => b.category === cat && b.areaFraction > 0);
     const weight = mine.reduce((s, b) => s + b.areaFraction, 0);
     const mean = weight > 0
-      ? mine.reduce((s, b) => s + b.areaFraction * formV1Percent(vendor, b.mphLo), 0) / weight
-      : categoryCurveMean(vendor, cat);
-    out[cat] = { mean, sd: byCategory[cat]?.sd ?? 0 };
+      ? mine.reduce((s, b) => s + b.areaFraction * calibratedPercent(curve, b.mphLo + 4.5), 0) / weight
+      : calibratedCategoryMean(curve, cat);
+    out[cat] = { mean, sd: calibratedSd(curve, mean) };
   }
   return out;
 }

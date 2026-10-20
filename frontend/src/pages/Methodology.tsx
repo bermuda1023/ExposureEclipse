@@ -245,12 +245,11 @@ export function Methodology() {
           <li>
             Loss is the sum across those slices of county TIV × area fraction
             × the damage ratio for that category. Custom ratios (mean and SD)
-            stay editable. AIR, KCC, and RMS switch the mean to the Florida
-            Commission Form V-1 building curve, applied on the county's own
-            10 mph wind mix rather than one number for the whole category.
-            Those curves are unmitigated reference buildings, not a current
-            vendor file, and they are applied to bundled TIV. The SD stays
-            yours. Residential, commercial, and auto figures are information
+            stay editable. PCS-calibrated prices each county's own 10 mph wind
+            mix with the wind-calibrated insured curve. Its SD is the holdout
+            spread on storms that curve prices within a factor of two, so the
+            band is not widened by flood events or the fast metro misses.
+            Residential, commercial, and auto figures are information
             only; the loss uses the bundled county TIV, spread evenly across
             the polygon because the book is not location-level.
           </li>

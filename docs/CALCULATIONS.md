@@ -308,7 +308,18 @@ auto curves by `fit.bookMix` (0.478 / 0.491 / 0.031 on the supplied book).
 Each county's speed bins are priced at their midpoint with the same transform
 as the backend (`calibratedLandMph` = `damage_curves.land_mph`, then linear
 between band midpoints, zero at 39 mph land), and
-`SD = mean × sqrt(exp(sigmaLogEvent²) − 1)`. The curve was fitted on the
+
+    SD = mean × sqrt(exp(σ²) − 1),   σ = fit.sigmaLogPanel
+
+`sigmaLogPanel` is the sqrt(loss)-weighted RMS of all-segment holdout log
+errors for events the curve prices within a factor of two
+(`curve_fit.panel_sigma`). On `calibrated-20261020` that is 0.27, about ±28%
+of the mean, so a 15B mean shows roughly 11–19B rather than 0–36B. The
+all-storm sigma (1.03, loss-weighted 0.79) stays on `sigmaLogEvent` for the
+industry-loss P10–P90: it counts Ida, Helene's inland flood, and the fast
+metro misses (Isaias, Zeta, Beryl), which are not damage-ratio noise on a
+storm the curve is built to price. AIR / KCC / RMS are no longer panel
+options. The curve was fitted on the
 tropical-storm field (`ts_field=True`), the panel receives the radii-free
 field; inside hurricane force they agree, so the difference is confined to
 the TS fringe. ASSUMPTION. Without a calibrated set loaded the chip falls back
