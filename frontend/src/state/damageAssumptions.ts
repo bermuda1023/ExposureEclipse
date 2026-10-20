@@ -3,7 +3,8 @@
  *
  * The underwriter enters a mean damage ratio and a standard deviation per
  * category; the impact panel applies those to each county's TIV (and per-
- * programme TIV) to produce a projected loss + a low/high band:
+ * programme TIV) to produce a projected loss + a low/high band. The
+ * PCS-calibrated model instead uses an asymmetric empirical holdout range.
  *
  *   loss_mean = TIV × mean
  *   loss_low  = TIV × max(0, mean − sd)
@@ -23,6 +24,9 @@ export type Sshws = -1 | 0 | 1 | 2 | 3 | 4 | 5;
 export interface CategoryAssumption {
   mean: number;   // %
   sd: number;     // %
+  /** Multiplicative bounds on mean loss for the calibrated holdout range. */
+  lowFactor?: number;
+  highFactor?: number;
 }
 
 export interface DamageAssumptionsState {
@@ -48,6 +52,16 @@ export interface CalibratedCurve {
   windExponent: number;
   windFloor: number;
   sigmaLogEvent: number;
+  panelBand: {
+    lowFactor: number;
+    highFactor: number;
+    cohortEvents: string[];
+    cohortCovered: number;
+    scorableEvents: number;
+    allEventCoverage: number;
+    suppliedEvents: number;
+    basis: string;
+  };
 }
 
 /** Florida Commission Form V-1 Part A, building damage / building exposure.
@@ -242,13 +256,30 @@ export function blendCalibratedCurve(set: CurveSetInfo | null | undefined): Cali
     windExponent: set.windExponent ?? 0,
     windFloor: set.windFloor ?? 0,
     sigmaLogEvent: set.sigmaLogEvent,
+    panelBand: set.fit?.panelBand ?? {
+      // Backward-compatible fallback for an older calibrated set. The shipped
+      // set carries empirical factors, so production does not use this path.
+      lowFactor: Math.exp(-Math.min(set.sigmaLogEvent, 0.5)),
+      highFactor: Math.exp(Math.min(set.sigmaLogEvent, 0.5)),
+      cohortEvents: [],
+      cohortCovered: 0,
+      scorableEvents: 0,
+      allEventCoverage: 0,
+      suppliedEvents: 0,
+      basis: "fallback log-error range",
+    },
   };
 }
 
-/** SD (%) of a lognormal with this mean and the curve's event log-spread. */
-export function calibratedSd(curve: CalibratedCurve, meanPct: number): number {
-  const s = curve.sigmaLogEvent;
-  return meanPct * Math.sqrt(Math.exp(s * s) - 1);
+/** Asymmetric DR range from held-out wind-dominant major events. */
+export function calibratedRange(
+  curve: CalibratedCurve,
+  meanPct: number,
+): { low: number; high: number } {
+  return {
+    low: meanPct * curve.panelBand.lowFactor,
+    high: Math.min(100, meanPct * curve.panelBand.highFactor),
+  };
 }
 
 const CATEGORY_KT: Record<number, [number, number]> = {
@@ -287,9 +318,9 @@ export function categoryCurveMean(model: DamageModel, cat: Sshws, curve?: Calibr
  * Means the loss should use. Custom keeps the typed numbers. A vendor curve
  * uses the 10 mph mix inside each category when the impact sent speed bins,
  * otherwise the category average of the published table. SD stays the user's.
- * PCS-calibrated does the same with the backend's calibrated curve and takes
- * its SD from the curve's event spread; without the curve it falls back to
- * the typed numbers.
+ * PCS-calibrated does the same with the backend's calibrated curve and applies
+ * its empirical full-event holdout factors; without the curve it falls back
+ * to the typed numbers.
  */
 export function effectiveAssumptions(
   model: DamageModel | undefined,
@@ -307,7 +338,12 @@ export function effectiveAssumptions(
       const mean = weight > 0
         ? mine.reduce((s, b) => s + b.areaFraction * calibratedPercent(curve, b.mphLo + 4.5), 0) / weight
         : calibratedCategoryMean(curve, cat);
-      out[cat] = { mean, sd: calibratedSd(curve, mean) };
+      out[cat] = {
+        mean,
+        sd: 0,
+        lowFactor: curve.panelBand.lowFactor,
+        highFactor: curve.panelBand.highFactor,
+      };
     }
     return out;
   }
@@ -330,6 +366,7 @@ export interface LossBand {
   high: number;
   drMean: number;   // decimal 0..1
   drSd: number;     // decimal 0..1
+  bandKind: "symmetric-sd" | "holdout-range";
 }
 
 /** Apply the user's assumptions to one (TIV, max wind) → loss band. */
@@ -352,9 +389,21 @@ export function applyCategory(
   const drMean = Math.max(0, Math.min(1, a.mean / 100));
   const drSd = Math.max(0, a.sd / 100);
   const meanLoss = tiv * drMean;
-  const low = tiv * Math.max(0, drMean - drSd);
-  const high = tiv * Math.min(1, drMean + drSd);
-  return { mean: meanLoss, low, high, drMean, drSd };
+  const calibrated = a.lowFactor != null && a.highFactor != null;
+  const low = calibrated
+    ? meanLoss * Math.max(0, a.lowFactor!)
+    : tiv * Math.max(0, drMean - drSd);
+  const high = calibrated
+    ? Math.min(tiv, meanLoss * Math.max(0, a.highFactor!))
+    : tiv * Math.min(1, drMean + drSd);
+  return {
+    mean: meanLoss,
+    low,
+    high,
+    drMean,
+    drSd,
+    bandKind: calibrated ? "holdout-range" : "symmetric-sd",
+  };
 }
 
 export interface WindSlice {
@@ -455,11 +504,13 @@ export function applyWindBands(
   let mean = 0;
   let low = 0;
   let high = 0;
+  let bandKind: LossBand["bandKind"] = "symmetric-sd";
   for (const band of live) {
     const slice = applyCategory(tiv * band.areaFraction * scale, band.category, byCategory);
     mean += slice.mean;
     low += slice.low;
     high += slice.high;
+    if (slice.bandKind === "holdout-range") bandKind = "holdout-range";
   }
   const base = tiv * scale;
   return {
@@ -468,6 +519,7 @@ export function applyWindBands(
     high,
     drMean: base > 0 ? mean / base : 0,
     drSd: base > 0 ? Math.max(0, (high - mean) / base) : 0,
+    bandKind,
   };
 }
 

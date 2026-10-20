@@ -149,7 +149,7 @@ export function HurricaneImpactDetail() {
             value={formatMoneyCompact(totals.mean, data.currency)}
           />
           <Stat
-            label="Loss band (± 1 SD)"
+            label={damageModel === "pcs" && calibratedCurve ? "Wind-fit holdout range" : "Loss band (± 1 SD)"}
             value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
           />
         </div>
@@ -449,7 +449,9 @@ function FragmentRow({
                 {`eff DR ${(band.drMean * 100).toFixed(1)}% · ${formatMoneyCompact(band.mean, currency)}`}
               </div>
               <div style={{ fontSize: "0.58rem", color: "var(--ink-500)" }}>
-                ± {formatMoneyCompact(band.high - band.mean, currency)} (±{(band.drSd * 100).toFixed(1)}%)
+                {band.bandKind === "holdout-range"
+                  ? `${formatMoneyCompact(band.low, currency)}–${formatMoneyCompact(band.high, currency)} holdout range`
+                  : `± ${formatMoneyCompact(band.high - band.mean, currency)} (±${(band.drSd * 100).toFixed(1)}%)`}
               </div>
             </>
           )}

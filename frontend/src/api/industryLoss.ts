@@ -23,7 +23,19 @@ export interface CurveSetInfo {
   sigmaLogCounty: number;
   sigmaLogEvent: number;
   createdAt: string | null;
-  fit?: { bookMix?: Partial<Record<LossSegment, number>> } | null;
+  fit?: {
+    bookMix?: Partial<Record<LossSegment, number>>;
+    panelBand?: {
+      lowFactor: number;
+      highFactor: number;
+      cohortEvents: string[];
+      cohortCovered: number;
+      scorableEvents: number;
+      allEventCoverage: number;
+      suppliedEvents: number;
+      basis: string;
+    };
+  } | null;
 }
 
 export interface DamageCurvesResponse {

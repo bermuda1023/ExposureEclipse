@@ -65,7 +65,19 @@ function calibratedSet(over: Partial<CurveSetInfo> = {}): CurveSetInfo {
     sigmaLogCounty: 1.7,
     sigmaLogEvent: 1.0,
     createdAt: null,
-    fit: { bookMix: { RESIDENTIAL: 0.5, COMMERCIAL: 0.5 } },
+    fit: {
+      bookMix: { RESIDENTIAL: 0.5, COMMERCIAL: 0.5 },
+      panelBand: {
+        lowFactor: 0.8,
+        highFactor: 1.25,
+        cohortEvents: ["A", "B"],
+        cohortCovered: 2,
+        scorableEvents: 3,
+        allEventCoverage: 2,
+        suppliedEvents: 4,
+        basis: "test holdout range",
+      },
+    },
     ...over,
   };
 }
@@ -99,13 +111,17 @@ describe("PCS-calibrated curve", () => {
     expect(calibratedPercent(curve, 50.5 / 0.8)).toBeCloseTo(3);
   });
 
-  it("prices speed bins and takes SD from the event spread", () => {
+  it("prices speed bins with the asymmetric empirical holdout range", () => {
     const curve = blendCalibratedCurve(calibratedSet())!;
     const bins = [{ mphLo: 91, mphHi: 100, category: 1, areaFraction: 1 }];
     const out = effectiveAssumptions("pcs", DEFAULTS, bins, curve);
     const mean = calibratedPercent(curve, 95.5);
     expect(out[1].mean).toBeCloseTo(mean);
-    expect(out[1].sd).toBeCloseTo(mean * Math.sqrt(Math.E - 1));
+    expect(out[1].sd).toBe(0);
+    const band = applyCategory(1_000_000, 1, out);
+    expect(band.low).toBeCloseTo(band.mean * 0.8);
+    expect(band.high).toBeCloseTo(band.mean * 1.25);
+    expect(band.bandKind).toBe("holdout-range");
   });
 
   it("falls back to the typed table without a curve", () => {

@@ -222,7 +222,7 @@ export function HurricaneImpactPanel() {
                 value={formatMoneyCompact(totals.mean, data.currency)}
               />
               <Stat
-                label="Loss band ±1SD"
+                label={damageModel === "pcs" && calibratedCurve ? "Wind-fit holdout range" : "Loss band ±1SD"}
                 value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
               />
               <SegmentNote
@@ -341,8 +341,9 @@ export function HurricaneImpactPanel() {
                                 marginTop: 1,
                               }}
                             >
-                              {formatMoneyCompact(b.mean, data.currency)} ±{" "}
-                              {formatMoneyCompact(b.high - b.mean, data.currency)}
+                              {b.bandKind === "holdout-range"
+                                ? `${formatMoneyCompact(b.mean, data.currency)} (${formatMoneyCompact(b.low, data.currency)}–${formatMoneyCompact(b.high, data.currency)})`
+                                : `${formatMoneyCompact(b.mean, data.currency)} ± ${formatMoneyCompact(b.high - b.mean, data.currency)}`}
                             </div>
                             {exp !== 1.0 && (
                               <div style={{ fontSize: "0.56rem", color: "#7d5400" }}>

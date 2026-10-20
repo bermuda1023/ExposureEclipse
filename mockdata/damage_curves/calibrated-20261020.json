@@ -85,6 +85,22 @@
       "COMMERCIAL": 0.491,
       "AUTO": 0.0311
     },
+    "panelBand": {
+      "lowFactor": 0.94864,
+      "highFactor": 1.327164,
+      "cohortEvents": [
+        "AL092022",
+        "AL112017",
+        "AL132020",
+        "AL142018",
+        "AL142024"
+      ],
+      "cohortCovered": 5,
+      "scorableEvents": 14,
+      "allEventCoverage": 5,
+      "suppliedEvents": 15,
+      "basis": "Observed min-max of full PCS event total / leave-one-event-out model for five wind-dominant landfalling majors; Maria is unscorable because the book has no matching TIV."
+    },
     "windCorrection": "none",
     "windModel": "observed",
     "countyWind": false,

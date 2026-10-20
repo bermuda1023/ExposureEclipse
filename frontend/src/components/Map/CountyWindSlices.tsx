@@ -100,7 +100,7 @@ export function CountyWindSlices({
             </span>
             {loss && assumption ? (
               <span>
-                {formatMoneyCompact(sliceTiv, currency)} · DR {assumption.mean}% ·{" "}
+                {formatMoneyCompact(sliceTiv, currency)} · DR {assumption.mean.toFixed(1)}% ·{" "}
                 <span style={{ color: "#b91c1c", fontWeight: 600 }}>
                   {formatMoneyCompact(loss.mean, currency)}
                 </span>

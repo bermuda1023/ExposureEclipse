@@ -187,6 +187,36 @@ def test_tiv_falls_back_to_book_when_nothing_supplied(data_dir) -> None:
     assert tiv.segments_present() == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
 
 
+def test_panel_band_reports_honest_full_event_coverage() -> None:
+    """The displayed range is checked against full PCS totals, not fit rows."""
+    curve = get_curve_set("calibrated-20261020")
+    band = curve.fit["panelBand"]
+    trained = json.loads(
+        (
+            industry_losses.data_dir()
+            / "damage_assumptions"
+            / "sshws_calibrated.json"
+        ).read_text(encoding="utf-8")
+    )
+    errors = trained["segments"]["ALL"]["eventLogErrorHoldout"]
+    events = {event["stormId"]: event for event in trained["events"]}
+    factors = {
+        storm_id: event["actualTotal"] / (event["inField"] * math.exp(errors[storm_id]))
+        for storm_id, event in events.items()
+        if storm_id in errors and event["inField"] > 0
+    }
+    covered = {
+        storm_id
+        for storm_id, factor in factors.items()
+        if band["lowFactor"] <= factor <= band["highFactor"]
+    }
+    assert len(factors) == band["scorableEvents"] == 14
+    assert len(events) == band["suppliedEvents"] == 15
+    assert len(covered) == band["allEventCoverage"] == 5
+    assert set(band["cohortEvents"]) == covered
+    assert band["cohortCovered"] == len(band["cohortEvents"]) == 5
+
+
 # ─────────────────────────────── event loss ───────────────────────────────
 
 

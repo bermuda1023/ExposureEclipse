@@ -307,8 +307,23 @@ category table. `blendCalibratedCurve` weights the residential / commercial /
 auto curves by `fit.bookMix` (0.478 / 0.491 / 0.031 on the supplied book).
 Each county's speed bins are priced at their midpoint with the same transform
 as the backend (`calibratedLandMph` = `damage_curves.land_mph`, then linear
-between band midpoints, zero at 39 mph land), and
-`SD = mean × sqrt(exp(sigmaLogEvent²) − 1)`. The curve was fitted on the
+between band midpoints, zero at 39 mph land).
+
+The panel does **not** use the all-event log RMS as a symmetric `mean ± SD`.
+That mixed curve uncertainty with flood, footprint and weak-metro event bias;
+at `σ=1.03`, the implied SD was 1.38× the mean, so every low bound clipped to
+zero. Instead it reports an asymmetric **wind-fit holdout range**. The cohort
+is the five wind-dominant landfalling majors Ian, Irma, Laura, Michael and
+Milton. For each, the curve is fitted without that event, then the ratio
+`full on-levelled PCS event total / held-out model` is measured. The observed
+range is `[0.948640, 1.327164] × model mean`. It covers 5/5 cohort events and
+5/14 events with scorable TIV (5/15 supplied events; Maria has no matching
+book TIV and cannot be scored). The other nine are deliberately not claimed
+as covered: their full PCS totals include flood/footprint or weak-storm
+effects this wind vulnerability curve does not model. This is a calibration
+range, not a catastrophe prediction interval.
+
+The curve was fitted on the
 tropical-storm field (`ts_field=True`), the panel receives the radii-free
 field; inside hurricane force they agree, so the difference is confined to
 the TS fringe. ASSUMPTION. Without a calibrated set loaded the chip falls back
