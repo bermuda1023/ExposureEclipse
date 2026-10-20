@@ -55,11 +55,10 @@ export interface CalibratedCurve {
   panelBand: {
     lowFactor: number;
     highFactor: number;
-    cohortEvents: string[];
-    cohortCovered: number;
+    coveredEvents: number;
     scorableEvents: number;
-    allEventCoverage: number;
     suppliedEvents: number;
+    outsideEvents: string[];
     basis: string;
   };
 }
@@ -261,11 +260,10 @@ export function blendCalibratedCurve(set: CurveSetInfo | null | undefined): Cali
       // set carries empirical factors, so production does not use this path.
       lowFactor: Math.exp(-Math.min(set.sigmaLogEvent, 0.5)),
       highFactor: Math.exp(Math.min(set.sigmaLogEvent, 0.5)),
-      cohortEvents: [],
-      cohortCovered: 0,
+      coveredEvents: 0,
       scorableEvents: 0,
-      allEventCoverage: 0,
       suppliedEvents: 0,
+      outsideEvents: [],
       basis: "fallback log-error range",
     },
   };

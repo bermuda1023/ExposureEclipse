@@ -28,11 +28,10 @@ export interface CurveSetInfo {
     panelBand?: {
       lowFactor: number;
       highFactor: number;
-      cohortEvents: string[];
-      cohortCovered: number;
+      coveredEvents: number;
       scorableEvents: number;
-      allEventCoverage: number;
       suppliedEvents: number;
+      outsideEvents: string[];
       basis: string;
     };
   } | null;

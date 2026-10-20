@@ -222,7 +222,7 @@ export function HurricaneImpactPanel() {
                 value={formatMoneyCompact(totals.mean, data.currency)}
               />
               <Stat
-                label={damageModel === "pcs" && calibratedCurve ? "Wind-fit holdout range" : "Loss band ±1SD"}
+                label={damageModel === "pcs" && calibratedCurve ? "PCS holdout P10–P90" : "Loss band ±1SD"}
                 value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
               />
               <SegmentNote

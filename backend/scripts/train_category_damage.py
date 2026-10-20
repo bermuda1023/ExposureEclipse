@@ -49,15 +49,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "backend" / "scripts"))
 
-from calibrate_damage_curves import flood_dominated  # noqa: E402
-
-from app.services.curve_fit import FitOptions, Observation, fit_with_holdout, predict  # noqa: E402
-from app.services.damage_curves import load_curve_sets  # noqa: E402
-from app.services.event_loss import resolve_storm  # noqa: E402
-from app.services.hurricane_impact import DAMAGING_WIND_MULTIPLIER, compute_impact  # noqa: E402
-from app.services.industry_losses import LOSS_SEGMENTS, data_dir, load_actuals, tiv_for_year  # noqa: E402
-from app.services.loss_calibration import MATERIALITY_LOSS, below_materiality  # noqa: E402
-from app.services.onlevel import onlevel_actuals  # noqa: E402
+from app.services.curve_fit import FitOptions, Observation, fit_with_holdout, predict
+from app.services.damage_curves import load_curve_sets
+from app.services.event_loss import resolve_storm
+from app.services.hurricane_impact import DAMAGING_WIND_MULTIPLIER, compute_impact
+from app.services.industry_losses import LOSS_SEGMENTS, data_dir, load_actuals, tiv_for_year
+from app.services.loss_calibration import MATERIALITY_LOSS, below_materiality
+from app.services.onlevel import onlevel_actuals
 
 KT_TO_MPH = 1.15078
 CATEGORIES = (0, 1, 2, 3, 4, 5)
@@ -114,7 +112,6 @@ def main() -> None:
     parser.add_argument("--ridge", type=float, default=FitOptions().ridge)
     parser.add_argument("--alpha-event", type=float, default=FitOptions().alpha_event)
     parser.add_argument("--multiplier", type=float, default=DAMAGING_WIND_MULTIPLIER)
-    parser.add_argument("--exclude-flood", action="store_true")
     parser.add_argument("--no-ts-field", action="store_true",
                         help="score on the hurricane-force field only (no IBTrACS R34/R50 field)")
     parser.add_argument("--no-onlevel", action="store_true")
@@ -142,7 +139,7 @@ def main() -> None:
         counties: dict[str, dict[str, float]] = {}
         for (gid, seg), loss in act.county.items():
             counties.setdefault(gid, {})[seg] = loss
-        in_field = miss = gap = flood = 0.0
+        in_field = miss = gap = 0.0
         for gid, losses in sorted(counties.items()):
             total = sum(losses.values())
             imp = by_gid.get(gid)
@@ -153,9 +150,6 @@ def main() -> None:
                 continue
             if sum(segs.values()) <= 0:
                 gap += total
-                continue
-            if args.exclude_flood and flood_dominated(storm_id, gid, imp.max_wind_kt):
-                flood += total
                 continue
             in_field += total
             dom[(storm_id, gid)] = dominant(bins)
@@ -175,11 +169,11 @@ def main() -> None:
         events.append({
             "stormId": storm_id, "name": storm.name, "year": storm.year,
             "actualTotal": act.total(), "inField": in_field, "footprintMiss": miss,
-            "exposureGap": gap, "floodExcluded": flood,
+            "exposureGap": gap,
         })
         print(f"{storm_id} {storm.name} {storm.year}: {act.total() / 1e9:6.1f}B on-level; "
               f"in field {in_field / 1e9:5.1f}B, outside {miss / 1e9:5.1f}B, "
-              f"no TIV {gap / 1e9:4.1f}B" + (f", flood {flood / 1e9:4.1f}B" if flood else ""))
+              f"no TIV {gap / 1e9:4.1f}B")
 
     for segs in tiv_for_year(2026).county.values():
         for seg in LOSS_SEGMENTS:
@@ -292,13 +286,15 @@ def main() -> None:
     payload = {
         "id": f"sshws-calibrated-{now:%Y%m%d}",
         "createdAt": now.isoformat(timespec="seconds"),
-        "basis": "insured loss (PCS, private flood in, NFIP and LAE out), on-levelled to the TIV date",
+        "basis": (
+            "insured PCS loss (NFIP and LAE out; private/commercial flood or surge may be in), "
+            "on-levelled to the TIV date"
+        ),
         "windField": f"compute_impact, historical track, multiplier {args.multiplier}, "
                      + ("no" if args.no_ts_field else "with") + " tropical-storm field",
         "prior": args.prior,
         "ridge": args.ridge,
         "alphaEvent": args.alpha_event,
-        "excludeFlood": args.exclude_flood,
         "fixTsPct": args.fix_ts,
         "onLevel": not args.no_onlevel,
         "bookMix": {k: round(v, 4) for k, v in mix.items()},

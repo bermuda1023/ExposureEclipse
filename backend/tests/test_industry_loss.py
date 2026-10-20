@@ -212,9 +212,11 @@ def test_panel_band_reports_honest_full_event_coverage() -> None:
     }
     assert len(factors) == band["scorableEvents"] == 14
     assert len(events) == band["suppliedEvents"] == 15
-    assert len(covered) == band["allEventCoverage"] == 5
-    assert set(band["cohortEvents"]) == covered
-    assert band["cohortCovered"] == len(band["cohortEvents"]) == 5
+    assert len(covered) == band["coveredEvents"] == 12
+    assert set(factors) - covered == set(band["outsideEvents"]) == {
+        "AL042024",
+        "AL282020",
+    }
 
 
 # ─────────────────────────────── event loss ───────────────────────────────

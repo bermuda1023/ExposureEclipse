@@ -289,11 +289,12 @@ Reading it:
   curves.
 - **Uncertainty falls as category rises.** σ ≈ 1 at TS–Cat 2 (a storm can
   come in at a third or three times the mean) and ≈ 0.6 at Cat 3–4. Low-
-  category loss is driven by things a wind table cannot see: flood,
-  tornadoes, the size of the wind field.
+  category loss is driven by things a vulnerability table cannot see:
+  wind-footprint error, tornadoes, demand surge and loss development.
 - **Event totals.** In-sample on the panel field: Ian 0.96, Laura 0.93,
-  Milton 0.84, Irma 0.72, Michael 0.70 of on-levelled PCS. Flood events read
-  low (Ida 0.24, Helene 0.21, Florence 0.41, Sally 0.46, Delta 0.23), and so
+  Milton 0.84, Irma 0.72, Michael 0.70 of on-levelled PCS. Ida, Helene,
+  Florence, Sally and Delta read
+  low, and so
   does most of Isaias and Debby, whose loss is outside the hurricane-force
   field. Broad weak storms read high (Beryl 2.1, Zeta 2.0).
 
@@ -310,18 +311,47 @@ as the backend (`calibratedLandMph` = `damage_curves.land_mph`, then linear
 between band midpoints, zero at 39 mph land).
 
 The panel does **not** use the all-event log RMS as a symmetric `mean ± SD`.
-That mixed curve uncertainty with flood, footprint and weak-metro event bias;
+That mixed vulnerability uncertainty with footprint, wind-field, exposure,
+loss-development and weak-metro event bias;
 at `σ=1.03`, the implied SD was 1.38× the mean, so every low bound clipped to
-zero. Instead it reports an asymmetric **wind-fit holdout range**. The cohort
-is the five wind-dominant landfalling majors Ian, Irma, Laura, Michael and
-Milton. For each, the curve is fitted without that event, then the ratio
+zero. Instead it reports an asymmetric empirical **P10–P90 holdout range**.
+For every one of the 14 events with matching TIV, the curve is fitted without
+that event, then the ratio
 `full on-levelled PCS event total / held-out model` is measured. The observed
-range is `[0.948640, 1.327164] × model mean`. It covers 5/5 cohort events and
-5/14 events with scorable TIV (5/15 supplied events; Maria has no matching
-book TIV and cannot be scored). The other nine are deliberately not claimed
-as covered: their full PCS totals include flood/footprint or weak-storm
-effects this wind vulnerability curve does not model. This is a calibration
-range, not a catastrophe prediction interval.
+finite-sample interval uses the second-lowest and second-highest factors:
+`[0.415968, 6.559247] × model mean`. That is the equal-tail order-statistic
+analogue of P10–P90 with only 14 observations. It covers 12/14 scorable events
+(85.7%; 12/15 supplied events, with Maria unscorable because the book has no
+matching TIV). Debby lies above it and Zeta below it. The width is real:
+full PCS event totals include losses outside this panel's hurricane-force
+footprint and the wind field has event-specific bias. This is an empirical
+full-event range, not a statement that every dollar outside the wind footprint
+was flood.
+
+Held-out full-event factors and diagnosis:
+
+| Event | Actual / panel model | Result | Evidence-led reading |
+|---|---:|---|---|
+| Zeta | 0.280 | below range | Broad low wind over New Orleans / Atlanta overprices dense exposure; the model still overstates despite 27% of reported loss outside its field. |
+| Beryl | 0.416 | boundary | Houston low-wind vulnerability is lower than the curve learned from fringes of major storms; observed winds do not support weakening the field. |
+| Laura | 0.949 | covered | Compact major; model and total agree. |
+| Ian | 0.977 | covered | Footprint captures 93% of reported loss; model and total agree. |
+| Milton | 1.141 | covered | Footprint and wind observations are well aligned. |
+| Irma | 1.310 | covered | Remaining difference includes an exposure gap and long loss-development / re-estimation risk. |
+| Michael | 1.327 | covered | Compact major; modest footprint miss and possible demand-surge / loss-development effect. |
+| Florence | 2.507 | covered | 66% of reported loss is outside the panel's hurricane-force field; this is first a footprint mismatch, not proof of insured flood. |
+| Sally | 2.722 | covered | Core station winds ran well above the smooth field and 20% of loss is outside it. |
+| Helene | 4.202 | covered | About 90% of loss is outside the panel field. Hazard reports show water impacts, but PCS excludes NFIP and the PCS cause split is not supplied. |
+| Delta | 4.330 | covered | Wind footprint is too small: nine stations observed TS-force wind where the model had none. |
+| Ida | 4.844 | covered | Footprint miss, demand surge / loss development and possible private or commercial water loss are confounded; the supplied PCS rows do not identify the split. |
+| Isaias | 6.559 | boundary | Almost all loss is outside the panel's hurricane-force-only field; a TS-wind footprint is required for event-total use. |
+| Debby | 35.664 | above range | 99.6% of loss is outside the panel field; a hurricane-force panel cannot price this tropical-storm event total. |
+
+No separate demand-surge or loss-creep multiplier is fitted: with 14 scorable
+events it is not identifiable apart from wind and exposure error. The latest
+supplied PCS estimates are used as-is and on-levelled. Ian still agrees at
+0.977; Irma's 1.310 factor remains inside the interval, so neither supports an
+extra post-event multiplier on its own.
 
 The curve was fitted on the
 tropical-storm field (`ts_field=True`), the panel receives the radii-free
@@ -420,12 +450,11 @@ other row above it. The rows stay in every event total. They are excluded from
 `countyLogRms`, the holdout county sigma and `impliedDrByBand`, and are
 flagged `belowMateriality` in the backtest.
 
-PCS basis caveat: PCS includes private-market flood and surge and excludes
-NFIP and LAE, while the modelled loss is wind only. Flood-dominated events
-therefore read as wind underestimates. `--exclude-flood` drops counties where
-the modelled peak is under 64 kt, no ASOS station saw 34 kt sustained, and
-there are 2 or more flood reports or riverine high-water marks. Otherwise,
-leave whole events out with `--events`.
+PCS basis caveat: PCS excludes NFIP and LAE. Private-market or commercial
+flood and storm surge may be present, but the supplied PCS rows do not provide
+a cause-of-loss split. NCEI flood reports and USGS high-water marks therefore
+remain diagnostics; they never cause a county to be removed from calibration.
+Treating every co-located PCS dollar as flood would be unsupported.
 
 ### Post-event evidence
 
@@ -445,9 +474,10 @@ from 12 h before the track comes within 250 nm of one of their counties to
 - **USGS STN**: surveyed high-water marks per county: coastal vs riverine, and the maximum height above ground.
 
 **Wind bias** = median over stations of `observed sustained / (modelled × windFactor)`.
-Only stations where either value is ≥ 30 kt count. The backtest also splits
-out-of-field dollars by the first reported peril in that county, in the order
-tornado, flood, surge, wind (`footprintMissByPeril`).
+Only stations where either value is ≥ 30 kt count. The backtest also groups
+out-of-field dollars by the first hazard report found in that county, in the
+order tornado, flood, surge, wind (`footprintMissByPeril`). This is
+co-location context, not a PCS cause-of-loss allocation.
 
 Findings across the 15 PCS events, on the built-in book TIV (2026-10). Columns:
 - *obs / model* is the ASOS bias over all qualifying stations.
@@ -476,8 +506,16 @@ Findings across the 15 PCS events, on the built-in book TIV (2026-10). Columns:
 What it says:
 - **The modelled land wind runs hot: about 1.4× airport observations in a typical event.** The obs / model median is 0.72, over a range of 0.61–0.90. About 4% of that is 2-min versus 1-min averaging, and failed anemometers pull the observed peaks down a little. The rest is real: `windFactor` 0.80 plus the radii profile overstate open-terrain wind inland. The vendor curves therefore see too much wind and need a lower curve to compensate. A calibrated set absorbs the average.
 - **The event-to-event spread is the nuance.** With damage rising roughly as wind^5, a 0.61 versus 0.90 bias is a factor of about 7 in loss. Florence, Isaias, Debby and Ida, slow or weakening storms with broad wind fields, have the most over-modelled wind. Delta and Laura, compact landfalling majors, have the least. `calibrate_damage_curves.py --wind-correction evidence` scales each event's wind by its bias relative to the all-event median, clamped to 0.7–1.3. The curve then learns vulnerability rather than one storm's wind-field error.
-- **Most remaining out-of-field loss is flood or tornado, not missing wind.** Florence, Ida, Helene and Debby carry 18–29% of their dollars in counties with flood reports or riverine high-water marks. Debby adds 21% under tornadoes. No wind curve should fit these.
-- **Underestimates are flood events.** Florence, Ida, Helene and Debby all read below 0.4 even with the full wind field. Delta at 0.12 is the exception: it is a wind-field size problem, because 9 stations saw tropical-storm-force wind with no modelled wind.
+- **Hazard reports do not allocate PCS loss.** Florence, Ida, Helene and
+  Debby carry 18–29% of their dollars in counties with flood reports or
+  riverine high-water marks, and Debby has tornado reports too. PCS excludes
+  NFIP; without a PCS cause split these observations flag omitted hazards but
+  cannot justify dropping the loss from calibration.
+- **Footprint and wind-field misses are directly observable.** Florence,
+  Helene, Isaias and Debby place large shares of reported loss outside the
+  panel field. Delta has nine stations with TS-force wind where the field has
+  none. Sally's core stations ran 1.5–1.8× the smooth model. These are model
+  errors regardless of the ultimate insured cause.
 
 Sources not yet integrated:
 - NHC Tropical Cyclone Report station tables: official peaks, including stations that failed in ASOS.
@@ -533,7 +571,7 @@ We tested whether the 15-event PCS set supports extra segment parameters,
 rather than assuming that separate residential / commercial / auto curves are
 better. Maria has no matching TIV, so 14 events can be scored. Every fold left
 one whole event out and refitted all loss parameters on the other 13, with the
-same observed-wind transform, on-levelling, flood exclusion, KCC insured prior,
+same observed-wind transform, on-levelling, KCC insured prior,
 smoothness, tail rule and materiality censoring used by the shipped calibration.
 The shared prior is the current-book-TIV-weighted mean of the three insured KCC
 priors. In the 16-parameter alternative, each segment level is estimated only
@@ -541,17 +579,17 @@ from the training folds' segment event totals, weighted by sqrt(loss).
 
 | Model | Parameters | Event log RMS | Event log RMS, sqrt(loss)-weighted | Material county log RMS |
 |---|---:|---:|---:|---:|
-| One shared curve | 13 | 0.941 | **0.707** | **1.649** |
-| Shared curve + segment level | 16 | 0.936 | 0.711 | 1.632 |
-| Separate segment curves | 39 | **0.922** | 0.708 | 1.652 |
+| One shared curve | 13 | 1.014 | **0.748** | 1.730 |
+| Shared curve + segment level | 16 | 1.015 | 0.753 | **1.718** |
+| Separate segment curves | 39 | **1.000** | 0.759 | 1.733 |
 
-The separate curves improve the unweighted event score by only 0.019 (2.1%),
-slightly worsen the loss-weighted event and county scores, and beat the shared
-curve on only 6 of 14 held-out events. A paired event bootstrap puts the 95%
-interval for the event-RMS change at `[-0.057, +0.028]`; the segment-level
-model's interval is `[-0.021, +0.016]`. Both span no improvement. Commercial
-event RMS improves (1.518 → 1.285), but residential (0.855 → 0.898) and auto
-(0.833 → 0.849) worsen, so that result is not broad-based.
+The separate curves improve the unweighted event score by only 0.013 (1.3%),
+worsen the loss-weighted event and county scores, and beat the shared curve on
+only 5 of 14 held-out events. A paired event bootstrap puts the 95% interval
+for the event-RMS change at `[-0.048, +0.038]`; the segment-level model's
+interval is `[-0.012, +0.016]`. Both span no improvement. Commercial event
+RMS improves (1.550 → 1.359), but residential (0.929 → 0.956) and auto
+(0.932 → 0.940) worsen, so that result is not broad-based.
 
 **Decision:** this sample does not validate additional segment complexity. Do
 not add another per-segment parameterisation or claim segment vulnerability is
@@ -561,37 +599,37 @@ vintages are available. ASSUMPTION: the paired bootstrap treats events as the
 independent units and describes sampling uncertainty, not future catastrophe
 uncertainty.
 
-Shipped set `calibrated-20261020` (`--exclude-flood`), insured DR %:
+Shipped set `calibrated-20261020` (no hazard-report-based exclusions), insured DR %:
 
 | Land mph | 45.5 | 55.5 | 65.5 | 75.5 | 85.5 | 95.5 | 105.5 | 115.5 | 135.5 | 165.5 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Residential | 0.04 | 0.20 | 0.83 | 2.35 | 5.41 | 10.95 | 18.7 | 28.0 | 47.6 | 79.9 |
-| Commercial | 0.01 | 0.08 | 0.47 | 1.67 | 4.23 | 8.20 | 13.0 | 18.3 | 32.1 | 54.8 |
-| Auto | 0.10 | 0.29 | 0.79 | 1.92 | 4.10 | 7.67 | 11.5 | 13.4 | 24.6 | 45.7 |
+| Residential | 0.05 | 0.20 | 0.77 | 2.21 | 5.15 | 10.50 | 18.0 | 27.3 | 46.5 | 78.0 |
+| Commercial | 0.02 | 0.09 | 0.44 | 1.56 | 4.07 | 8.10 | 13.0 | 18.6 | 32.5 | 55.5 |
+| Auto | 0.15 | 0.29 | 0.68 | 1.60 | 3.54 | 6.89 | 10.8 | 12.9 | 23.7 | 44.0 |
 
 90% of the exposure-weighted wind sits in the first two bands, so the curve is
 tightly pinned below ~75 mph land and leans on the prior above ~110.
-`sigmaLogEvent` 1.03 (loss-weighted 0.79), `sigmaLogCounty` 1.66.
+`sigmaLogEvent` 1.10 (loss-weighted 0.84), `sigmaLogCounty` 1.75.
 
 All-segment event totals, counties in the wind field, on-levelled PCS $B,
 model fitted **without** that storm / with it:
 
 | Storm | PCS | Unseen | Ratio | In-sample |
 |---|---|---|---|---|
-| Ian | 57.0 | 80.9 | 1.42 | 1.21 |
-| Irma | 39.2 | 28.0 | 0.71 | 0.75 |
-| Ida | 28.8 | 9.7 | 0.34 | 0.38 |
-| Milton | 25.5 | 29.0 | 1.14 | 1.09 |
-| Michael | 18.2 | 20.6 | 1.13 | 1.08 |
-| Laura | 15.8 | 15.8 | 1.00 | 0.96 |
-| Helene | 11.9 | 8.9 | 0.75 | 0.78 |
-| Florence | 4.5 | 4.1 | 0.92 | 0.94 |
-| Sally | 4.3 | 2.6 | 0.61 | 0.65 |
-| Zeta | 3.5 | 16.6 | 4.71 | 3.95 |
-| Beryl | 3.0 | 9.6 | 3.20 | 2.86 |
-| Delta | 2.1 | 0.9 | 0.44 | 0.48 |
-| Isaias | 2.1 | 15.6 | 7.55 | 5.62 |
-| Debby | 0.5 | 1.6 | 3.56 | 2.71 |
+| Ian | 57.3 | 80.3 | 1.40 | 1.19 |
+| Irma | 39.6 | 26.9 | 0.68 | 0.72 |
+| Ida | 34.9 | 12.8 | 0.37 | 0.41 |
+| Milton | 25.5 | 27.7 | 1.09 | 1.05 |
+| Michael | 18.5 | 23.1 | 1.25 | 1.12 |
+| Helene | 16.6 | 9.6 | 0.58 | 0.62 |
+| Laura | 15.8 | 15.6 | 0.98 | 0.95 |
+| Florence | 6.3 | 4.2 | 0.68 | 0.71 |
+| Sally | 4.4 | 2.5 | 0.58 | 0.61 |
+| Zeta | 3.5 | 16.7 | 4.72 | 3.95 |
+| Beryl | 3.0 | 9.4 | 3.11 | 2.78 |
+| Isaias | 2.7 | 26.8 | 10.09 | 7.25 |
+| Delta | 2.3 | 1.1 | 0.47 | 0.51 |
+| Debby | 0.7 | 3.1 | 4.59 | 3.46 |
 
 Median observed / shaped-model wind by storm (all stations; ≥ 64 kt modelled):
 Sally 1.13 / 1.81, Delta 1.25 / 1.49, Beryl 1.31 / 1.34, Milton 1.16 / 1.21,
@@ -605,9 +643,11 @@ Debby 0.94, Helene 1.01 / 0.90. Reading the misses:
 - **Under: wind under-modelled.** Sally (stalled over Pensacola) and Delta
   had core stations at 1.5–1.8× the model. The county correction recovers
   part of this; it stays opt-in because it hurts other storms more.
-- **Under: flood in PCS.** Ida (Louisiana plus north-east flash flood) and
-  Helene (Appalachian flood) have winds on the shape. PCS includes private
-  flood; the curve is wind only.
+- **Under: event loss outside the wind model.** Ida and Helene have winds near
+  the fitted shape but substantial reported loss outside the modelled field.
+  Flood/high-water evidence is present, but PCS excludes NFIP and the supplied
+  rows do not identify how much is private/commercial water loss versus wind,
+  demand surge, loss development or another omitted effect.
 - **Over: weak storms over dense exposure.** Isaias (NY / NJ / CT), Zeta
   (New Orleans, Atlanta), Beryl (Houston) and Debby put 50–65 mph over very
   large TIV. Their winds match the shape (Beryl even ran above it), so the

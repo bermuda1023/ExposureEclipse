@@ -40,8 +40,8 @@ _FORM_V1_PCT: dict[str, tuple[float, ...]] = {
 _VENDOR_LABEL = {"air": "AIR (Form V-1)", "kcc": "KCC (Form V-1)", "rms": "RMS (Form V-1)"}
 
 # ASSUMPTION: Form V-1 is residential building damage. Until calibrated,
-# commercial uses the same curve and auto uses 15% of it (hurricane auto loss
-# is mostly flood, which a wind curve does not see).
+# commercial uses the same curve and auto uses 15% of it. Form V-1 does not
+# model vehicles; the scale is only an uncalibrated placeholder.
 UNCALIBRATED_SEGMENT_SCALE: dict[str, float] = {"RESIDENTIAL": 1.0, "COMMERCIAL": 1.0, "AUTO": 0.15}
 
 # ASSUMPTION: marine 1-minute sustained wind to wind over land. Published

@@ -54,7 +54,7 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
           </div>
           <div style={{ fontSize: "0.66rem", color: "var(--ink-500)", marginTop: 1 }}>
             {pcs
-              ? `Insured damage ratio fitted to PCS events against observed ASOS winds. Range is the held-out full-event result for ${curve.panelBand.cohortCovered}/${curve.panelBand.cohortEvents.length} wind-dominant majors (${curve.panelBand.allEventCoverage}/${curve.panelBand.scorableEvents} of all scorable events).`
+              ? `Insured damage ratio fitted to PCS events against observed ASOS winds. The empirical P10–P90 holdout range covers ${curve.panelBand.coveredEvents}/${curve.panelBand.scorableEvents} scorable events; NFIP is excluded from PCS.`
               : vendor
               ? "Form V-1 building damage by 10 mph of 1-minute wind, on unmitigated reference structures. Each county uses its own mix. SD is still yours. Applied to bundled TIV."
               : "Mean ± SD insured damage ratio per category, applied to TIV. Defaults are trained on 15 PCS events (2017–2024); SD is the storm-to-storm error."}

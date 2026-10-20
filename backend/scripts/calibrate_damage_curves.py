@@ -19,11 +19,10 @@ error from vulnerability:
                                modelled ratio relative to the all-event median,
                                so the curve does not learn one storm's
                                too-strong (or too-weak) wind field
-  --exclude-flood              drop tropical-storm-wind counties (modelled
-                               peak < 64 kt, no ASOS reading >= 34 kt) with
-                               flood reports or riverine high-water marks:
-                               PCS includes private flood there and no wind
-                               curve should chase it
+
+Flood reports are diagnostic only. PCS excludes NFIP, and a report does not
+establish that the PCS loss in that county was private-market flood, so rows
+are never excluded merely because flood or high-water evidence exists.
 """
 
 from __future__ import annotations
@@ -46,15 +45,15 @@ from app.services.damage_curves import (
     DEFAULT_SIGMA_EVENT,
     curves_dir,
     insured_prior,
+    land_mph,
     load_curve_sets,
 )
-from app.services.event_evidence import county_evidence, load_evidence
+from app.services.event_evidence import load_evidence
 from app.services.event_loss import resolve_storm, storm_impacts
-from app.services.industry_losses import LOSS_SEGMENTS, load_actuals, tiv_for_year
+from app.services.industry_losses import LOSS_SEGMENTS, data_dir, load_actuals, tiv_for_year
 from app.services.loss_calibration import implied_dr_by_band, match_event
 from app.services.onlevel import onlevel_actuals
 from app.services.wind_calibration import county_multipliers, fit_land_shape
-from app.services.damage_curves import land_mph
 
 MIN_OBS_PER_SEGMENT = 5
 SIGMA_COUNTY_FLOOR = 0.25
@@ -65,7 +64,6 @@ SIGMA_EVENT_FLOOR = 0.15
 MIN_BIAS_STATIONS = 20
 MIN_STRONG_STATIONS = 10
 WIND_CORRECTION_CLAMP = (0.7, 1.3)
-FLOOD_SIGNAL_MIN = 2
 
 
 def event_wind_bias(storm_id: str) -> float | None:
@@ -78,19 +76,53 @@ def event_wind_bias(storm_id: str) -> float | None:
     return None
 
 
-def flood_dominated(storm_id: str, geography_id: str, peak_wind_kt: int) -> bool:
-    if peak_wind_kt >= 64:
-        return False
-    ev = county_evidence(load_evidence(storm_id), geography_id)
-    if not ev or (ev["asosMaxSustainedKt"] or 0) >= 34:
-        return False
-    return ev["floodReports"] + ev["hwmRiverine"] >= FLOOD_SIGNAL_MIN
-
-
 def _rms(values: list[float]) -> float | None:
     if not values:
         return None
     return math.sqrt(sum(v * v for v in values) / len(values))
+
+
+def panel_holdout_band() -> dict | None:
+    """Finite-sample P10-P90 analogue from the panel model's full-event holdouts."""
+    path = data_dir() / "damage_assumptions" / "sshws_calibrated.json"
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    errors = ((payload.get("segments") or {}).get("ALL") or {}).get(
+        "eventLogErrorHoldout", {}
+    )
+    events = {event["stormId"]: event for event in payload.get("events", [])}
+    factors: dict[str, float] = {}
+    for storm_id, error in errors.items():
+        event = events.get(storm_id) or {}
+        actual = float(event.get("actualTotal") or 0)
+        in_field = float(event.get("inField") or 0)
+        if actual > 0 and in_field > 0:
+            factors[storm_id] = actual / (in_field * math.exp(float(error)))
+    if len(factors) < 5:
+        return None
+    ordered = sorted(factors.items(), key=lambda item: item[1])
+    # With n=14, dropping one observation from each tail is the conservative
+    # finite-sample equal-tail analogue of P10-P90: 12/14 = 85.7% coverage.
+    low = ordered[1][1]
+    high = ordered[-2][1]
+    outside = [storm_id for storm_id, value in factors.items() if not low <= value <= high]
+    return {
+        # Round outward so both boundary observations remain covered on wire.
+        "lowFactor": math.floor(low * 1_000_000) / 1_000_000,
+        "highFactor": math.ceil(high * 1_000_000) / 1_000_000,
+        "coveredEvents": len(factors) - len(outside),
+        "scorableEvents": len(factors),
+        "suppliedEvents": len(events),
+        "outsideEvents": sorted(outside),
+        "basis": (
+            "Finite-sample empirical P10-P90 order-statistic range of full "
+            "on-levelled PCS event total / leave-one-event-out panel model "
+            f"across all {len(factors)} scorable events ({len(factors) - len(outside)}/"
+            f"{len(factors)} covered); PCS excludes NFIP. Maria is unscorable "
+            "because the book has no matching TIV."
+        ),
+    }
 
 
 def main() -> None:
@@ -123,7 +155,6 @@ def main() -> None:
         help="observed (default): land-wind shape fitted to every ASOS station; "
              "flat: windFactor only",
     )
-    parser.add_argument("--exclude-flood", action="store_true")
     parser.add_argument("--county-wind-strength", type=float, default=1.0,
                         help="observed wind model: scale on each county's log wind correction")
     parser.add_argument("--county-wind", action="store_true",
@@ -184,17 +215,6 @@ def main() -> None:
             mult = {imp.geography_id: rel for imp in impacts}
         matched = match_event(act, impacts, tiv, land, mult)
         obs_mult = sorted(mult.values()) if shape else []
-        flood_dropped = 0.0
-        if args.exclude_flood:
-            peak = {imp.geography_id: imp.max_wind_kt for imp in impacts}
-            for seg in LOSS_SEGMENTS:
-                keep = []
-                for o in matched.observations[seg]:
-                    if flood_dominated(storm_id, o.geography_id, peak.get(o.geography_id, 0)):
-                        flood_dropped += o.actual
-                    else:
-                        keep.append(o)
-                matched.observations[seg] = keep
         for seg in LOSS_SEGMENTS:
             obs[seg].extend(matched.observations[seg])
         miss = sum(a for _g, _s, a in matched.footprint_miss)
@@ -217,7 +237,6 @@ def main() -> None:
                 {"median": obs_mult[len(obs_mult) // 2], "min": obs_mult[0], "max": obs_mult[-1]}
                 if obs_mult else None
             ),
-            "floodExcludedLoss": flood_dropped,
         }
         event_meta.append(meta)
         print(
@@ -225,7 +244,6 @@ def main() -> None:
             + (f" (reported x{on_level['factor']:.2f} on-level)" if on_level else "") + "; "
             f"matched {meta['countiesMatched']}; outside wind field {miss:,.0f}; no TIV {gap:,.0f}"
             + (f"; wind x{rel:.2f}" if rel != 1.0 else "")
-            + (f"; flood-dominated dropped {flood_dropped:,.0f}" if flood_dropped else "")
         )
 
     opts = FitOptions(
@@ -344,6 +362,7 @@ def main() -> None:
             # TIV share by segment in the industry book: the impact panel blends
             # the segment curves with it for a client's bundled TIV.
             "bookMix": {seg: round(v / book_total, 4) for seg, v in seg_tiv.items()},
+            "panelBand": panel_holdout_band(),
             "windCorrection": args.wind_correction,
             "windModel": args.wind_model,
             "countyWind": args.county_wind,
@@ -353,7 +372,6 @@ def main() -> None:
                 if shape else None
             ),
             "windBiasReference": bias_ref,
-            "excludeFlood": args.exclude_flood,
             "events": event_meta,
             "segments": fit_meta,
         },

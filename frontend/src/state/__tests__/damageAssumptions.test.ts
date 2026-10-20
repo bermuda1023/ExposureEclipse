@@ -70,11 +70,10 @@ function calibratedSet(over: Partial<CurveSetInfo> = {}): CurveSetInfo {
       panelBand: {
         lowFactor: 0.8,
         highFactor: 1.25,
-        cohortEvents: ["A", "B"],
-        cohortCovered: 2,
+        coveredEvents: 2,
         scorableEvents: 3,
-        allEventCoverage: 2,
         suppliedEvents: 4,
+        outsideEvents: ["C"],
         basis: "test holdout range",
       },
     },

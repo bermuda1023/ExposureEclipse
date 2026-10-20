@@ -2,7 +2,7 @@
   "id": "calibrated-20261020",
   "label": "Calibrated 2026-10-20 (15 events)",
   "kind": "calibrated",
-  "createdAt": "2026-10-20T02:34:25+00:00",
+  "createdAt": "2026-10-20T15:25:09+00:00",
   "bandsMphLo": [
     41,
     51,
@@ -20,58 +20,58 @@
   ],
   "segments": {
     "RESIDENTIAL": [
-      0.000408,
-      0.002013,
-      0.008276,
-      0.023457,
-      0.054126,
-      0.109547,
-      0.186602,
-      0.279748,
-      0.353159,
-      0.47614,
-      0.576573,
-      0.671338,
-      0.798758
+      0.000519,
+      0.002019,
+      0.007719,
+      0.022067,
+      0.05154,
+      0.105005,
+      0.180453,
+      0.273015,
+      0.34466,
+      0.464681,
+      0.562696,
+      0.655181,
+      0.779534
     ],
     "COMMERCIAL": [
-      0.000104,
-      0.000784,
-      0.004672,
-      0.016702,
-      0.042288,
-      0.081968,
-      0.129571,
-      0.183044,
-      0.234546,
-      0.320898,
-      0.391425,
-      0.457973,
-      0.547453
+      0.000163,
+      0.000864,
+      0.004421,
+      0.015634,
+      0.040705,
+      0.081033,
+      0.13025,
+      0.185631,
+      0.237861,
+      0.325434,
+      0.396958,
+      0.464446,
+      0.55519
     ],
     "AUTO": [
-      0.000968,
-      0.002926,
-      0.007941,
-      0.019203,
-      0.041035,
-      0.076733,
-      0.114951,
-      0.133668,
-      0.173982,
-      0.246393,
-      0.309111,
-      0.370778,
-      0.456729
+      0.001482,
+      0.002946,
+      0.006792,
+      0.016031,
+      0.035355,
+      0.068944,
+      0.107628,
+      0.128771,
+      0.167609,
+      0.237366,
+      0.297787,
+      0.357195,
+      0.439997
     ]
   },
   "windFactor": 0.8,
   "windExponent": -0.3585,
   "windFloor": 0.9103,
   "deductible": {},
-  "sigmaLogCounty": 1.664,
-  "sigmaLogEvent": 1.0294,
-  "sigmaLogEventWeighted": 0.7915,
+  "sigmaLogCounty": 1.7542,
+  "sigmaLogEvent": 1.1023,
+  "sigmaLogEventWeighted": 0.8395,
   "fit": {
     "prior": "kcc",
     "target": "insured loss (deductible learned in the curve)",
@@ -86,20 +86,16 @@
       "AUTO": 0.0311
     },
     "panelBand": {
-      "lowFactor": 0.94864,
-      "highFactor": 1.327164,
-      "cohortEvents": [
-        "AL092022",
-        "AL112017",
-        "AL132020",
-        "AL142018",
-        "AL142024"
-      ],
-      "cohortCovered": 5,
+      "lowFactor": 0.415968,
+      "highFactor": 6.559247,
+      "coveredEvents": 12,
       "scorableEvents": 14,
-      "allEventCoverage": 5,
       "suppliedEvents": 15,
-      "basis": "Observed min-max of full PCS event total / leave-one-event-out model for five wind-dominant landfalling majors; Maria is unscorable because the book has no matching TIV."
+      "outsideEvents": [
+        "AL042024",
+        "AL282020"
+      ],
+      "basis": "Finite-sample empirical P10-P90 order-statistic range of full on-levelled PCS event total / leave-one-event-out panel model across all 14 scorable events (12/14 covered); PCS excludes NFIP. Maria is unscorable because the book has no matching TIV."
     },
     "windCorrection": "none",
     "windModel": "observed",
@@ -111,7 +107,6 @@
       "nStations": 2126
     },
     "windBiasReference": null,
-    "excludeFlood": true,
     "events": [
       {
         "stormId": "AL022024",
@@ -135,8 +130,7 @@
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 0.0
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL042024",
@@ -154,14 +148,13 @@
         "footprintMissLoss": 1084825402.6805525,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 154,
-          "COMMERCIAL": 154,
-          "AUTO": 154
+          "RESIDENTIAL": 197,
+          "COMMERCIAL": 197,
+          "AUTO": 197
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 213729488.4887526
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL062018",
@@ -179,14 +172,13 @@
         "footprintMissLoss": 1496644438.459408,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 120,
-          "COMMERCIAL": 120,
-          "AUTO": 120
+          "RESIDENTIAL": 138,
+          "COMMERCIAL": 138,
+          "AUTO": 138
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 1782248491.0190907
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL092020",
@@ -204,14 +196,13 @@
         "footprintMissLoss": 203304698.76998094,
         "exposureGapLoss": 10615453.576855704,
         "countiesMatched": {
-          "RESIDENTIAL": 201,
-          "COMMERCIAL": 201,
-          "AUTO": 201
+          "RESIDENTIAL": 254,
+          "COMMERCIAL": 254,
+          "AUTO": 254
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 591390131.9915874
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL092021",
@@ -229,14 +220,13 @@
         "footprintMissLoss": 896553751.8754387,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 113,
-          "COMMERCIAL": 113,
-          "AUTO": 113
+          "RESIDENTIAL": 161,
+          "COMMERCIAL": 161,
+          "AUTO": 161
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 6079613766.37334
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL092022",
@@ -254,14 +244,13 @@
         "footprintMissLoss": 218321610.06796288,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 144,
-          "COMMERCIAL": 144,
-          "AUTO": 144
+          "RESIDENTIAL": 148,
+          "COMMERCIAL": 148,
+          "AUTO": 148
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 308474599.80145925
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL092024",
@@ -279,14 +268,13 @@
         "footprintMissLoss": 1268565418.083629,
         "exposureGapLoss": 454935347.2645308,
         "countiesMatched": {
-          "RESIDENTIAL": 244,
-          "COMMERCIAL": 244,
-          "AUTO": 244
+          "RESIDENTIAL": 293,
+          "COMMERCIAL": 293,
+          "AUTO": 293
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 4732401454.398085
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL112017",
@@ -304,14 +292,13 @@
         "footprintMissLoss": 476745774.9306223,
         "exposureGapLoss": 5583482075.330361,
         "countiesMatched": {
-          "RESIDENTIAL": 215,
-          "COMMERCIAL": 215,
-          "AUTO": 215
+          "RESIDENTIAL": 222,
+          "COMMERCIAL": 222,
+          "AUTO": 222
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 397857905.9398826
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL132020",
@@ -335,8 +322,7 @@
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 0.0
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL142018",
@@ -354,14 +340,13 @@
         "footprintMissLoss": 500009677.8321896,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 335,
-          "COMMERCIAL": 335,
-          "AUTO": 335
+          "RESIDENTIAL": 397,
+          "COMMERCIAL": 397,
+          "AUTO": 397
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 260847096.57633552
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL142024",
@@ -385,8 +370,7 @@
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 0.0
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL152017",
@@ -410,8 +394,7 @@
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 0.0
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL192020",
@@ -429,14 +412,13 @@
         "footprintMissLoss": 559534219.2581123,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 26,
-          "COMMERCIAL": 26,
-          "AUTO": 26
+          "RESIDENTIAL": 37,
+          "COMMERCIAL": 37,
+          "AUTO": 37
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 145030234.3573839
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL262020",
@@ -454,14 +436,13 @@
         "footprintMissLoss": 331058062.75451225,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 75,
-          "COMMERCIAL": 75,
-          "AUTO": 75
+          "RESIDENTIAL": 81,
+          "COMMERCIAL": 81,
+          "AUTO": 81
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 144612898.68715134
+        "observedWindMultiplier": null
       },
       {
         "stormId": "AL282020",
@@ -479,20 +460,19 @@
         "footprintMissLoss": 51612586.24745202,
         "exposureGapLoss": 0,
         "countiesMatched": {
-          "RESIDENTIAL": 300,
-          "COMMERCIAL": 300,
-          "AUTO": 300
+          "RESIDENTIAL": 306,
+          "COMMERCIAL": 306,
+          "AUTO": 306
         },
         "windBias": null,
         "windCorrection": 1.0,
-        "observedWindMultiplier": null,
-        "floodExcludedLoss": 17643782.6590001
+        "observedWindMultiplier": null
       }
     ],
     "segments": {
       "RESIDENTIAL": {
         "status": "fitted",
-        "nObs": 2091,
+        "nObs": 2398,
         "events": [
           "AL022024",
           "AL042024",
@@ -509,51 +489,51 @@
           "AL262020",
           "AL282020"
         ],
-        "iterations": 903,
-        "objective": 2.2232942504927293,
-        "countyLogRmsInSample": 1.6029484971341375,
-        "countyLogRmsHoldout": 1.6565645348875715,
+        "iterations": 954,
+        "objective": 2.436695100096179,
+        "countyLogRmsInSample": 1.6448297213355871,
+        "countyLogRmsHoldout": 1.711339687431899,
         "eventLogErrorInSample": {
-          "AL022024": 0.9337406559533701,
-          "AL042024": 1.067311803422195,
-          "AL062018": 0.07033463663364367,
-          "AL092020": 1.605335759634495,
-          "AL092021": -1.0268061229193604,
-          "AL092022": 0.44269467138575325,
-          "AL092024": -0.1382739852738569,
-          "AL112017": -0.34768931545599474,
-          "AL132020": -0.1781302684915638,
-          "AL142018": -0.11758699051333006,
-          "AL142024": 0.52783611134317,
-          "AL192020": -0.3924404734618194,
-          "AL262020": -0.883231009522147,
-          "AL282020": 1.1099654243520953
+          "AL022024": 0.8951131048719321,
+          "AL042024": 1.2461207700411958,
+          "AL062018": -0.26496623503135047,
+          "AL092020": 1.8782832163332113,
+          "AL092021": -0.8911839468421033,
+          "AL092022": 0.41212499182389056,
+          "AL092024": -0.3751419470277328,
+          "AL112017": -0.389052563536445,
+          "AL132020": -0.21085050954340417,
+          "AL142018": -0.09002050443000349,
+          "AL142024": 0.48547203457432647,
+          "AL192020": -0.4483571794916256,
+          "AL262020": -0.8328619508894376,
+          "AL282020": 1.1139498221134387
         },
         "eventLogErrorHoldout": {
-          "AL022024": 1.0307316391440902,
-          "AL042024": 1.301019774449814,
-          "AL062018": 0.06475500603452812,
-          "AL092020": 1.839602600786168,
-          "AL092021": -1.1617347246093377,
-          "AL092022": 0.6889320693839747,
-          "AL092024": -0.17509996684903872,
-          "AL112017": -0.41707832836563874,
-          "AL132020": -0.19834641925027893,
-          "AL142018": -0.16889436848356187,
-          "AL142024": 0.6224079914842346,
-          "AL192020": -0.4449857494874977,
-          "AL262020": -0.9767535644712249,
-          "AL282020": 1.2295521479210063
+          "AL022024": 0.9915363890252877,
+          "AL042024": 1.483730069293036,
+          "AL062018": -0.2989258560921964,
+          "AL092020": 2.160170623376732,
+          "AL092021": -0.9840228518109791,
+          "AL092022": 0.6477318349128763,
+          "AL092024": -0.4530749013607143,
+          "AL112017": -0.4711727003844129,
+          "AL132020": -0.2486191047645251,
+          "AL142018": -0.12932497474565013,
+          "AL142024": 0.5807587863652118,
+          "AL192020": -0.508330449195675,
+          "AL262020": -0.9205186576236319,
+          "AL282020": 1.2313578024215288
         },
         "bandWeight": [
-          0.5672,
-          0.3219,
-          0.0781,
-          0.0177,
-          0.0075,
-          0.002,
-          0.0044,
-          0.0011,
+          0.6022,
+          0.3094,
+          0.0623,
+          0.0141,
+          0.006,
+          0.0016,
+          0.0035,
+          0.0008,
           0.0001,
           0.0,
           0.0,
@@ -563,8 +543,8 @@
         "impliedDrByBand": [
           {
             "curveMph": 55.5,
-            "n": 157,
-            "median": 0.0019873504069647966,
+            "n": 188,
+            "median": 0.0008547589158120732,
             "min": 5.094455111929509e-05,
             "max": 0.06826697932720655
           },
@@ -593,7 +573,7 @@
       },
       "COMMERCIAL": {
         "status": "fitted",
-        "nObs": 2091,
+        "nObs": 2398,
         "events": [
           "AL022024",
           "AL042024",
@@ -610,51 +590,51 @@
           "AL262020",
           "AL282020"
         ],
-        "iterations": 253,
-        "objective": 3.258771392918046,
-        "countyLogRmsInSample": 1.8490188809589203,
-        "countyLogRmsHoldout": 1.9520149340207948,
+        "iterations": 409,
+        "objective": 3.525407072196447,
+        "countyLogRmsInSample": 1.9293145438050012,
+        "countyLogRmsHoldout": 2.060553020096154,
         "eventLogErrorInSample": {
-          "AL022024": 1.5457018574623695,
-          "AL042024": 1.7111129365863362,
-          "AL062018": -0.3686343592208669,
-          "AL092020": 2.453684207871638,
-          "AL092021": -0.8972926150824986,
-          "AL092022": -0.1378836195319623,
-          "AL092024": -0.10911150753746984,
-          "AL112017": -0.28250954540869505,
-          "AL132020": 0.134889741008622,
-          "AL142018": 0.37497189389854757,
-          "AL142024": -0.40625551861763803,
-          "AL192020": -0.3280321323116158,
-          "AL262020": -0.43478179987059984,
-          "AL282020": 1.9145544013477027
+          "AL022024": 1.544718634618684,
+          "AL042024": 1.9023754017180803,
+          "AL062018": -0.6009932004690359,
+          "AL092020": 2.6251234065888465,
+          "AL092021": -0.8905039902934424,
+          "AL092022": -0.1357812730516418,
+          "AL092024": -0.44048684784578307,
+          "AL112017": -0.30480121810469957,
+          "AL132020": 0.13500239256281782,
+          "AL142018": 0.4004486123450432,
+          "AL142024": -0.44030353951659745,
+          "AL192020": -0.3828325209905558,
+          "AL262020": -0.3984650742174025,
+          "AL282020": 1.9040476668215884
         },
         "eventLogErrorHoldout": {
-          "AL022024": 1.694181666043092,
-          "AL042024": 2.2030458664293797,
-          "AL062018": -0.4136398027584121,
-          "AL092020": 2.897430383872574,
-          "AL092021": -1.0166812525747568,
-          "AL092022": -0.17098825824645078,
-          "AL092024": -0.12224827023869328,
-          "AL112017": -0.30850588165606824,
-          "AL132020": 0.22273411189875225,
-          "AL142018": 0.5217612965088758,
-          "AL142024": -0.4705338300692248,
-          "AL192020": -0.37225874840000556,
-          "AL262020": -0.5062410759072384,
-          "AL282020": 2.1730632588894627
+          "AL022024": 1.697288915376437,
+          "AL042024": 2.3969253441393326,
+          "AL062018": -0.6668524577833226,
+          "AL092020": 3.0856744876274624,
+          "AL092021": -1.0001923066863305,
+          "AL092022": -0.10909330704881127,
+          "AL092024": -0.4984592220862056,
+          "AL112017": -0.34244233140261193,
+          "AL132020": 0.2359608986759845,
+          "AL142018": 0.6771174484832556,
+          "AL142024": -0.5185356635961029,
+          "AL192020": -0.4327835364991956,
+          "AL262020": -0.46937277207054534,
+          "AL282020": 2.1679999648144372
         },
         "bandWeight": [
-          0.5786,
-          0.3187,
-          0.072,
-          0.0171,
-          0.0069,
-          0.002,
-          0.0037,
-          0.001,
+          0.6245,
+          0.2946,
+          0.0567,
+          0.0134,
+          0.0054,
+          0.0016,
+          0.0029,
+          0.0008,
           0.0001,
           0.0,
           0.0,
@@ -664,9 +644,9 @@
         "impliedDrByBand": [
           {
             "curveMph": 55.5,
-            "n": 98,
-            "median": 0.0030419706311296912,
-            "min": 2.7544191481512635e-05,
+            "n": 116,
+            "median": 0.002444394646692602,
+            "min": 2.4566281046039815e-05,
             "max": 0.04876871685733478
           },
           {
@@ -694,7 +674,7 @@
       },
       "AUTO": {
         "status": "fitted",
-        "nObs": 2091,
+        "nObs": 2398,
         "events": [
           "AL022024",
           "AL042024",
@@ -711,51 +691,51 @@
           "AL262020",
           "AL282020"
         ],
-        "iterations": 639,
-        "objective": 2.0069554520582606,
-        "countyLogRmsInSample": 1.2658433359161325,
-        "countyLogRmsHoldout": 1.323666089725555,
+        "iterations": 653,
+        "objective": 2.4249652075825416,
+        "countyLogRmsInSample": 1.3623240906121057,
+        "countyLogRmsHoldout": 1.4341079730550923,
         "eventLogErrorInSample": {
-          "AL022024": 0.6334107265952967,
-          "AL042024": 0.2086328378126937,
-          "AL062018": 0.14482470136203127,
-          "AL092020": 0.9907874761261571,
-          "AL092021": -0.5749949432052531,
-          "AL092022": -0.41025149663070976,
-          "AL092024": -1.1389052960867647,
-          "AL112017": 0.6670597641967696,
-          "AL132020": -0.3255636779573661,
-          "AL142018": 0.37533276249189,
-          "AL142024": 0.22956323232454398,
-          "AL192020": -1.3706515326447404,
-          "AL262020": -0.49093285249702023,
-          "AL282020": 1.3583828743256834
+          "AL022024": 0.5834537609844167,
+          "AL042024": 0.6415186584506225,
+          "AL062018": 0.11728630438584337,
+          "AL092020": 1.2608679712347552,
+          "AL092021": -1.00112321554995,
+          "AL092022": -0.4358707046953957,
+          "AL092024": -1.0862674539475383,
+          "AL112017": 0.5966132178394167,
+          "AL132020": -0.3806187446486354,
+          "AL142018": 0.48696588115844325,
+          "AL142024": 0.15030175352328914,
+          "AL192020": -1.4068998788599523,
+          "AL262020": -0.29938292981093867,
+          "AL282020": 1.4548045487578525
         },
         "eventLogErrorHoldout": {
-          "AL022024": 0.6976580136454957,
-          "AL042024": 0.2490085075327776,
-          "AL062018": 0.14980314020055224,
-          "AL092020": 1.1363613042202596,
-          "AL092021": -0.6218197207464029,
-          "AL092022": -0.5445550348125117,
-          "AL092024": -1.2994010578784538,
-          "AL112017": 0.7721803461364518,
-          "AL132020": -0.3862081934054959,
-          "AL142018": 0.4417558628739034,
-          "AL142024": 0.2740183959147999,
-          "AL192020": -1.5390690944630323,
-          "AL262020": -0.5389713689218484,
-          "AL282020": 1.4775521734559458
+          "AL022024": 0.6429554365640668,
+          "AL042024": 0.7482656561933567,
+          "AL062018": 0.11719366315351698,
+          "AL092020": 1.4362372871396478,
+          "AL092021": -1.1923204513891652,
+          "AL092022": -0.5285135579778321,
+          "AL092024": -1.2527963105196804,
+          "AL112017": 0.6881691690310063,
+          "AL132020": -0.47797550407661227,
+          "AL142018": 0.5589294034154133,
+          "AL142024": 0.1790544452431111,
+          "AL192020": -1.5628100890629562,
+          "AL262020": -0.32883072897813287,
+          "AL282020": 1.5697495641088213
         },
         "bandWeight": [
-          0.5568,
-          0.3252,
-          0.0826,
-          0.019,
-          0.0082,
-          0.0022,
-          0.0047,
-          0.0012,
+          0.5917,
+          0.3109,
+          0.0683,
+          0.0157,
+          0.0067,
+          0.0018,
+          0.0039,
+          0.001,
           0.0001,
           0.0,
           0.0,
@@ -765,8 +745,8 @@
         "impliedDrByBand": [
           {
             "curveMph": 55.5,
-            "n": 115,
-            "median": 0.0038776029691757357,
+            "n": 139,
+            "median": 0.0029036877157073136,
             "min": 0.0001518653626463019,
             "max": 0.05148322727815946
           },

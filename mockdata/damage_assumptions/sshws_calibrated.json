@@ -1,12 +1,11 @@
 {
   "id": "sshws-calibrated-20261020",
-  "createdAt": "2026-10-20T01:42:11+00:00",
-  "basis": "insured loss (PCS, private flood in, NFIP and LAE out), on-levelled to the TIV date",
+  "createdAt": "2026-10-20T15:22:32+00:00",
+  "basis": "insured PCS loss (NFIP and LAE out; private/commercial flood or surge may be in), on-levelled to the TIV date",
   "windField": "compute_impact, historical track, multiplier 2.5, no tropical-storm field",
   "prior": "kcc",
   "ridge": 0.05,
   "alphaEvent": 1.0,
-  "excludeFlood": false,
   "fixTsPct": 0.04,
   "onLevel": true,
   "bookMix": {
@@ -22,8 +21,7 @@
       "actualTotal": 3483490779.9812346,
       "inField": 2406518851.2869835,
       "footprintMiss": 1075936244.190266,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL042024",
@@ -32,8 +30,7 @@
       "actualTotal": 1753775805.4344864,
       "inField": 6362213.445561068,
       "footprintMiss": 1746468327.0587325,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL062018",
@@ -42,8 +39,7 @@
       "actualTotal": 7862181007.470559,
       "inField": 2707430368.310595,
       "footprintMiss": 5043125364.673719,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL092020",
@@ -52,8 +48,7 @@
       "actualTotal": 2873437194.9651833,
       "inField": 53591395.76719454,
       "footprintMiss": 2816993725.38624,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL092021",
@@ -62,8 +57,7 @@
       "actualTotal": 35750429275.8256,
       "inField": 25734931792.605606,
       "footprintMiss": 10013795459.980875,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL092022",
@@ -72,8 +66,7 @@
       "actualTotal": 57480689103.96546,
       "inField": 53510082640.15765,
       "footprintMiss": 3970088082.959601,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL092024",
@@ -82,8 +75,7 @@
       "actualTotal": 18311988311.64163,
       "inField": 1913637614.8035452,
       "footprintMiss": 16395884753.260057,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL112017",
@@ -92,8 +84,7 @@
       "actualTotal": 45759792371.97314,
       "inField": 30509282574.31135,
       "footprintMiss": 10646888099.765541,
-      "exposureGap": 4495913799.046223,
-      "floodExcluded": 0.0
+      "exposureGap": 4495913799.046223
     },
     {
       "stormId": "AL132020",
@@ -102,8 +93,7 @@
       "actualTotal": 16375622892.54489,
       "inField": 12635614864.761719,
       "footprintMiss": 3738112124.6473694,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL142018",
@@ -112,8 +102,7 @@
       "actualTotal": 19192260760.26969,
       "inField": 16386591686.732948,
       "footprintMiss": 2588931424.4783554,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL142024",
@@ -122,8 +111,7 @@
       "actualTotal": 25495958533.259415,
       "inField": 19264370821.68129,
       "footprintMiss": 6231496073.372349,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL152017",
@@ -132,8 +120,7 @@
       "actualTotal": 42114863777.66427,
       "inField": 0.0,
       "footprintMiss": 0.0,
-      "exposureGap": 36100322168.59732,
-      "floodExcluded": 0.0
+      "exposureGap": 36100322168.59732
     },
     {
       "stormId": "AL192020",
@@ -142,8 +129,7 @@
       "actualTotal": 4990936927.340937,
       "inField": 4011158856.3595023,
       "footprintMiss": 978530905.8107724,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL262020",
@@ -152,8 +138,7 @@
       "actualTotal": 2586435767.143344,
       "inField": 784903280.3570248,
       "footprintMiss": 1800422014.2939756,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     },
     {
       "stormId": "AL282020",
@@ -162,8 +147,7 @@
       "actualTotal": 3591752514.0732555,
       "inField": 1576441767.0501027,
       "footprintMiss": 2014832112.5388255,
-      "exposureGap": 0.0,
-      "floodExcluded": 0.0
+      "exposureGap": 0.0
     }
   ],
   "segments": {
