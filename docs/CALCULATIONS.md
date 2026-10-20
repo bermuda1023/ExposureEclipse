@@ -512,6 +512,40 @@ and up) cannot be identified; smoothing alone extrapolated residential to 96%
 at 165 mph. Those bands follow the KCC insured prior's shape, scaled at the
 last supported band (`--tail-min-weight`, as for Cat 5 in the panel table).
 
+#### Segment-model comparison (2026-10-20)
+
+We tested whether the 15-event PCS set supports extra segment parameters,
+rather than assuming that separate residential / commercial / auto curves are
+better. Maria has no matching TIV, so 14 events can be scored. Every fold left
+one whole event out and refitted all loss parameters on the other 13, with the
+same observed-wind transform, on-levelling, flood exclusion, KCC insured prior,
+smoothness, tail rule and materiality censoring used by the shipped calibration.
+The shared prior is the current-book-TIV-weighted mean of the three insured KCC
+priors. In the 16-parameter alternative, each segment level is estimated only
+from the training folds' segment event totals, weighted by sqrt(loss).
+
+| Model | Parameters | Event log RMS | Event log RMS, sqrt(loss)-weighted | Material county log RMS |
+|---|---:|---:|---:|---:|
+| One shared curve | 13 | 0.941 | **0.707** | **1.649** |
+| Shared curve + segment level | 16 | 0.936 | 0.711 | 1.632 |
+| Separate segment curves | 39 | **0.922** | 0.708 | 1.652 |
+
+The separate curves improve the unweighted event score by only 0.019 (2.1%),
+slightly worsen the loss-weighted event and county scores, and beat the shared
+curve on only 6 of 14 held-out events. A paired event bootstrap puts the 95%
+interval for the event-RMS change at `[-0.057, +0.028]`; the segment-level
+model's interval is `[-0.021, +0.016]`. Both span no improvement. Commercial
+event RMS improves (1.518 → 1.285), but residential (0.855 → 0.898) and auto
+(0.833 → 0.849) worsen, so that result is not broad-based.
+
+**Decision:** this sample does not validate additional segment complexity. Do
+not add another per-segment parameterisation or claim segment vulnerability is
+identified from these events. The existing wire shape and calibrated set stay
+unchanged; reassess when more independent events or segment-specific exposure
+vintages are available. ASSUMPTION: the paired bootstrap treats events as the
+independent units and describes sampling uncertainty, not future catastrophe
+uncertainty.
+
 Shipped set `calibrated-20261020` (`--exclude-flood`), insured DR %:
 
 | Land mph | 45.5 | 55.5 | 65.5 | 75.5 | 85.5 | 95.5 | 105.5 | 115.5 | 135.5 | 165.5 |
