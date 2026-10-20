@@ -53,8 +53,9 @@ class TrackPoint:
     lon: float
     wind_kt: int            # USA_WIND; 0 if missing
     pressure_mb: int | None
-    # Optional operational wind field (live NHC a-deck). When set, impact
-    # uses these instead of IBTrACS / Willoughby.
+    # Optional wind field. Live NHC a-deck sets all of these (radii_source
+    # "nhc"); IBTrACS sets only the best-track R50/R34 quadrants, which
+    # impact reads when asked for the tropical-storm field.
     rmax_nm: float | None = None
     r64_quads_nm: tuple[float, float, float, float] | None = None
     r50_quads_nm: tuple[float, float, float, float] | None = None
@@ -100,6 +101,17 @@ def _parse_float(s: str) -> float | None:
         return None
 
 
+def _quads(row: list[str], cols: list[int]) -> tuple[float, float, float, float]:
+    out: list[float] = []
+    for ci in cols:
+        v = row[ci].strip()
+        try:
+            out.append(max(0.0, float(v)) if v else 0.0)
+        except ValueError:
+            out.append(0.0)
+    return tuple(out)  # type: ignore[return-value]
+
+
 @lru_cache(maxsize=1)
 def _parse_csv() -> tuple[
     dict[tuple[str, str], float],                                # rmax index
@@ -117,7 +129,7 @@ def _parse_csv() -> tuple[
     reader = csv.reader(io.StringIO(raw))
     header = next(reader, None)
     if header is None:
-        return {}, {}
+        return {}, {}, {}, {}
     # Row 2 is units; skip.
     _units = next(reader, None)
 
@@ -134,6 +146,8 @@ def _parse_csv() -> tuple[
         i_status = header.index("USA_STATUS")
         i_record = header.index("USA_RECORD")
         i_r64 = [header.index(f"USA_R64_{q}") for q in ("NE", "SE", "SW", "NW")]
+        i_r50 = [header.index(f"USA_R50_{q}") for q in ("NE", "SE", "SW", "NW")]
+        i_r34 = [header.index(f"USA_R34_{q}") for q in ("NE", "SE", "SW", "NW")]
     except ValueError:
         # Header layout drifted — bail out clean; downstream falls back gracefully.
         return {}, {}, {}, {}
@@ -145,7 +159,7 @@ def _parse_csv() -> tuple[
     max_col = max(
         i_atcf, i_time, i_rmw, i_season, i_name,
         i_lat, i_lon, i_wind, i_pres, i_status, i_record,
-        *i_r64,
+        *i_r64, *i_r50, *i_r34,
     )
 
     for row in reader:
@@ -187,13 +201,7 @@ def _parse_csv() -> tuple[
         #   - r64_quads_index: the raw four values, used to build the
         #                 ASYMMETRIC outer cone + asymmetric county capture
         #                 via linear interpolation between adjacent quadrants.
-        quad_raw: list[float] = []
-        for ci in i_r64:
-            v = row[ci].strip()
-            try:
-                quad_raw.append(float(v) if v else 0.0)
-            except ValueError:
-                quad_raw.append(0.0)
+        quad_raw = _quads(row, i_r64)
         if any(v > 0 for v in quad_raw):
             r64_quads_index[(atcf, key_dt)] = tuple(quad_raw)  # type: ignore[assignment]
             nonzero = [v for v in quad_raw if v > 0]
@@ -220,6 +228,8 @@ def _parse_csv() -> tuple[
             s = Storm(storm_id=atcf, name=name, year=season)
             storms[atcf] = s
 
+        r50 = _quads(row, i_r50)
+        r34 = _quads(row, i_r34)
         s.track.append(
             TrackPoint(
                 datetime_utc=dt_iso,
@@ -229,6 +239,8 @@ def _parse_csv() -> tuple[
                 lon=lon,
                 wind_kt=wind,
                 pressure_mb=pres,
+                r50_quads_nm=r50 if any(v > 0 for v in r50) else None,
+                r34_quads_nm=r34 if any(v > 0 for v in r34) else None,
             )
         )
 

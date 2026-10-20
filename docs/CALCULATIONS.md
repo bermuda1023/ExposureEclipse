@@ -177,6 +177,20 @@ no R64): symmetric 2.5×Rmax.
     capture iff haversine(eye, centroid) ≤ threshold
                 AND fix.wind_kt ≥ 85   # MIN_IMPACT_WIND_KT
 
+**Tropical-storm field for industry loss** — `compute_impact(..., ts_field=True)`,
+used by the industry-loss engine, backtest and calibration for historical
+storms, also paints the 34–63 kt field. It reads the IBTrACS best-track
+`USA_R34_*` / `USA_R50_*` quadrants and pins local wind to them with the same
+`radii_wind_kt` profile the live NHC path uses. HU, TS and SS fixes count;
+EX and LO fixes count only when the best track carries a 34 kt radius
+(ASSUMPTION: Sandy 2012 came ashore as EX). A fix below 64 kt gets no R64 ring.
+The drawn cone is unchanged (hurricane-force fixes only). Without this field,
+Debby, Isaias, Helene, Delta and Zeta had 56–99% of their PCS county loss
+outside the modelled footprint. With it, every event except Debby is under
+33%, and most of what remains is flood or tornado (see §Post-event evidence).
+The three USVI districts are not in us-atlas. They are added as fixed points
+so Irma and Maria losses there can be scored.
+
 **TIV join** — fact rows joined by `geography_id`, summed per county and
 also indexed per `dataset_id` for the per-programme breakdown in the
 right-rail impact detail view.
@@ -221,7 +235,393 @@ The displayed county loss is therefore:
     loss_band(category) = effective_tiv * { mean - sd, mean, mean + sd } / 100
 
 Neither store is sent back to the backend; persistence is per browser
-in v1.
+in v1. This band is for the user's selection (portfolio). The industry loss
+below is computed on the backend.
+
+### Trained category defaults
+
+The `custom` defaults are trained on the 15 PCS events
+(`backend/scripts/train_category_damage.py`, output
+`mockdata/damage_assumptions/sshws_calibrated.json`). The panel's own model
+is linear in the six ratios:
+
+    loss_county = TIV × Σ_c areaFraction_c × DR_c        c = TS, Cat 1 … Cat 5
+
+so it is fitted with the curve-calibration machinery
+(`services/curve_fit.py`: county + event-total log error, sqrt(loss)
+weights, materiality censoring, ridge to the insured KCC category mean,
+monotone in category, leave-one-storm-out). Inputs:
+
+- `areaFraction_c` from `compute_impact` on the historical track, multiplier
+  2.5, **no** tropical-storm field: exactly the bands the panel receives.
+  The R34/R50 field reshapes the wind outside the eyewall, so a table fitted
+  on it under-prices the panel (Irma 27 vs 46 $B).
+- Loss = PCS county loss summed over residential, commercial and auto,
+  on-levelled to the TIV date. TIV = the supplied 2026 book, all three
+  segments. Maria (Puerto Rico / USVI) has no TIV and drops out.
+- TS is held at 0.04%, the fit on the tropical-storm field (2,706 counties).
+  On the panel field TS is only the fringe of a major's footprint (9
+  counties), where PCS loss is surge and flood and the free fit pools TS
+  with Cat 1. ASSUMPTION.
+- Cat 5 has no county where it is the largest slice. It keeps the KCC
+  shape, scaled by the Cat 4 fit / prior (0.69), and borrows Cat 4's sigma.
+  ASSUMPTION.
+
+SD is the spread of a storm's summed loss when the storm is priced by the
+table fitted without it: per category, the sqrt(loss)-weighted RMS log error
+of held-out event × category cells (≥ $25M reported), turned into the SD of
+a lognormal with the fitted mean: `SD = mean × sqrt(exp(σ²) − 1)`.
+
+| Category | Mean % | SD % | σ (log) | Counties | KCC insured % |
+|---|---|---|---|---|---|
+| TS | 0.04 | 0.06 | pooled 1.11 | 9 | 0.07 |
+| Cat 1 | 1.0 | 1.4 | 1.06 | 140 | 0.58 |
+| Cat 2 | 1.4 | 1.6 | 0.93 | 31 | 2.04 |
+| Cat 3 | 3.3 | 2.5 | 0.67 | 15 | 6.47 |
+| Cat 4 | 14.6 | 9.5 | 0.59 | 13 | 21.2 |
+| Cat 5 | 28.2 | 18.3 | Cat 4 | 0 | 40.8 |
+
+Reading it:
+- **Insured on modelled wind.** The ratios are insured loss over total TIV,
+  keyed on this app's marine-wind categories. That wind runs about 1.4× hot
+  over land (§Post-event evidence), so a modelled Cat 3 county mostly saw
+  Cat 1–2 on the ground. That is why Cat 2–4 sit below vendor ground-up
+  curves.
+- **Uncertainty falls as category rises.** σ ≈ 1 at TS–Cat 2 (a storm can
+  come in at a third or three times the mean) and ≈ 0.6 at Cat 3–4. Low-
+  category loss is driven by things a wind table cannot see: flood,
+  tornadoes, the size of the wind field.
+- **Event totals.** In-sample on the panel field: Ian 0.96, Laura 0.93,
+  Milton 0.84, Irma 0.72, Michael 0.70 of on-levelled PCS. Flood events read
+  low (Ida 0.24, Helene 0.21, Florence 0.41, Sally 0.46, Delta 0.23), and so
+  does most of Isaias and Debby, whose loss is outside the hurricane-force
+  field. Broad weak storms read high (Beryl 2.1, Zeta 2.0).
+
+The stored table is migrated to these defaults only when it still equals the
+pre-calibration hand-set values; edited tables are kept.
+
+### PCS-calibrated chip
+
+`model = "pcs"` uses the backend's default calibrated curve set instead of a
+category table. `blendCalibratedCurve` weights the residential / commercial /
+auto curves by `fit.bookMix` (0.478 / 0.491 / 0.031 on the supplied book).
+Each county's speed bins are priced at their midpoint with the same transform
+as the backend (`calibratedLandMph` = `damage_curves.land_mph`, then linear
+between band midpoints, zero at 39 mph land), and
+`SD = mean × sqrt(exp(sigmaLogEvent²) − 1)`. The curve was fitted on the
+tropical-storm field (`ts_field=True`), the panel receives the radii-free
+field; inside hurricane force they agree, so the difference is confined to
+the TS fringe. ASSUMPTION. Without a calibrated set loaded the chip falls back
+to the typed table.
+
+## Industry loss (backend, calibrated)
+
+`services/event_loss.py`, served by `POST /api/hurricanes/{id}/industry-loss`.
+For each county in the storm's wind field and each segment
+(`RESIDENTIAL`, `COMMERCIAL`, `AUTO`):
+
+    loss[seg] = exposedFraction × TIV[seg] × Σ_b areaFraction_b × insuredDR[seg](land_mph(mph_b))
+
+`land_mph` is `mph_b × windFactor` for vendor sets; calibrated sets add the
+observed-wind shape (§Observed-wind calibration).
+
+- `areaFraction_b` = share of the county polygon whose peak local wind is in
+  10 mph band `b`, from `compute_impact` `speed_bins`. `mph_b` is the band
+  midpoint. Same wind field as the impact panel, live or historical.
+- **Marine to land.** IBTrACS / NHC intensity, and so the whole wind field, is
+  the 1-minute sustained wind over open water. Form V-1 curves are defined on
+  wind over land. `windFactor` (default 0.80, ASSUMPTION: published
+  marine-to-open-terrain ratios are 0.83–0.87, eyewall airport observations
+  about 0.75) converts it. Leaving it out roughly doubled Ian: with no
+  conversion and no deductible KCC gave about $204B.
+- `TIV[seg]` = supplied industry TIV vintage for the storm year
+  (`industry_tiv/<year>.csv`), else the built-in Industry book (no auto).
+- `DR[seg]` = curve set (`services/damage_curves.py`), linear between the
+  Form V-1 band midpoints (45.5 … 165.5 mph over land), zero at 39 mph.
+  Built-ins are Form V-1 AIR / KCC / RMS. ASSUMPTION until calibrated:
+  commercial = residential curve, auto = 15% of it.
+- **Insured, not ground-up.** Vendor curves are ground-up. Each segment's
+  deductible (fraction of TIV; ASSUMPTION residential 1.3% ≈ 2% of Cov A,
+  commercial 3%, auto 3%) is applied per location, with location DR ~
+  Beta(mean = county DR, precision 9): `insuredDR = E[max(0, X − d)]`.
+  Calibrated sets are fitted to insured loss directly, so they carry no
+  deductible.
+
+**Uncertainty.** The point estimate is the mean of a lognormal. County bands
+use `sigmaLogCounty`, segment and event bands use `sigmaLogEvent`:
+
+    median = mean × exp(−σ²/2);  P10/P90 = median × exp(∓1.2816 σ)
+
+Event bands are not the sum of county bands (that would assume every county
+misses in the same direction). Calibrated sets carry fitted sigmas; built-ins
+use 0.9 (county) and 0.45 (event), both assumptions.
+
+### Calibration against supplied PCS losses
+
+`services/curve_fit.py` + `scripts/calibrate_damage_curves.py`. Per segment,
+each reported county loss in an event is an observation
+`(TIV, {band: areaFraction}, actual)`. Parameters are `θ_b = log DR_b`:
+
+    J = mean_i(w_i · r_i²) + α · mean_e(R_e²) + λ · mean_b((θ_b − prior_b)²)
+    r_i = log(model_i + ε_i) − log(actual_i + ε_i)    county error
+    R_e = log(Σ model) − log(Σ actual) per event       event-total error
+
+- `w_i ∝ sqrt(actual_i)` (normalised to mean 1), `ε_i` = 0.01% of TIV,
+  `α = 1`, `λ = 0.05`, prior = KCC after its deductible. All assumptions,
+  overridable on the CLI (`--wind-factor` too).
+- Each county's wind mix becomes per-node weights through the same
+  `windFactor` interpolation the engine uses, so model loss stays linear in
+  the curve values.
+- Projected gradient descent; after each step DR is projected to a
+  non-decreasing curve (pool-adjacent-violators) inside [1e-5, 1].
+- With ≥ 2 events every event is re-fitted out (leave-one-event-out).
+  `sigmaLogCounty` = holdout county log-RMS (floor 0.25). `sigmaLogEvent` =
+  holdout event log-RMS once ≥ 3 events exist (floor 0.15), else 0.45.
+
+County matching (`services/loss_calibration.py`): reported loss outside the
+modelled wind field is a **footprint miss** and reported loss with no TIV
+is an **exposure gap**. Both are excluded from the fit and listed in the
+backtest. A county missing from the loss file counts as unknown, not zero: it
+is left out of the county scoring, but its modelled loss stays in the event
+total. Unallocated
+state loss (PCS "County Not Available") is in the event totals, and so in
+`R_e`, but never in a county error.
+
+**Below-materiality rows (PCS noise).** PCS spreads small, often round
+amounts over barely touched counties: $5k, $15k, $20k and $40k are the most
+common values. In most events 50–75% of positive county rows are at or below
+$250k, and they hold only 0.1–5% of the dollars. Read as exact, they imply
+damage ratios orders of magnitude too low and drag the low-wind bands down.
+A row is **below materiality** when its on-levelled loss is under $250k, or it
+has fewer than 25 claims when the source carries counts (ASSUMPTION, both
+`MATERIALITY_*` in `loss_calibration.py`). Reported zeros are included.
+Such a row is interval-censored: the true loss is only known to be in
+`[0, U]` with `U = max(reported, $250k)`, so
+
+    r_i = max(0, log(model_i + ε_i) − log(U_i + ε_i))
+
+It costs nothing while the model stays under `U`, and is penalised like any
+other row above it. The rows stay in every event total. They are excluded from
+`countyLogRms`, the holdout county sigma and `impliedDrByBand`, and are
+flagged `belowMateriality` in the backtest.
+
+PCS basis caveat: PCS includes private-market flood and surge and excludes
+NFIP and LAE, while the modelled loss is wind only. Flood-dominated events
+therefore read as wind underestimates. `--exclude-flood` drops counties where
+the modelled peak is under 64 kt, no ASOS station saw 34 kt sustained, and
+there are 2 or more flood reports or riverine high-water marks. Otherwise,
+leave whole events out with `--events`.
+
+### Post-event evidence
+
+`backend/scripts/build_event_evidence.py` writes
+`mockdata/event_evidence/<stormId>.json` for each event with losses. It is
+served through `services/event_evidence.py` into the backtest. Evidence is
+diagnostic and never changes a loss. It covers the states with reported loss,
+from 12 h before the track comes within 250 nm of one of their counties to
+48 h after it leaves.
+
+- **IEM ASOS**: peak sustained wind (2-min) and peak gust per station, after QC:
+  - a sustained value above the same report's gust is dropped;
+  - a sustained value with no gust, and every gust, needs a report within 90 minutes at ≥ 60% of it.
+
+  The modelled wind at the same point comes from the same engine (`compute_impact` with one pseudo county per station). A station whose record stops within 3 h of closest approach, while the model has ≥ 64 kt there, is a probable outage and is left out of the bias.
+- **NCEI Storm Events**: tornado, flood (flash flood, flood, heavy rain), surge (storm surge/tide, coastal flood) and wind reports, with the NWS property-damage estimate. Zone reports are mapped to counties through the NWS zone–county correlation file, with damage split evenly across the zone's counties.
+- **USGS STN**: surveyed high-water marks per county: coastal vs riverine, and the maximum height above ground.
+
+**Wind bias** = median over stations of `observed sustained / (modelled × windFactor)`.
+Only stations where either value is ≥ 30 kt count. The backtest also splits
+out-of-field dollars by the first reported peril in that county, in the order
+tornado, flood, surge, wind (`footprintMissByPeril`).
+
+Findings across the 15 PCS events, on the built-in book TIV (2026-10). Columns:
+- *obs / model* is the ASOS bias over all qualifying stations.
+- *> 50 kt* is the same ratio where the modelled land wind is above 50 kt.
+- *KCC / PCS* is the KCC modelled total over the on-levelled PCS total.
+- *Out of field* is the share of PCS county dollars outside the wind field, with its leading reported perils.
+
+| Storm | obs / model | > 50 kt | stations | KCC / PCS | Out of field (leading perils) |
+|---|---|---|---|---|---|
+| Beryl 2024 | 0.80 | 0.77 | 30 | 0.85 | 14% (no report 8%, tornado 3%) |
+| Debby 2024 | 0.64 | – | 117 | 0.30 | 80% (flood 25%, tornado 21%, wind 17%) |
+| Florence 2018 | 0.61 | 0.59 | 83 | 0.28 | 33% (flood 29%) |
+| Isaias 2020 | 0.62 | 0.72 | 181 | 2.90 | 13% (wind 7%) |
+| Ida 2021 | 0.66 | 0.57 | 99 | 0.17 | 23% (flood 18%) |
+| Ian 2022 | 0.73 | 0.67 | 144 | 1.46 | 1% |
+| Helene 2024 | 0.70 | 0.50 | 236 | 0.38 | 29% (flood 18%, wind 7%) |
+| Irma 2017 | 0.78 | 0.69 | 136 | 0.55 | 3% |
+| Laura 2020 | 0.87 | 0.56 | 38 | 0.57 | 6% |
+| Michael 2018 | 0.68 | 0.69 | 205 | 1.13 | 5% |
+| Milton 2024 | 0.75 | 0.70 | 70 | 1.00 | 0.5% (PCS supplied in GBP, converted at 1.3247) |
+| Maria 2017 | (2 usable; PR network failed) | | 2 | 1.24 | 0% |
+| Sally 2020 | 0.72 | 1.05 | 31 | 0.39 | 15% (flood 5%) |
+| Delta 2020 | 0.90 | 0.86 | 34 | 0.12 | 26% (flood 8%, 9 stations at TS force outside the field) |
+| Zeta 2020 | 0.72 | 0.55 | 131 | 2.33 | 27% (wind 22%) |
+
+What it says:
+- **The modelled land wind runs hot: about 1.4× airport observations in a typical event.** The obs / model median is 0.72, over a range of 0.61–0.90. About 4% of that is 2-min versus 1-min averaging, and failed anemometers pull the observed peaks down a little. The rest is real: `windFactor` 0.80 plus the radii profile overstate open-terrain wind inland. The vendor curves therefore see too much wind and need a lower curve to compensate. A calibrated set absorbs the average.
+- **The event-to-event spread is the nuance.** With damage rising roughly as wind^5, a 0.61 versus 0.90 bias is a factor of about 7 in loss. Florence, Isaias, Debby and Ida, slow or weakening storms with broad wind fields, have the most over-modelled wind. Delta and Laura, compact landfalling majors, have the least. `calibrate_damage_curves.py --wind-correction evidence` scales each event's wind by its bias relative to the all-event median, clamped to 0.7–1.3. The curve then learns vulnerability rather than one storm's wind-field error.
+- **Most remaining out-of-field loss is flood or tornado, not missing wind.** Florence, Ida, Helene and Debby carry 18–29% of their dollars in counties with flood reports or riverine high-water marks. Debby adds 21% under tornadoes. No wind curve should fit these.
+- **Underestimates are flood events.** Florence, Ida, Helene and Debby all read below 0.4 even with the full wind field. Delta at 0.12 is the exception: it is a wind-field size problem, because 9 stations saw tropical-storm-force wind with no modelled wind.
+
+Sources not yet integrated:
+- NHC Tropical Cyclone Report station tables: official peaks, including stations that failed in ASOS.
+- HRD / H*Wind and HAFS analysed surface wind fields.
+- FCMP and Texas Tech portable towers.
+- ERA5 10 m gusts, for coverage away from airports.
+- MRMS and Stage IV rainfall, to put a number on flood.
+- NWS Damage Assessment Toolkit surveys: tornado tracks and straight-line wind.
+- FEMA Individual Assistance and NFIP claims by county, to split flood from wind.
+
+### Observed-wind calibration (default curve set)
+
+`services/wind_calibration.py`, used by `calibrate_damage_curves.py
+--wind-model observed` (the default). The evidence above showed the flat
+`windFactor` is wrong in shape, not just level: weak storms are under-
+converted and strong cores over-converted. Over 2,126 usable ASOS stations
+(not a probable outage, modelled ≥ 34 kt; observed 1-minute = 1.05 × 2-minute
+sustained), observed land / modelled marine is
+
+    ratio(m) = A × max(floor, (m / 64 kt)^b),  A = 0.513, b = −0.358, floor = 0.47 / A
+
+0.64 at 34 kt, 0.56 at 50 kt, flat at 0.47 from about 83 kt. The floor is the
+median ratio of the stations modelled ≥ 83 kt: a power law keeps cutting the
+cores, where failed anemometers bias the record low. The curve axis stays
+anchored at `windFactor` 0.80 at 64 kt, so only the shape is taken:
+
+    land_mph = windFactor × marine_mph × max(windFloor, (marine_mph / 73.6)^windExponent)
+
+Leave-one-station-out log RMS of the land wind: 0.36 with flat 0.80, 0.28 with
+the shape. It applies to every storm, live included.
+
+**County correction (opt-in, `observedWind=true`).** For a historical storm,
+each station's log residual against the shape is shrunk to a storm mean
+(`n / (n + 5)`) and the deviations are kernel-smoothed onto county centroids
+(Gaussian, 40 km, clamped ±0.5 in log). It brings station error to 0.24 and
+the holdout county log RMS from 1.79 to 1.69, but makes loss-weighted event
+error worse (0.82 → 0.91): ±20% wind is about 2.5× loss through the curve,
+and station detail is not yet more predictive of PCS loss than the smooth
+field. Off by default; the backtest and industry-loss endpoints report what
+was applied in `observedWind`.
+
+**Smoothing and tail.** Monotone projection alone leaves plateaus and cliffs.
+`--smooth` penalises the second difference of log DR; holdout all-segment log
+RMS was 0.969 at 0, 0.940 at 0.5, 0.922 at 2 and 5, so 2 is the default
+(ASSUMPTION). Bands holding under 0.05% of the exposure (about 120 mph land
+and up) cannot be identified; smoothing alone extrapolated residential to 96%
+at 165 mph. Those bands follow the KCC insured prior's shape, scaled at the
+last supported band (`--tail-min-weight`, as for Cat 5 in the panel table).
+
+Shipped set `calibrated-20261020` (`--exclude-flood`), insured DR %:
+
+| Land mph | 45.5 | 55.5 | 65.5 | 75.5 | 85.5 | 95.5 | 105.5 | 115.5 | 135.5 | 165.5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Residential | 0.04 | 0.20 | 0.83 | 2.35 | 5.41 | 10.95 | 18.7 | 28.0 | 47.6 | 79.9 |
+| Commercial | 0.01 | 0.08 | 0.47 | 1.67 | 4.23 | 8.20 | 13.0 | 18.3 | 32.1 | 54.8 |
+| Auto | 0.10 | 0.29 | 0.79 | 1.92 | 4.10 | 7.67 | 11.5 | 13.4 | 24.6 | 45.7 |
+
+90% of the exposure-weighted wind sits in the first two bands, so the curve is
+tightly pinned below ~75 mph land and leans on the prior above ~110.
+`sigmaLogEvent` 1.03 (loss-weighted 0.79), `sigmaLogCounty` 1.66.
+
+All-segment event totals, counties in the wind field, on-levelled PCS $B,
+model fitted **without** that storm / with it:
+
+| Storm | PCS | Unseen | Ratio | In-sample |
+|---|---|---|---|---|
+| Ian | 57.0 | 80.9 | 1.42 | 1.21 |
+| Irma | 39.2 | 28.0 | 0.71 | 0.75 |
+| Ida | 28.8 | 9.7 | 0.34 | 0.38 |
+| Milton | 25.5 | 29.0 | 1.14 | 1.09 |
+| Michael | 18.2 | 20.6 | 1.13 | 1.08 |
+| Laura | 15.8 | 15.8 | 1.00 | 0.96 |
+| Helene | 11.9 | 8.9 | 0.75 | 0.78 |
+| Florence | 4.5 | 4.1 | 0.92 | 0.94 |
+| Sally | 4.3 | 2.6 | 0.61 | 0.65 |
+| Zeta | 3.5 | 16.6 | 4.71 | 3.95 |
+| Beryl | 3.0 | 9.6 | 3.20 | 2.86 |
+| Delta | 2.1 | 0.9 | 0.44 | 0.48 |
+| Isaias | 2.1 | 15.6 | 7.55 | 5.62 |
+| Debby | 0.5 | 1.6 | 3.56 | 2.71 |
+
+Median observed / shaped-model wind by storm (all stations; ≥ 64 kt modelled):
+Sally 1.13 / 1.81, Delta 1.25 / 1.49, Beryl 1.31 / 1.34, Milton 1.16 / 1.21,
+Irma 1.09 / 1.16, Laura 1.20 / 0.99; Isaias 0.95, Zeta 1.01, Ida 0.94,
+Debby 0.94, Helene 1.01 / 0.90. Reading the misses:
+
+- **Landfalling majors are good.** Laura, Michael, Milton, Florence within
+  ±15% unseen; Irma and Ian within the event sigma. Ian is high because one
+  storm dominates the high bands: refitted without it, those bands lean on
+  the prior.
+- **Under: wind under-modelled.** Sally (stalled over Pensacola) and Delta
+  had core stations at 1.5–1.8× the model. The county correction recovers
+  part of this; it stays opt-in because it hurts other storms more.
+- **Under: flood in PCS.** Ida (Louisiana plus north-east flash flood) and
+  Helene (Appalachian flood) have winds on the shape. PCS includes private
+  flood; the curve is wind only.
+- **Over: weak storms over dense exposure.** Isaias (NY / NJ / CT), Zeta
+  (New Orleans, Atlanta), Beryl (Houston) and Debby put 50–65 mph over very
+  large TIV. Their winds match the shape (Beryl even ran above it), so the
+  miss is vulnerability: low-wind damage per dollar is lower in these events
+  than in Florida fringe counties of majors, which set the low bands.
+  Candidate fixes: an event-size / demand-surge covariate, or a regional
+  low-wind vulnerability term.
+
+### On-levelling industry losses
+
+`services/onlevel.py`. A PCS loss is priced in event-year dollars on the
+event-year exposure. The industry TIV is valued at its own date: a supplied
+vintage uses its `asOfDate`, defaulting to July 1 of the vintage year, and the
+built-in book uses 2026-01-01. Every reported row is therefore scaled by the
+growth in insured value in its county and segment:
+
+    onLevelLoss = reportedLoss x V(target) / V(eventDate)
+
+The damage ratio is not trended; that is what calibration learns. `V` is
+built from public indices in `mockdata/onlevel/`, baked by
+`backend/scripts/build_onlevel_indices.py`:
+
+| Segment | V | Why |
+|---|---|---|
+| RESIDENTIAL | HU × (0.55 PPI residential inputs + 0.45 state construction pay) | units × replacement cost; contents and ALE are a share of Coverage A |
+| COMMERCIAL | 0.62 × EMP × (0.55 PPI nonres inputs + 0.45 construction pay) + 0.38 × county payroll | building follows floor space × build cost; contents and BI are declared values that follow economic activity |
+| AUTO | POP × CPI used cars and trucks | vehicles follow people; comprehensive pays actual cash value |
+
+The inputs are:
+- HU and POP: Census PEP July-1 estimates, with the 2010- and 2020-based series chain-linked at 2020.
+- EMP and payroll: BLS QCEW private-sector annual averages.
+- Construction pay: QCEW NAICS 23 average annual pay by state.
+- PPI and CPI: FRED monthly series, read at the event month and the target month.
+
+Annual values sit at mid-year and are interpolated linearly. Past the newest
+year they are extrapolated at the last growth rate for at most 1.5 years.
+After the newest month, monthly series hold their latest value.
+
+House prices and GDP deflators are not used, because land is not insured and
+insured value is replacement cost.
+
+Each component falls back from county to state to flat (1.0), and the level
+used is reported:
+- A county with fewer than 500 private employees uses state employment and payroll.
+- Connecticut's pre-2022 counties use state values, because the Census and QCEW replaced them with planning regions.
+- Puerto Rico and USVI unit counts are held flat. This is an ASSUMPTION: Census municipio housing has no pre-2020 series, and the stock barely grew after Maria. Their own construction pay and the national cost indices still apply.
+- Unallocated state rows use the state factor.
+
+ASSUMPTIONS:
+- The 55/45 materials/labour split.
+- The 62/38 commercial building/contents+BI split, which is the built-in book's mix.
+- New stock is assumed to be as vulnerable as the stock it adds to. Newer code-built homes are stronger, so the on-levelled loss slightly overstates.
+
+`mockdata/onlevel/adjustments.csv` (template `adjustments.example.csv`) holds
+optional analyst multipliers by storm, geography and segment, applied after the
+index. An example is taking out Florida assignment-of-benefits litigation
+creep that the 2019 and 2022–23 reforms would not repeat today. Every
+adjustment used is listed in the response.
+
+The factors are applied by default in `POST /api/hurricanes/{id}/industry-loss`
+(`onLevel: false` to switch off), in the backtest (`?onLevel=false`), and in
+`calibrate_damage_curves.py` (`--no-onlevel`). Reported totals stay visible as
+`actuals.onLevel.reportedTotal`.
 
 ## Hazard climatology blend (tornado + hail)
 

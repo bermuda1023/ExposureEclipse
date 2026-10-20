@@ -6,6 +6,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useCalibratedCurve } from "../../api/hooks";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
   applyWindBands,
@@ -18,6 +19,7 @@ import { useCountyOverridesStore } from "../../state/countyOverrides";
 import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
 import { CountyWindSlices } from "./CountyWindSlices";
+import { IndustryLossSection } from "./IndustryLossSection";
 import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
 
 export function HurricaneImpactPanel() {
@@ -35,6 +37,7 @@ export function HurricaneImpactPanel() {
   const [exportError, setExportError] = useState<string | null>(null);
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
   const damageModel = useDamageAssumptionsStore((s) => s.model);
+  const calibratedCurve = useCalibratedCurve();
   const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
   const stormOverrides = data ? (overridesByStorm[data.stormId] ?? {}) : {};
 
@@ -46,7 +49,7 @@ export function HurricaneImpactPanel() {
     for (const c of data.counties) {
       if (!c.hasData) continue;
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
-      const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins);
+      const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins, calibratedCurve);
       const b = applyWindBands(
         c.tiv, c.windBands, exp, assumptions, c.maxWindKt,
         stormOverrides[c.geoid]?.bandPercent,
@@ -54,7 +57,7 @@ export function HurricaneImpactPanel() {
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high };
-  }, [data, byCategory, damageModel, stormOverrides]);
+  }, [data, byCategory, damageModel, calibratedCurve, stormOverrides]);
 
   // When the impact has been pushed to the right-rail detail panel, hide the
   // floating panel — the detail view shows the same content + per-programme
@@ -233,6 +236,8 @@ export function HurricaneImpactPanel() {
               <RmaxSourceLine footprint={data.footprint} />
             )}
 
+            <IndustryLossSection stormId={data.stormId} />
+
             <div
               style={{
                 fontSize: "0.66rem",
@@ -273,7 +278,7 @@ export function HurricaneImpactPanel() {
                         bands={c.windBands}
                         tiv={c.tiv}
                         scale={stormOverrides[c.geoid]?.exposedFraction ?? 1.0}
-                        byCategory={effectiveAssumptions(damageModel, byCategory, c.speedBins)}
+                        byCategory={effectiveAssumptions(damageModel, byCategory, c.speedBins, calibratedCurve)}
                         currency={data.currency}
                         bandPercent={stormOverrides[c.geoid]?.bandPercent}
                         compact
@@ -322,7 +327,7 @@ export function HurricaneImpactPanel() {
                         const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
                         const b = applyWindBands(
                           c.tiv, c.windBands, exp,
-                          effectiveAssumptions(damageModel, byCategory, c.speedBins),
+                          effectiveAssumptions(damageModel, byCategory, c.speedBins, calibratedCurve),
                           c.maxWindKt,
                           stormOverrides[c.geoid]?.bandPercent,
                         );

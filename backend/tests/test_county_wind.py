@@ -214,3 +214,95 @@ def test_swath_between_fixes_catches_the_core(monkeypatch) -> None:
     assert impacts
     # ~42 nm to either vertex (outside Rmax 15). The filled track crosses the point.
     assert impacts[0].max_wind_kt == 100
+
+
+def _ts_storm() -> Storm:
+    # Historical tropical storm: 55 kt, best-track R34 80 nm, R50 25 nm.
+    return Storm(
+        storm_id="AL972020",
+        name="SKIRT",
+        year=2020,
+        track=[
+            TrackPoint(
+                datetime_utc="2020-08-04T00:00:00Z",
+                record_id="L",
+                status="TS",
+                lat=34.0,
+                lon=-78.0,
+                wind_kt=55,
+                pressure_mb=995,
+                r50_quads_nm=(25.0, 25.0, 0.0, 0.0),
+                r34_quads_nm=(80.0, 80.0, 60.0, 60.0),
+            )
+        ],
+    )
+
+
+def _stub_county(monkeypatch, lat: float, lon: float) -> None:
+    import app.services.hurricane_impact as hi
+
+    county = CountyMeta(
+        geoid="37129",
+        geography_id="US-NC-37129",
+        name="New Hanover",
+        state_usps="NC",
+        centroid_lat=lat,
+        centroid_lon=lon,
+    )
+    monkeypatch.setattr(hi, "county_centroids", lambda: {"37129": county})
+    monkeypatch.setattr(hi, "county_area_samples", dict)
+    monkeypatch.setattr(hi, "rmax_nm", lambda *a, **k: (20.0, "willoughby"))
+    monkeypatch.setattr(hi, "lookup_r64_nm", lambda *a: None)
+    monkeypatch.setattr(hi, "lookup_r64_quads_nm", lambda *a: None)
+
+
+def test_historical_tropical_storm_paints_its_34kt_field_only_when_asked(monkeypatch) -> None:
+    # ~40 nm NE of the centre: inside R34, outside R50.
+    _stub_county(monkeypatch, 34.47, -77.43)
+    impacts, footprint, *_ = compute_impact(_ts_storm())
+    assert impacts == [] and footprint == []
+
+    impacts, footprint, *_ = compute_impact(_ts_storm(), ts_field=True)
+    assert footprint == []  # the drawn cone stays hurricane-force only
+    assert len(impacts) == 1
+    assert 34 <= impacts[0].max_wind_kt < 50
+
+
+def test_historical_tropical_storm_is_never_given_a_hurricane_ring(monkeypatch) -> None:
+    # At the centre a 55 kt storm cannot score hurricane-force wind.
+    _stub_county(monkeypatch, 34.0, -78.0)
+    impacts, *_ = compute_impact(_ts_storm(), ts_field=True)
+    assert impacts and impacts[0].max_wind_kt <= 55
+
+
+def test_virgin_islands_are_scored(monkeypatch) -> None:
+    import app.services.hurricane_impact as hi
+
+    # Only the three USVI districts; no us-atlas download.
+    monkeypatch.setattr(hi.urllib.request, "urlopen", _empty_topo)
+    hi.county_centroids.cache_clear()
+    try:
+        centroids = hi.county_centroids()
+        assert {"78010", "78020", "78030"} <= set(centroids)
+        assert centroids["78010"].geography_id == "US-VI-78010"
+        assert hi.county_area_samples()["78030"]
+    finally:
+        hi.county_centroids.cache_clear()
+
+
+class _EmptyTopo:
+    def __enter__(self):
+        import io
+        import json
+
+        return io.StringIO(json.dumps({
+            "arcs": [], "transform": {"scale": [1, 1], "translate": [0, 0]},
+            "objects": {"counties": {"geometries": []}},
+        }))
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+
+def _empty_topo(*_a, **_k) -> _EmptyTopo:
+    return _EmptyTopo()

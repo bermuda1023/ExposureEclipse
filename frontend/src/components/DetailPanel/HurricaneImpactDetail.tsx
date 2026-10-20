@@ -8,7 +8,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { useCedents } from "../../api/hooks";
+import { useCalibratedCurve, useCedents } from "../../api/hooks";
 import { useHurricaneImpactStore } from "../../state/hurricaneImpact";
 import {
   applyWindBands,
@@ -31,6 +31,7 @@ export function HurricaneImpactDetail() {
   const cedents = useCedents();
   const byCategory = useDamageAssumptionsStore((s) => s.byCategory);
   const damageModel = useDamageAssumptionsStore((s) => s.model);
+  const calibratedCurve = useCalibratedCurve();
   const overridesByStorm = useCountyOverridesStore((s) => s.byStorm);
   const setOverride = useCountyOverridesStore((s) => s.set);
   const setBandPercent = useCountyOverridesStore((s) => s.setBandPercent);
@@ -50,12 +51,12 @@ export function HurricaneImpactDetail() {
       const exp = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
       const bands = stormOverrides[c.geoid]?.bandPercent;
       if (exp !== 1.0 || (bands && Object.keys(bands).length > 0)) anyOverride = true;
-      const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins);
+      const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins, calibratedCurve);
       const b = applyWindBands(c.tiv, c.windBands, exp, assumptions, c.maxWindKt, bands);
       mean += b.mean; low += b.low; high += b.high;
     }
     return { mean, low, high, anyOverride };
-  }, [data, byCategory, damageModel, stormOverrides]);
+  }, [data, byCategory, damageModel, calibratedCurve, stormOverrides]);
 
   // dataset_id → human-friendly programme label.
   const programmeLabel = useMemo(() => {
@@ -215,7 +216,7 @@ export function HurricaneImpactDetail() {
               const isFocused = focusedGeoid === c.geoid;
               const exposed = stormOverrides[c.geoid]?.exposedFraction ?? 1.0;
               const bandPercent = stormOverrides[c.geoid]?.bandPercent;
-              const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins);
+              const assumptions = effectiveAssumptions(damageModel, byCategory, c.speedBins, calibratedCurve);
               const band = c.hasData
                 ? applyWindBands(c.tiv, c.windBands, exposed, assumptions, c.maxWindKt, bandPercent)
                 : null;

@@ -56,10 +56,12 @@ MIN_IMPACT_WIND_KT = 85
 # not this gate.
 MIN_FOOTPRINT_WIND_KT = 64  # Saffir-Simpson Cat 1 threshold
 
-# Conterminous US + PR bounding box. Track points outside this never touch
-# counties we care about — saves doing 3,000 distance checks per point.
-US_BBOX_LAT = (17.5, 50.0)
-US_BBOX_LON = (-125.5, -65.0)
+# Conterminous US + PR + USVI bounding box. Track points outside this never
+# touch counties we care about — saves doing 3,000 distance checks per point.
+# The eastern / southern edges sit about one wind-field radius past St. Croix
+# so a storm passing just south or east of the islands still paints them.
+US_BBOX_LAT = (16.5, 50.0)
+US_BBOX_LON = (-125.5, -62.5)
 
 
 # FIPS state code → USPS postal abbreviation. Mirror of backend/scripts/build_geo.py.
@@ -210,7 +212,36 @@ def county_centroids() -> dict[str, CountyMeta]:
             centroid_lat=lat,
             centroid_lon=lon,
         )
+    for geoid, name, (lat, lon), pts in _VI_DISTRICTS:
+        _AREA_SAMPLES[geoid] = list(pts)
+        out[geoid] = CountyMeta(
+            geoid=geoid,
+            geography_id=f"US-VI-{geoid}",
+            name=name,
+            state_usps="VI",
+            centroid_lat=lat,
+            centroid_lon=lon,
+        )
     return out
+
+
+# us-atlas carries Puerto Rico but not the US Virgin Islands, so PCS losses
+# there (Irma, Maria) could never sit inside a wind field. Approximate island
+# centres plus land points spread across each island (lat, lon).
+_VI_DISTRICTS: tuple[
+    tuple[str, str, tuple[float, float], tuple[tuple[float, float], ...]], ...
+] = (
+    ("78010", "St. Croix", (17.73, -64.75), (
+        (17.73, -64.75), (17.71, -64.87), (17.74, -64.82), (17.70, -64.68),
+        (17.75, -64.62), (17.76, -64.70),
+    )),
+    ("78020", "St. John", (18.33, -64.74), (
+        (18.33, -64.74), (18.34, -64.78), (18.33, -64.70), (18.35, -64.72),
+    )),
+    ("78030", "St. Thomas", (18.34, -64.93), (
+        (18.34, -64.93), (18.35, -65.00), (18.33, -64.88), (18.36, -64.95),
+    )),
+)
 
 
 def county_area_samples() -> dict[str, list[tuple[float, float]]]:
@@ -790,6 +821,9 @@ def compute_impact(
     *,
     multiplier: float = DAMAGING_WIND_MULTIPLIER,
     model_wind=None,
+    ts_field: bool = False,
+    centroids: dict[str, CountyMeta] | None = None,
+    samples: dict[str, list[tuple[float, float]]] | None = None,
 ) -> tuple[
     list[CountyImpact],
     list[FootprintPoint],
@@ -803,9 +837,21 @@ def compute_impact(
     polygon (core, hurricane fringe, tropical-storm skirt, untouched).
     The map footprint is unchanged: it still draws every hurricane-strength
     fix. Returned counties carry no TIV yet.
+
+    ``ts_field`` also paints historical tropical-storm-force wind from the
+    IBTrACS best-track R34/R50 quadrants, including fixes that never reach
+    hurricane strength. Without it a historical storm only scores its 64 kt
+    field, so wind loss in the 34-63 kt skirt (most of Debby, Isaias, inland
+    Helene) is invisible to loss estimation and calibration.
+
+    ``centroids`` / ``samples`` replace the county grid, e.g. one pseudo
+    county per weather station to read the modelled wind at that point.
     """
-    centroids = county_centroids()
-    samples = county_area_samples()
+    if centroids is None:
+        centroids = county_centroids()
+        samples = county_area_samples()
+    elif samples is None:
+        samples = {}
     painted: dict[str, _Paint] = {}
     footprint: list[FootprintPoint] = []
     stamps: list[_Stamp] = []
@@ -822,7 +868,8 @@ def compute_impact(
         # wind field reorganises. Without the status filter we'd render an
         # absurdly large post-tropical cone.
         live_radii = pt.radii_source == "nhc"
-        r34_quads = pt.r34_quads_nm if live_radii else None
+        best_track_radii = ts_field and not live_radii
+        r34_quads = pt.r34_quads_nm if live_radii or best_track_radii else None
         has_r34 = bool(r34_quads and any(v > 0 for v in r34_quads))
         # Hurricane-force fixes draw the cone. A live advisory below 64 kt
         # still counts when NHC published a 34 kt field — that is what
@@ -833,9 +880,14 @@ def compute_impact(
             continue
         # IBTrACS post-tropical (EX) Rmax inflates wildly; skip those.
         # Live NHC official points carry their own radii and are not EX.
-        if not live_radii and pt.status != "HU":
-            continue
-        if not live_radii and pt.wind_kt < MIN_FOOTPRINT_WIND_KT:
+        if best_track_radii:
+            # ASSUMPTION: post-tropical / low fixes count only when the best
+            # track carries a 34 kt field (Sandy 2012 came ashore as EX).
+            # Their wind is then pinned to the radii, so the inflated EX Rmax
+            # cannot widen the core.
+            if pt.status not in ("HU", "TS", "SS") and not has_r34:
+                continue
+        elif not live_radii and (pt.status != "HU" or pt.wind_kt < MIN_FOOTPRINT_WIND_KT):
             continue
         if live_radii and pt.rmax_nm and pt.rmax_nm > 0:
             rmax, rmax_src = max(8.0, pt.rmax_nm), "nhc"
@@ -861,6 +913,10 @@ def compute_impact(
             measured_quads = None
             r64 = 0.0
             r64_src = "none"
+        elif pt.wind_kt < MIN_FOOTPRINT_WIND_KT:
+            measured_quads = None
+            r64 = 0.0
+            r64_src = "none"
         else:
             measured_r64 = lookup_r64_nm(storm.storm_id, pt.datetime_utc)
             measured_quads = lookup_r64_quads_nm(storm.storm_id, pt.datetime_utc)
@@ -875,7 +931,7 @@ def compute_impact(
         if has_r34 and r34_quads is not None:
             nonzero34 = [v for v in r34_quads if v > 0]
             r34_mean = sum(nonzero34) / len(nonzero34)
-        r50_quads = pt.r50_quads_nm if live_radii else None
+        r50_quads = pt.r50_quads_nm if live_radii or best_track_radii else None
         r50_mean = 0.0
         if r50_quads and any(v > 0 for v in r50_quads):
             nonzero50 = [v for v in r50_quads if v > 0]

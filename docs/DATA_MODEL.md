@@ -130,7 +130,7 @@ portfolio performance.
 | `geographyId` | string | canonical key — `US`, `US-FL`, `US-FL-12086`, `CRESTA-…` |
 | `peril` | Peril | `EQ` / `WS` / `CS` / `FL` / `FR` / `TR` |
 | `occupancy` / `occupancyGroup` | string \| null | from ERT |
-| `occupancySegment` | OccupancySegment | `RESIDENTIAL` / `COMMERCIAL` / `INDUSTRIAL` / `UNKNOWN` |
+| `occupancySegment` | OccupancySegment | `RESIDENTIAL` / `COMMERCIAL` / `INDUSTRIAL` / `AUTO` / `UNKNOWN` |
 | `construction` / `yearBuilt` / `distanceToCoast` / `geocodingQuality` / `numberOfStories` | string \| null | dimension bands |
 | `building` / `contents` / `bi` | float | TIV components |
 | `tiv` | float | **must equal** Building + Contents + BI |

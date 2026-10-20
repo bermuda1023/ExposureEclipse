@@ -1,0 +1,5 @@
+# Template. Name real files <year>.csv (e.g. 2022.csv) so the vintage is picked up.
+# segment: RESIDENTIAL | COMMERCIAL | AUTO. geographyId: US-FL-12071, 12071, or a state US-FL.
+# Example (remove the leading # to use):
+# US-FL-12071,RESIDENTIAL,212000000000,USD
+geographyId,segment,tiv,currency,asOfDate,source
