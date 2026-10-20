@@ -49,6 +49,8 @@ class FitOptions:
     ridge: float = 0.05
     max_iter: int = 3000
     tol: float = 1e-10
+    # (band index, DR) pairs held at a value the data here cannot identify.
+    fixed: tuple[tuple[int, float], ...] = ()
 
 
 @dataclass(slots=True)
@@ -63,6 +65,8 @@ class FitResult:
     band_weight: list[float]
     oos_county_sigma: float | None = None
     oos_event_errors: dict[str, float] = field(default_factory=dict)
+    # Curve fitted without each event, for scoring that event unseen.
+    oos_curves: dict[str, list[float]] = field(default_factory=dict)
 
 
 def _pav_non_decreasing(values: list[float]) -> list[float]:
@@ -80,9 +84,16 @@ def _pav_non_decreasing(values: list[float]) -> list[float]:
     return out
 
 
-def _project(theta: list[float]) -> list[float]:
+def _project(theta: list[float], fixed: tuple[tuple[int, float], ...] = ()) -> list[float]:
     lo, hi = math.log(DR_MIN), math.log(DR_MAX)
-    return [min(hi, max(lo, t)) for t in _pav_non_decreasing(theta)]
+    out = [min(hi, max(lo, t)) for t in _pav_non_decreasing(theta)]
+    if fixed:
+        for b, v in fixed:
+            out[b] = math.log(min(DR_MAX, max(DR_MIN, v)))
+        out = [min(hi, max(lo, t)) for t in _pav_non_decreasing(out)]
+        for b, v in fixed:
+            out[b] = math.log(min(DR_MAX, max(DR_MIN, v)))
+    return out
 
 
 def _weights(obs: list[Observation]) -> list[float]:
@@ -165,13 +176,13 @@ def fit_curve(
         return FitResult(list(prior_curve), 0.0, 0, 0, [], None, {}, band_weight)
 
     weights = _weights(obs)
-    theta = _project(list(prior))
+    theta = _project(list(prior), opts.fixed)
     j, grad = _evaluate(theta, obs, weights, prior, opts, True)
     step = 1.0
     it = 0
     for it in range(1, opts.max_iter + 1):
         while True:
-            cand = _project([t - step * g for t, g in zip(theta, grad)])
+            cand = _project([t - step * g for t, g in zip(theta, grad)], opts.fixed)
             j_new, _ = _evaluate(cand, obs, weights, prior, opts, False)
             decrease = sum(g * (t - c) for g, t, c in zip(grad, theta, cand))
             if j_new <= j - 1e-4 * decrease or step < 1e-12:
@@ -242,6 +253,7 @@ def fit_with_holdout(
         train = [o for o in obs if o.event != held]
         test = [o for o in obs if o.event == held]
         fitted = fit_curve(train, prior_curve, opts)
+        full.oos_curves[held] = fitted.curve
         county, ev = residuals(test, fitted.curve)
         oos_county.extend(county)
         if held in ev:

@@ -12,6 +12,7 @@ from app.main import app
 from app.services import damage_curves, event_evidence, event_loss, industry_losses, onlevel
 from app.services.county_wind import SpeedBin
 from app.services.curve_fit import (
+    FitOptions,
     Observation,
     _pav_non_decreasing,
     fit_curve,
@@ -345,6 +346,19 @@ def test_match_event_censors_small_rows_and_low_claim_counts() -> None:
 def test_fit_without_data_returns_prior() -> None:
     prior = vendor_curve("kcc")
     assert fit_curve([], prior).curve == prior
+
+
+def test_fixed_band_holds_and_the_rest_refit_around_it() -> None:
+    prior = vendor_curve("kcc")
+    truth = [v * 0.6 for v in prior]
+    obs = _synthetic(truth)
+    res = fit_with_holdout(obs, prior, FitOptions(fixed=((0, 0.0004),)))
+    assert res.curve[0] == pytest.approx(0.0004)
+    assert all(c[0] == pytest.approx(0.0004) for c in res.oos_curves.values())
+    assert set(res.oos_curves) == {"EV1", "EV2", "EV3"}
+    assert all(b >= a for a, b in zip(res.curve, res.curve[1:]))
+    for b in range(3, 11):
+        assert res.curve[b] == pytest.approx(truth[b], rel=0.2)
 
 
 def test_calibrated_set_becomes_default(data_dir) -> None:
