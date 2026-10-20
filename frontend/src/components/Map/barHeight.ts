@@ -7,21 +7,21 @@ export type BarHeightStop = readonly [zoom: number, maxHeightMetres: number];
 // States and counties use separate scales so switching to county-normalised
 // values does not make the largest county jump to state-sized height.
 export const STATE_BAR_HEIGHT_STOPS: readonly BarHeightStop[] = [
-  [2, 800_000],
-  [3, 350_000],
-  [4, 150_000],
+  [2, 300_000],
+  [3, 100_000],
+  [4, 30_000],
 ];
 
 export const COUNTY_BAR_HEIGHT_STOPS: readonly BarHeightStop[] = [
-  [4, 80_000],
-  [5, 34_000],
-  [6, 14_000],
-  [7, 6_000],
-  [8, 2_500],
-  [9, 1_050],
-  [10, 450],
-  [11, 200],
-  [12, 90],
+  [4, 15_000],
+  [5, 6_300],
+  [6, 2_600],
+  [7, 1_100],
+  [8, 460],
+  [9, 195],
+  [10, 82],
+  [11, 36],
+  [12, 16],
 ];
 
 export function barHeightExpression(
