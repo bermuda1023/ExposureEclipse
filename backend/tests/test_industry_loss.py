@@ -361,6 +361,19 @@ def test_fixed_band_holds_and_the_rest_refit_around_it() -> None:
         assert res.curve[b] == pytest.approx(truth[b], rel=0.2)
 
 
+def test_unsupported_tail_follows_the_prior_shape() -> None:
+    prior = vendor_curve("kcc")
+    truth = [v * 1.5 for v in prior]
+    # Exposure only in the bottom eight bands.
+    obs = [o for o in _synthetic(truth) if all(b < 8 for b, _ in o.bins)]
+    res = fit_curve(obs, prior, FitOptions(smooth=2.0, tail_min_weight=5e-4))
+    last = max(b for b, w in enumerate(res.band_weight) if w >= 5e-4)
+    assert last < len(prior) - 1
+    scale = res.curve[last] / prior[last]
+    for b in range(last + 1, len(prior)):
+        assert res.curve[b] == pytest.approx(min(prior[b] * scale, 1.0), rel=1e-6)
+
+
 def test_calibrated_set_becomes_default(data_dir) -> None:
     assert damage_curves.default_curve_set_id() == "kcc"
     payload = {

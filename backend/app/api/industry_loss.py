@@ -3,7 +3,7 @@
   GET  /api/damage-curves
   POST /api/hurricanes/{storm_id}/industry-loss
   GET  /api/industry-losses
-  GET  /api/industry-losses/{storm_id}/backtest?curveSetId=&multiplier=
+  GET  /api/industry-losses/{storm_id}/backtest?curveSetId=&multiplier=&observedWind=
 
 Industry loss is independent of the left-rail selection: it always runs on
 the industry TIV (supplied vintage for the storm year, else the built-in
@@ -29,6 +29,7 @@ from ..services.industry_losses import (
 )
 from ..services.loss_calibration import backtest
 from ..services.onlevel import onlevel_actuals
+from ..services.wind_calibration import county_multipliers, shape_for
 
 router = APIRouter(tags=["industry-loss"])
 
@@ -42,6 +43,36 @@ class IndustryLossRequest(BaseModel):
     exposed_fraction: dict[str, float] = Field(default_factory=dict)
     # Scale reported losses to the TIV valuation date (services/onlevel.py).
     on_level: bool = True
+    # Correct a historical storm's wind county by county to its ASOS stations
+    # (services/wind_calibration.py). Off by default: it tightens county fits
+    # but widens event-total error.
+    observed_wind: bool = False
+
+
+def _observed_wind(storm, track_source: str, impacts, curve, wanted: bool) -> tuple[dict[str, float], dict]:
+    """County wind multipliers from the storm's stations, and a wire summary.
+    Only for IBTrACS storms with an evidence file and a curve fitted on the
+    observed-wind shape; a live storm has no observations yet."""
+    shape = shape_for(curve)
+    info: dict = {"applied": False, "reason": None}
+    if not wanted:
+        info["reason"] = "switched off"
+    elif track_source != "ibtracs":
+        info["reason"] = "live storm"
+    elif shape is None:
+        info["reason"] = "curve set has no observed-wind shape"
+    else:
+        mult = county_multipliers(storm.storm_id, impacts, shape)
+        if not mult:
+            info["reason"] = "no station evidence for this storm"
+        else:
+            vals = sorted(mult.values())
+            info = {
+                "applied": True, "reason": None, "counties": len(vals),
+                "median": vals[len(vals) // 2], "min": vals[0], "max": vals[-1],
+            }
+            return mult, info
+    return {}, info
 
 
 def _error(status: int, code: str, message: str, **details) -> HTTPException:
@@ -120,10 +151,16 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
     tiv = _tiv(storm.year)
     actuals = _actuals(storm.storm_id)
     impacts = storm_impacts(storm, track_source, req.multiplier)
-    result = event_loss(impacts, tiv, curve, req.exposed_fraction)
+    wind_mult, wind_info = _observed_wind(storm, track_source, impacts, curve, req.observed_wind)
+    result = event_loss(impacts, tiv, curve, req.exposed_fraction, wind_mult)
     currency = tiv.currency
 
     notes: list[str] = []
+    if wind_info["applied"]:
+        notes.append(
+            f"Wind corrected to airport observations: county multipliers "
+            f"x{wind_info['min']:.2f} to x{wind_info['max']:.2f} (median x{wind_info['median']:.2f})."
+        )
     if tiv.kind == "book":
         notes.append(
             "Using the built-in Industry book (supplied 2026 windstorm TIV by county, "
@@ -192,13 +229,16 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
         "currency": currency,
         "multiplier": req.multiplier,
         "curveSet": {"id": curve.id, "label": curve.label, "kind": curve.kind,
-                     "windFactor": curve.wind_factor, "deductible": curve.deductible,
+                     "windFactor": curve.wind_factor, "windExponent": curve.wind_exponent,
+                     "windFloor": curve.wind_floor, "deductible": curve.deductible,
                      "sigmaLogCounty": sig_c, "sigmaLogEvent": sig_e},
         "tivSource": _tiv_source(tiv),
         "formula": (
             "loss = exposedFraction x TIV[segment] x sum_bands(areaFraction x "
-            "insuredDR[segment](marineMph x windFactor))"
+            "insuredDR[segment](windFactor x marineMph x max(windFloor, (marineMph/73.6)^windExponent)"
+            " x observedWindMultiplier[county]))"
         ),
+        "observedWind": wind_info,
         "summary": {
             "total": lognormal_band(result.total, sig_e),
             "bySegment": by_seg,
@@ -212,6 +252,7 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
                 "name": c.impact.name,
                 "state": c.impact.state_usps,
                 "maxWindKt": c.impact.max_wind_kt,
+                "observedWindMultiplier": wind_mult.get(c.impact.geography_id),
                 "exposedFraction": c.exposed_fraction,
                 "segments": {
                     seg: {"tiv": c.tiv[seg], "loss": c.loss[seg], "dr": c.dr[seg]}
@@ -252,6 +293,7 @@ def industry_loss_backtest(
     curve_set_id: str | None = Query(None, alias="curveSetId"),
     multiplier: float = Query(2.5, ge=1.0, le=6.0),
     on_level: bool = Query(True, alias="onLevel"),
+    observed_wind: bool = Query(False, alias="observedWind"),
 ) -> dict:
     actuals = _actuals(storm_id)
     if actuals is None:
@@ -267,7 +309,8 @@ def industry_loss_backtest(
     on_level_info = None
     if on_level:
         actuals, on_level_info = onlevel_actuals(actuals, tiv.as_of)
-    result = backtest(actuals, impacts, tiv, curve, load_evidence(storm.storm_id))
+    wind_mult, wind_info = _observed_wind(storm, track_source, impacts, curve, observed_wind)
+    result = backtest(actuals, impacts, tiv, curve, load_evidence(storm.storm_id), wind_mult)
     return {
         "stormId": storm.storm_id,
         "stormName": storm.name,
@@ -276,5 +319,6 @@ def industry_loss_backtest(
         "curveSet": {"id": curve.id, "label": curve.label, "kind": curve.kind},
         "tivSource": _tiv_source(tiv),
         "onLevel": on_level_info,
+        "observedWind": wind_info,
         **result,
     }

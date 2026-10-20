@@ -1,12 +1,14 @@
 """Industry loss for one storm: county wind mix x segment TIV x damage curve.
 
     county_loss[seg] = exposed_fraction x tiv[seg]
-                       x sum_b(areaFraction_b x insuredDR[seg](mph_b x windFactor))
+                       x sum_b(areaFraction_b x insuredDR[seg](land(mph_b) x obs_c))
 
 ``areaFraction_b`` is the share of the county polygon whose peak local wind
 sits in 10 mph band ``b`` (``CountyImpact.speed_bins``); ``mph_b`` is the
 band midpoint in marine exposure. ``windFactor`` takes it to wind over land
-and the deductible turns ground-up into insured DR (``damage_curves``). The point estimate
+and the deductible turns ground-up into insured DR (``damage_curves``);
+``land`` is the curve set's wind transform and ``obs_c`` the county's
+observed-wind correction for a historical storm (``wind_calibration``). The point estimate
 is treated as the mean of a lognormal; P10/P50/P90 use the curve set's
 county or event log-spread. Event bands are NOT the sum of county bands
 (that would assume every county errs the same way).
@@ -61,9 +63,11 @@ def county_bins(impact: CountyImpact) -> list[tuple[float, float]]:
     return []
 
 
-def effective_dr(bins: list[tuple[float, float]], curve: CurveSet, segment: str) -> float:
+def effective_dr(
+    bins: list[tuple[float, float]], curve: CurveSet, segment: str, wind_multiplier: float = 1.0,
+) -> float:
     """Insured damage ratio on the whole county TIV for this wind mix."""
-    return sum(frac * curve.dr(segment, mph) for mph, frac in bins)
+    return sum(frac * curve.dr(segment, mph, wind_multiplier) for mph, frac in bins)
 
 
 @dataclass(slots=True)
@@ -97,8 +101,12 @@ def event_loss(
     tiv: IndustryTiv,
     curve: CurveSet,
     exposed_fraction: dict[str, float] | None = None,
+    wind_multiplier: dict[str, float] | None = None,
 ) -> EventLoss:
+    """``wind_multiplier``: observed-wind correction per county
+    (``wind_calibration.county_multipliers``), historical storms only."""
     overrides = exposed_fraction or {}
+    wind_mult = wind_multiplier or {}
     counties: list[CountyLoss] = []
     by_seg = {seg: 0.0 for seg in LOSS_SEGMENTS}
     tiv_seg = {seg: 0.0 for seg in LOSS_SEGMENTS}
@@ -117,7 +125,7 @@ def event_loss(
         for seg in LOSS_SEGMENTS:
             value = float(segs.get(seg, 0.0))
             seg_tiv[seg] = value
-            ratio = effective_dr(bins, curve, seg)
+            ratio = effective_dr(bins, curve, seg, wind_mult.get(imp.geography_id, 1.0))
             dr[seg] = ratio
             loss[seg] = value * ratio * scale
             by_seg[seg] += loss[seg]

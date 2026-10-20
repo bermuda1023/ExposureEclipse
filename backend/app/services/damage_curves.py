@@ -68,6 +68,20 @@ DEFAULT_SIGMA_EVENT = 0.45
 CURVES_DIR = "damage_curves"
 
 
+REF_MARINE_MPH = 64 * 1.15078
+
+
+def land_mph(marine_mph: float, factor: float, exponent: float = 0.0, floor: float = 0.0) -> float:
+    """Marine 1-minute wind to curve wind:
+    ``factor x marine x max(floor, (marine / 64 kt) ** exponent)``.
+    With exponent 0 this is the flat ``factor``; a fitted exponent makes the
+    land share fall as the storm gets stronger, as the ASOS record shows."""
+    if marine_mph <= 0:
+        return 0.0
+    shape = (marine_mph / REF_MARINE_MPH) ** exponent if exponent else 1.0
+    return factor * marine_mph * max(floor, shape)
+
+
 def interp_weights(curve_mph: float) -> list[tuple[int, float]]:
     """Linear weights on band midpoints so DR(mph) = sum(w x DR_b)."""
     if curve_mph <= ZERO_DAMAGE_MPH:
@@ -140,20 +154,27 @@ class CurveSet:
     sigma_log_event: float = DEFAULT_SIGMA_EVENT
     created_at: str | None = None
     fit: dict = field(default_factory=dict)
+    # Observed-wind shape (services/wind_calibration.py). 0 / 0 = flat windFactor.
+    wind_exponent: float = 0.0
+    wind_floor: float = 0.0
 
-    def weights(self, marine_mph: float) -> list[tuple[int, float]]:
-        return interp_weights(marine_mph * self.wind_factor)
+    def land_mph(self, marine_mph: float, multiplier: float = 1.0) -> float:
+        """Curve wind for a marine wind; ``multiplier`` is a county's observed correction."""
+        return land_mph(marine_mph, self.wind_factor, self.wind_exponent, self.wind_floor) * multiplier
 
-    def ground_up_dr(self, segment: str, marine_mph: float) -> float:
+    def weights(self, marine_mph: float, multiplier: float = 1.0) -> list[tuple[int, float]]:
+        return interp_weights(self.land_mph(marine_mph, multiplier))
+
+    def ground_up_dr(self, segment: str, marine_mph: float, multiplier: float = 1.0) -> float:
         curve = self.segments.get(segment)
         if not curve:
             return 0.0
-        return sum(w * curve[b] for b, w in self.weights(marine_mph))
+        return sum(w * curve[b] for b, w in self.weights(marine_mph, multiplier))
 
-    def dr(self, segment: str, marine_mph: float) -> float:
+    def dr(self, segment: str, marine_mph: float, multiplier: float = 1.0) -> float:
         """Insured DR at one marine wind speed."""
         return insured_dr(
-            self.ground_up_dr(segment, marine_mph),
+            self.ground_up_dr(segment, marine_mph, multiplier),
             self.deductible.get(segment, 0.0),
             self.beta_precision,
         )
@@ -166,6 +187,8 @@ class CurveSet:
             "bandsMphLo": list(BAND_MPH_LO),
             "segments": {seg: [round(v, 6) for v in vals] for seg, vals in self.segments.items()},
             "windFactor": self.wind_factor,
+            "windExponent": self.wind_exponent,
+            "windFloor": self.wind_floor,
             "deductible": self.deductible,
             "betaPrecision": self.beta_precision,
             "sigmaLogCounty": self.sigma_log_county,
@@ -215,6 +238,8 @@ def curve_set_from_json(payload: dict) -> CurveSet:
         kind=str(payload.get("kind") or "calibrated"),
         segments=segments,
         wind_factor=float(payload.get("windFactor", DEFAULT_WIND_FACTOR)),
+        wind_exponent=float(payload.get("windExponent", 0.0)),
+        wind_floor=float(payload.get("windFloor", 0.0)),
         deductible={k: float(v) for k, v in (payload.get("deductible") or {}).items()},
         beta_precision=float(payload.get("betaPrecision", DEFAULT_BETA_PRECISION)),
         sigma_log_county=float(payload.get("sigmaLogCounty", DEFAULT_SIGMA_COUNTY)),

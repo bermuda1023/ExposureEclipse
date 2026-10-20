@@ -20,6 +20,7 @@ when the model goes above that ceiling. They stay in every event total.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .curve_fit import Observation
@@ -31,12 +32,24 @@ from .hurricane_impact import CountyImpact
 from .industry_losses import LOSS_SEGMENTS, EventActuals, IndustryTiv
 
 
-def indexed_bins(impact: CountyImpact, wind_factor: float) -> list[tuple[int, float]]:
+LandFn = Callable[[float], float]
+
+
+def _land_fn(wind: float | LandFn) -> LandFn:
+    if callable(wind):
+        return wind
+    factor = float(wind)
+    return lambda mph: mph * factor
+
+
+def indexed_bins(impact: CountyImpact, wind: float | LandFn, multiplier: float = 1.0) -> list[tuple[int, float]]:
     """Per-band weights so ground-up DR = sum(w x DR_b). Linear in the curve,
-    which is what the fit needs."""
+    which is what the fit needs. ``wind`` is a flat marine-to-land factor or a
+    marine-mph-to-curve-mph function (``CurveSet.land_mph``)."""
+    land = _land_fn(wind)
     out: dict[int, float] = {}
     for mph, frac in county_bins(impact):
-        for idx, w in interp_weights(mph * wind_factor):
+        for idx, w in interp_weights(land(mph) * multiplier):
             out[idx] = out.get(idx, 0.0) + frac * w
     return sorted(out.items())
 
@@ -66,15 +79,17 @@ def match_event(
     actuals: EventActuals,
     impacts: list[CountyImpact],
     tiv: IndustryTiv,
-    wind_factor: float,
+    wind: float | LandFn,
+    wind_multiplier: dict[str, float] | None = None,
 ) -> Matched:
     by_gid = {imp.geography_id: imp for imp in impacts}
+    mult = wind_multiplier or {}
     out = Matched(observations={seg: [] for seg in LOSS_SEGMENTS})
     for (gid, seg), loss in sorted(actuals.county.items()):
         segs = tiv.county.get(gid) or {}
         value = float(segs.get(seg, 0.0))
         imp = by_gid.get(gid)
-        bins = indexed_bins(imp, wind_factor) if imp is not None else []
+        bins = indexed_bins(imp, wind, mult.get(gid, 1.0)) if imp is not None else []
         if not bins:
             if loss > 0:
                 out.footprint_miss.append((gid, seg, loss))
@@ -115,15 +130,16 @@ def backtest(
     tiv: IndustryTiv,
     curve: CurveSet,
     evidence: dict | None = None,
+    wind_multiplier: dict[str, float] | None = None,
 ) -> dict:
     """Modelled vs reported for one event, by segment and county.
 
     ``evidence`` (see ``event_evidence``) adds observed wind and reported
     perils per county, and splits out-of-field dollars by the peril that
     was reported there."""
-    modelled: EventLoss = event_loss(impacts, tiv, curve)
+    modelled: EventLoss = event_loss(impacts, tiv, curve, wind_multiplier=wind_multiplier)
     by_gid = {c.impact.geography_id: c for c in modelled.counties}
-    matched = match_event(actuals, impacts, tiv, curve.wind_factor)
+    matched = match_event(actuals, impacts, tiv, curve.land_mph, wind_multiplier)
     actual_seg = actuals.segment_totals()
 
     segments: dict[str, dict] = {}
@@ -176,6 +192,7 @@ def backtest(
             "maxWindKt": imp.max_wind_kt if imp else None,
             "logError": _log_ratio(mod, act),
             "inWindField": imp is not None and bool(county_bins(imp)),
+            "observedWindMultiplier": (wind_multiplier or {}).get(gid),
             "claims": actuals.county_claims.get((gid, seg)),
             "belowMateriality": below_materiality(act, actuals.county_claims.get((gid, seg))),
             "evidence": county_evidence(evidence, gid),
