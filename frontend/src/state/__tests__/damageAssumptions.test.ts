@@ -40,9 +40,30 @@ describe("trained damage defaults", () => {
 
   it("price a Cat 4 slice with the trained band", () => {
     const band = applyCategory(1_000_000, 4, DEFAULTS);
-    expect(band.mean).toBeCloseTo(146_000);
-    expect(band.low).toBeCloseTo(51_000);
-    expect(band.high).toBeCloseTo(241_000);
+    expect(band.mean).toBeCloseTo(142_000);
+    expect(band.low).toBeCloseTo(67_000);
+    expect(band.high).toBeCloseTo(217_000);
+  });
+
+  it("move an untouched all-event table to the wind-dominant defaults", () => {
+    const allEvents = {
+      [-1]: { mean: 0, sd: 0 },
+      [0]: { mean: 0.04, sd: 0.06 },
+      [1]: { mean: 1.0, sd: 1.4 },
+      [2]: { mean: 1.4, sd: 1.6 },
+      [3]: { mean: 3.3, sd: 2.5 },
+      [4]: { mean: 14.6, sd: 9.5 },
+      [5]: { mean: 28.2, sd: 18.3 },
+    };
+    expect(migrateDamageAssumptions({ byCategory: allEvents, model: "pcs" }, 1)).toEqual({
+      byCategory: DEFAULTS,
+      model: "pcs",
+    });
+    const edited = { ...allEvents, [4]: { mean: 20, sd: 5 } };
+    expect(migrateDamageAssumptions({ byCategory: edited, model: "custom" }, 1).byCategory[4]).toEqual({
+      mean: 20,
+      sd: 5,
+    });
   });
 });
 

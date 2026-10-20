@@ -15,6 +15,7 @@ import {
   type Sshws,
 } from "../../state/damageAssumptions";
 import { useCalibratedCurve } from "../../api/hooks";
+import { CalibrationEventSet, rangeLabel } from "./CalibrationEventSet";
 
 interface Props {
   compact?: boolean;
@@ -54,10 +55,10 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
           </div>
           <div style={{ fontSize: "0.66rem", color: "var(--ink-500)", marginTop: 1 }}>
             {pcs
-              ? `Insured damage ratio fitted to PCS events against observed ASOS winds. The empirical P10–P90 holdout range covers ${curve.panelBand.coveredEvents}/${curve.panelBand.scorableEvents} scorable events; NFIP is excluded from PCS.`
+              ? `Insured damage ratio fitted to ${curve.panelBand.scorableEvents} wind-dominant PCS events against observed ASOS winds. Low / high are the ${rangeLabel(curve)} (${curve.panelBand.lowFactor.toFixed(2)}–${curve.panelBand.highFactor.toFixed(2)}× the mean, ${curve.panelBand.coveredEvents}/${curve.panelBand.scorableEvents} held-out events inside). It applies to wind-dominant storms; NFIP is excluded from PCS.`
               : vendor
               ? "Form V-1 building damage by 10 mph of 1-minute wind, on unmitigated reference structures. Each county uses its own mix. SD is still yours. Applied to bundled TIV."
-              : "Mean ± SD insured damage ratio per category, applied to TIV. Defaults are trained on 15 PCS events (2017–2024); SD is the storm-to-storm error."}
+              : "Mean ± SD insured damage ratio per category, applied to TIV. Defaults are trained on the 7 wind-dominant PCS events (2017–2024); SD is the storm-to-storm error."}
           </div>
         </div>
         <button
@@ -155,6 +156,15 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
           })}
         </tbody>
       </table>
+      {pcs && curve.eventSet.length > 0 && (
+        <details style={{ marginTop: 6 }}>
+          <summary style={{ fontSize: "0.66rem", color: "var(--brand-700)", cursor: "pointer" }}>
+            Calibration storms: {curve.eventSet.filter((e) => e.included).length} included,{" "}
+            {curve.eventSet.filter((e) => !e.included).length} excluded, and why
+          </summary>
+          <CalibrationEventSet curve={curve} />
+        </details>
+      )}
     </section>
   );
 }

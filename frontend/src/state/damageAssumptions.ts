@@ -16,7 +16,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { CurveSetInfo, LossSegment } from "../api/industryLoss";
+import type { CalibrationEvent, CurveSetInfo, LossSegment, PanelBand } from "../api/industryLoss";
 
 /** Saffir-Simpson key. 0 = Tropical Storm; -1 = Tropical Depression. */
 export type Sshws = -1 | 0 | 1 | 2 | 3 | 4 | 5;
@@ -52,15 +52,10 @@ export interface CalibratedCurve {
   windExponent: number;
   windFloor: number;
   sigmaLogEvent: number;
-  panelBand: {
-    lowFactor: number;
-    highFactor: number;
-    coveredEvents: number;
-    scorableEvents: number;
-    suppliedEvents: number;
-    outsideEvents: string[];
-    basis: string;
-  };
+  panelBand: PanelBand;
+  /** Supplied PCS events with the calibration decision; empty for older sets. */
+  eventSet: CalibrationEvent[];
+  eventRules: Partial<Record<string, { reason: string }>>;
 }
 
 /** Florida Commission Form V-1 Part A, building damage / building exposure.
@@ -98,8 +93,10 @@ export const DAMAGE_MODEL_LABEL: Record<DamageModel, string> = {
   rms: "RMS",
 };
 
-// Trained on 15 PCS county-estimate events (Irma 2017 to Milton 2024) against
-// the supplied industry TIV, on the same wind bands this panel receives:
+// Trained on the 7 wind-dominant PCS county-estimate events (Irma 2017 to
+// Milton 2024; mockdata/industry_losses/event_set.json drops stalled, no-TIV
+// and mostly-outside-the-wind-field storms) against the supplied industry
+// TIV, on the same wind bands this panel receives:
 // mockdata/damage_assumptions/sshws_calibrated.json, built by
 // backend/scripts/train_category_damage.py --no-ts-field --fix-ts 0.04.
 // Insured basis (PCS: after deductibles, private flood in, NFIP out), so they
@@ -111,15 +108,26 @@ export const DAMAGE_MODEL_LABEL: Record<DamageModel, string> = {
 export const DEFAULTS: Record<Sshws, CategoryAssumption> = {
   [-1]: { mean: 0.0, sd: 0.0 },     // TD
   [0]:  { mean: 0.04, sd: 0.06 },   // TS
-  [1]:  { mean: 1.0, sd: 1.4 },     // Cat 1
-  [2]:  { mean: 1.4, sd: 1.6 },     // Cat 2
-  [3]:  { mean: 3.3, sd: 2.5 },     // Cat 3
-  [4]:  { mean: 14.6, sd: 9.5 },    // Cat 4
-  [5]:  { mean: 28.2, sd: 18.3 },   // Cat 5
+  [1]:  { mean: 1.4, sd: 2.3 },     // Cat 1
+  [2]:  { mean: 2.4, sd: 1.7 },     // Cat 2
+  [3]:  { mean: 4.3, sd: 4.2 },     // Cat 3
+  [4]:  { mean: 14.2, sd: 7.5 },    // Cat 4
+  [5]:  { mean: 27.3, sd: 14.5 },   // Cat 5
 };
 
 // The hand-set starting values before calibration. A stored table still equal
 // to these was never edited, so it moves to the trained defaults.
+// Defaults trained on all 15 supplied events, before the wind-dominant set.
+const ALL_EVENT_DEFAULTS: Record<Sshws, CategoryAssumption> = {
+  [-1]: { mean: 0.0, sd: 0.0 },
+  [0]:  { mean: 0.04, sd: 0.06 },
+  [1]:  { mean: 1.0, sd: 1.4 },
+  [2]:  { mean: 1.4, sd: 1.6 },
+  [3]:  { mean: 3.3, sd: 2.5 },
+  [4]:  { mean: 14.6, sd: 9.5 },
+  [5]:  { mean: 28.2, sd: 18.3 },
+};
+
 const PRE_CALIBRATION_DEFAULTS: Record<Sshws, CategoryAssumption> = {
   [-1]: { mean: 0.0, sd: 0.0 },
   [0]:  { mean: 0.5, sd: 0.3 },
@@ -150,6 +158,9 @@ export function migrateDamageAssumptions(
   if (version < 1 && (!byCategory || sameTable(byCategory, PRE_CALIBRATION_DEFAULTS))) {
     return { byCategory: { ...DEFAULTS }, model };
   }
+  if (version < 2 && (!byCategory || sameTable(byCategory, ALL_EVENT_DEFAULTS))) {
+    return { byCategory: { ...DEFAULTS }, model };
+  }
   return { byCategory: { ...DEFAULTS, ...(byCategory ?? {}) }, model };
 }
 
@@ -170,7 +181,7 @@ export const useDamageAssumptionsStore = create<DamageAssumptionsState>()(
     }),
     {
       name: "ee-damage-assumptions",
-      version: 1,
+      version: 2,
       // persist merges the returned fields over the live store (actions included).
       migrate: (persisted, version) =>
         migrateDamageAssumptions(persisted, version) as DamageAssumptionsState,
@@ -266,10 +277,18 @@ export function blendCalibratedCurve(set: CurveSetInfo | null | undefined): Cali
       outsideEvents: [],
       basis: "fallback log-error range",
     },
+    eventSet: set.fit?.eventSet ?? [],
+    eventRules: set.fit?.eventRules ?? {},
   };
 }
 
-/** Asymmetric DR range from held-out wind-dominant major events. */
+/** The calibration decision for a storm, when it is one of the supplied PCS events. */
+export function calibrationEvent(curve: CalibratedCurve | null | undefined, stormId: string | null | undefined): CalibrationEvent | null {
+  if (!curve || !stormId) return null;
+  return curve.eventSet.find((e) => e.stormId.toUpperCase() === stormId.toUpperCase()) ?? null;
+}
+
+/** Asymmetric DR range from held-out wind-dominant events. */
 export function calibratedRange(
   curve: CalibratedCurve,
   meanPct: number,

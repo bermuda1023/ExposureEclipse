@@ -20,6 +20,7 @@ import { formatCount, formatMoneyCompact } from "../../lib/format";
 import { SAFFIR_SIMPSON_COLORS } from "./hurricaneColors";
 import { CountyWindSlices } from "./CountyWindSlices";
 import { IndustryLossSection } from "./IndustryLossSection";
+import { PanelBandNote, rangeLabel } from "../DetailPanel/CalibrationEventSet";
 import { downloadHurricaneImpactXlsx } from "../../api/hurricanes";
 
 export function HurricaneImpactPanel() {
@@ -222,7 +223,7 @@ export function HurricaneImpactPanel() {
                 value={formatMoneyCompact(totals.mean, data.currency)}
               />
               <Stat
-                label={damageModel === "pcs" && calibratedCurve ? "PCS holdout P10–P90" : "Loss band ±1SD"}
+                label={damageModel === "pcs" && calibratedCurve ? rangeLabel(calibratedCurve) : "Loss band ±1SD"}
                 value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
               />
               <SegmentNote
@@ -231,6 +232,9 @@ export function HurricaneImpactPanel() {
                 auto={data.summary.autoTiv}
                 currency={data.currency}
               />
+              {damageModel === "pcs" && calibratedCurve && (
+                <PanelBandNote curve={calibratedCurve} stormId={data.stormId} />
+              )}
             </div>
             {data.footprint.length > 0 && (
               <RmaxSourceLine footprint={data.footprint} />

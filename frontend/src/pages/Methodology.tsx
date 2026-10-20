@@ -6,12 +6,15 @@
  * to be the authoritative "how does this number get produced" resource
  * for anyone who has to defend the platform in a client conversation.
  *
- * Deliberately self-contained (no data loading, no state) so it renders
- * instantly and is straightforward to keep in sync with the code that
- * actually produces the numbers.
+ * Deliberately self-contained (no state) so it renders instantly and is
+ * straightforward to keep in sync with the code that produces the numbers.
+ * The one exception is the calibration storm list, read from the shipped
+ * curve set so it cannot drift from what the panel uses.
  */
 
+import { useCalibratedCurve } from "../api/hooks";
 import { BRAND } from "../brand";
+import { CalibrationEventSet } from "../components/DetailPanel/CalibrationEventSet";
 import { BrandMark } from "../components/layout/BrandMark";
 
 export function Methodology() {
@@ -246,18 +249,35 @@ export function Methodology() {
             Loss is the sum across those slices of county TIV × area fraction
             × the damage ratio for that category. Custom ratios (mean and SD)
             stay editable. PCS-calibrated applies the fitted insured curve to
-            the county&apos;s own 10 mph wind mix. Its displayed range is
-            asymmetric: 0.416–6.559 × the model mean, the finite-sample
-            empirical P10–P90 range when each of all 14 scorable events was
-            held out in turn. It covers 12/14 events (85.7%). PCS excludes
-            NFIP; flood and high-water reports are context, not a reason to
-            remove a PCS row. Residential, commercial, and auto figures are information
+            the county&apos;s own 10 mph wind mix. The curve is fitted only on
+            wind-dominant PCS events (list below). Its displayed range is the{" "}
+            <b>PCS holdout 80% range</b>: each training storm is held out of the
+            fit in turn and priced exactly as the panel prices it, and the
+            range is the narrowest span of those actual / model factors that
+            holds at least 80% of the storms. PCS excludes NFIP. Residential, commercial, and auto figures are information
             only; the loss uses the bundled county TIV, spread evenly across
             the polygon because the book is not location-level. Separate
             residential, commercial, and auto curves were tested with each
             event held out in turn: they do not improve event totals, so the
             panel keeps one book-mix curve. The industry-loss engine keeps its
             segment curves only because they improve the commercial split.
+          </li>
+          <li>
+            <b>The range applies to wind-dominant storms only.</b> A storm is
+            left out of calibration by a rule about its loss mechanism or data,
+            never because it fits badly: (1) most of its PCS loss is where the
+            book has no TIV; (2) it stalled, with the centre 36+ hours within
+            100 nm of its strongest US landfall, so rain flooding and wind
+            duration drive the loss (Harvey 2017 is the archetype; Florence and
+            Sally qualify, no other supplied storm exceeds 24 hours); (3) most
+            of its PCS loss is in counties outside the modelled hurricane-force
+            wind field (inland tropical-storm wind, tornadoes, remnant rain).
+            Sandy and Katrina are not in the supplied PCS set; Sandy&apos;s
+            surge and Katrina&apos;s levee failure would need their own rule.
+            Excluded storms are still scored on the final curve and shown
+            below. The panel flags an excluded storm and says the range does
+            not apply to it.
+            <MethodologyEventSet />
           </li>
           <li>
             The per-county <b>scale</b> is an extra haircut on top of the
@@ -1038,6 +1058,28 @@ export function Methodology() {
 }
 
 // ─────────────────────────── layout primitives ───────────────────────────
+
+function MethodologyEventSet() {
+  const curve = useCalibratedCurve();
+  if (!curve || curve.eventSet.length === 0) {
+    return (
+      <div style={{ fontSize: "0.85rem", color: "var(--ink-500)", marginTop: 6 }}>
+        Included: Beryl, Ida, Ian, Irma, Laura, Michael, Milton. Excluded: Debby, Florence,
+        Helene, Isaias, Maria, Sally, Delta, Zeta.
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: "0.85rem", color: "var(--ink-600)" }}>
+        Shipped curve set <code>{curve.id}</code>: range {curve.panelBand.lowFactor.toFixed(2)}–
+        {curve.panelBand.highFactor.toFixed(2)}× the mean; {curve.panelBand.coveredEvents} of{" "}
+        {curve.panelBand.scorableEvents} held-out wind-dominant storms inside.
+      </div>
+      <CalibrationEventSet curve={curve} fontSize="0.8rem" />
+    </div>
+  );
+}
 
 function TopNav() {
   return (

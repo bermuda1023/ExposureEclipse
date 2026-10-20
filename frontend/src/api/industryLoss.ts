@@ -25,16 +25,53 @@ export interface CurveSetInfo {
   createdAt: string | null;
   fit?: {
     bookMix?: Partial<Record<LossSegment, number>>;
-    panelBand?: {
-      lowFactor: number;
-      highFactor: number;
-      coveredEvents: number;
-      scorableEvents: number;
-      suppliedEvents: number;
-      outsideEvents: string[];
-      basis: string;
-    };
+    panelBand?: PanelBand;
+    eventRules?: Partial<Record<EventExclusionReason, { reason: string } & Record<string, unknown>>>;
+    eventSet?: CalibrationEvent[];
   } | null;
+}
+
+/** Rule that keeps a supplied PCS event out of calibration (mockdata/industry_losses/event_set.json). */
+export type EventExclusionReason = "noExposure" | "stalled" | "outsideFootprint";
+
+export interface CalibrationEvent {
+  stormId: string;
+  name: string;
+  year: number;
+  included: boolean;
+  reasons: EventExclusionReason[];
+  mechanism: string;
+  metrics: {
+    pcsLoss: number;
+    noTivShare: number | null;
+    outsideFootprintShare: number | null;
+    stallHours: number | null;
+  };
+}
+
+export interface PanelBandEvent {
+  stormId: string;
+  name: string;
+  /** True for training events (factor is held out); false for excluded events scored on the final curve. */
+  trained: boolean;
+  reasons: EventExclusionReason[];
+  actual: number;
+  model: number;
+  factor: number | null;
+  withinRange: boolean;
+}
+
+export interface PanelBand {
+  lowFactor: number;
+  highFactor: number;
+  coverageTarget?: number;
+  coveredEvents: number;
+  scorableEvents: number;
+  suppliedEvents: number;
+  outsideEvents: string[];
+  appliesTo?: string;
+  basis: string;
+  events?: PanelBandEvent[];
 }
 
 export interface DamageCurvesResponse {

@@ -24,6 +24,7 @@ import { SAFFIR_SIMPSON_COLORS } from "../Map/hurricaneColors";
 import { CountyWindSlices } from "../Map/CountyWindSlices";
 import { CountyReferenceSection } from "./CountyReferenceSection";
 import { DamageAssumptionsEditor } from "./DamageAssumptionsEditor";
+import { PanelBandNote, rangeLabel } from "./CalibrationEventSet";
 
 export function HurricaneImpactDetail() {
   const { data, clear, popFromDetail, setFocusedGeoid } = useHurricaneImpactStore();
@@ -149,7 +150,7 @@ export function HurricaneImpactDetail() {
             value={formatMoneyCompact(totals.mean, data.currency)}
           />
           <Stat
-            label={damageModel === "pcs" && calibratedCurve ? "PCS holdout P10–P90" : "Loss band (± 1 SD)"}
+            label={damageModel === "pcs" && calibratedCurve ? rangeLabel(calibratedCurve) : "Loss band (± 1 SD)"}
             value={`${formatMoneyCompact(totals.low, data.currency)} – ${formatMoneyCompact(totals.high, data.currency)}`}
           />
         </div>
@@ -159,6 +160,9 @@ export function HurricaneImpactDetail() {
           auto={data.summary.autoTiv}
           currency={data.currency}
         />
+        {damageModel === "pcs" && calibratedCurve && (
+          <PanelBandNote curve={calibratedCurve} stormId={data.stormId} />
+        )}
         <div style={{ fontSize: "0.66rem", color: "var(--ink-600)" }}>
           Rmax multiplier {data.multiplier}× — counties exposed to ≥ 85 kt sustained winds.
           {totals.anyOverride && (
