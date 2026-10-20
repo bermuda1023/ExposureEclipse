@@ -268,6 +268,33 @@ def residuals(obs: list[Observation], curve: list[float]) -> tuple[list[float], 
     return county, events
 
 
+# The panel's ±1 SD is the spread on storms this curve actually prices.
+# A holdout ratio outside a factor of two is a different failure (flood inside
+# the PCS total, or a fast weak storm over dense TIV), and folding it into the
+# damage-ratio SD pushes the low end of the band to zero.
+PANEL_SIGMA_MAX_FACTOR = 2.0
+
+
+def panel_sigma(actual_and_model: list[tuple[float, float]]) -> float | None:
+    """sqrt(loss)-weighted RMS log error of events priced within a factor of two.
+
+    Each pair is (actual, modelled) for one event, segments already summed.
+    Returns None when fewer than three events fall inside the factor.
+    """
+    limit = math.log(PANEL_SIGMA_MAX_FACTOR)
+    pts: list[tuple[float, float]] = []
+    for actual, modelled in actual_and_model:
+        if actual <= 0 or modelled <= 0:
+            continue
+        err = math.log(modelled / actual)
+        if abs(err) <= limit:
+            pts.append((math.sqrt(actual), err))
+    if len(pts) < 3:
+        return None
+    weight = sum(w for w, _ in pts)
+    return math.sqrt(sum(w * e * e for w, e in pts) / weight)
+
+
 def _rms(values: list[float]) -> float | None:
     if not values:
         return None

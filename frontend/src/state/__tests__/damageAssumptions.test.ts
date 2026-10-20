@@ -35,7 +35,13 @@ describe("trained damage defaults", () => {
     const edited = { ...OLD, [3]: { mean: 12, sd: 5 } };
     const out = migrateDamageAssumptions({ byCategory: edited, model: "kcc" }, 0);
     expect(out.byCategory[3]).toEqual({ mean: 12, sd: 5 });
-    expect(out.model).toBe("kcc");
+    expect(out.model).toBe("pcs");
+  });
+
+  it("maps a stored vendor curve onto PCS-calibrated", () => {
+    const out = migrateDamageAssumptions({ model: "rms" }, 1);
+    expect(out.model).toBe("pcs");
+    expect(migrateDamageAssumptions({ model: "custom" }, 1).model).toBe("custom");
   });
 
   it("price a Cat 4 slice with the trained band", () => {
@@ -65,7 +71,7 @@ function calibratedSet(over: Partial<CurveSetInfo> = {}): CurveSetInfo {
     sigmaLogCounty: 1.7,
     sigmaLogEvent: 1.0,
     createdAt: null,
-    fit: { bookMix: { RESIDENTIAL: 0.5, COMMERCIAL: 0.5 } },
+    fit: { bookMix: { RESIDENTIAL: 0.5, COMMERCIAL: 0.5 }, sigmaLogPanel: 1 },
     ...over,
   };
 }
@@ -106,6 +112,16 @@ describe("PCS-calibrated curve", () => {
     const mean = calibratedPercent(curve, 95.5);
     expect(out[1].mean).toBeCloseTo(mean);
     expect(out[1].sd).toBeCloseTo(mean * Math.sqrt(Math.E - 1));
+  });
+
+  it("keeps the loss band off zero when the all-storm sigma is wider than the mean", () => {
+    const curve = blendCalibratedCurve(calibratedSet({
+      sigmaLogEvent: 1.03,
+      fit: { bookMix: { RESIDENTIAL: 0.5, COMMERCIAL: 0.5 }, sigmaLogPanel: 0.2746 },
+    }))!;
+    const out = effectiveAssumptions("pcs", DEFAULTS, null, curve);
+    expect(out[4].sd).toBeLessThan(out[4].mean);
+    expect(out[4].mean - out[4].sd).toBeGreaterThan(0);
   });
 
   it("falls back to the typed table without a curve", () => {

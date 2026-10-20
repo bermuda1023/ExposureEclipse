@@ -361,6 +361,22 @@ def test_fixed_band_holds_and_the_rest_refit_around_it() -> None:
         assert res.curve[b] == pytest.approx(truth[b], rel=0.2)
 
 
+def test_panel_sigma_keeps_storms_the_curve_prices() -> None:
+    from app.services.curve_fit import panel_sigma
+
+    # Two near the mean, one a factor of 1.5, plus a flood and a fast-mover miss.
+    core = panel_sigma([
+        (10e9, 10e9),
+        (8e9, 9e9),
+        (6e9, 4e9),
+        (20e9, 6e9),
+        (1e9, 8e9),
+    ])
+    assert core is not None and core < 0.25
+    # The structural misses would have dominated the all-storm spread.
+    assert panel_sigma([(1.0, 0.3), (1.0, 7.0)]) is None
+
+
 def test_unsupported_tail_follows_the_prior_shape() -> None:
     prior = vendor_curve("kcc")
     truth = [v * 1.5 for v in prior]
