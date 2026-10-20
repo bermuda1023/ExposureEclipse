@@ -87,8 +87,12 @@ export function CalibrationEventSet({ curve, fontSize = "0.66rem" }: { curve: Ca
         <tbody>
           {excluded.map((e) => (
             <tr key={e.stormId} style={rowStyle} title={evidence(e)}>
-              <td style={cell}>{e.name} {e.year}</td>
-              <td style={{ ...cell, whiteSpace: "nowrap" }}>{e.reasons.map((r) => EXCLUSION_LABEL[r]).join(", ")}</td>
+              <td style={{ ...cell, width: "34%" }}>
+                {e.name} {e.year}
+                <div style={{ color: "var(--warn-700, #9a5b00)" }}>
+                  {e.reasons.map((r) => EXCLUSION_LABEL[r]).join(", ")}
+                </div>
+              </td>
               <td style={{ ...cell, color: "var(--ink-500)" }}>
                 {e.mechanism} <i>{evidence(e)}.</i>
                 {rows.get(e.stormId)?.factor != null && <> Scored on the final curve: {factorText(rows.get(e.stormId))}.</>}
