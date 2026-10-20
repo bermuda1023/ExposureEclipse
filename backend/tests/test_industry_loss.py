@@ -178,12 +178,12 @@ def test_tiv_vintage_selection(data_dir) -> None:
 def test_tiv_falls_back_to_book_when_nothing_supplied(data_dir) -> None:
     _write(
         data_dir / "industry_exposure_counties.csv",
-        "geographyId,residentialTiv,commercialTiv\nUS-FL-12071,10,5",
+        "geographyId,residentialTiv,commercialTiv,autoTiv\nUS-FL-12071,10,5,2",
     )
     tiv = industry_losses.tiv_for_year(2022)
     assert tiv.kind == "book"
-    assert tiv.county["US-FL-12071"] == {"RESIDENTIAL": 10.0, "COMMERCIAL": 5.0}
-    assert tiv.segments_present() == {"RESIDENTIAL", "COMMERCIAL"}
+    assert tiv.county["US-FL-12071"] == {"RESIDENTIAL": 10.0, "COMMERCIAL": 5.0, "AUTO": 2.0}
+    assert tiv.segments_present() == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
 
 
 # ─────────────────────────────── event loss ───────────────────────────────

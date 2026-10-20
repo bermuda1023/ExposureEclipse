@@ -345,7 +345,7 @@ def _supplied_tiv(year: int) -> IndustryTiv:
 
 @lru_cache(maxsize=1)
 def _book_tiv() -> IndustryTiv:
-    """The built-in Industry book (residential + commercial, no auto)."""
+    """The built-in Industry book: supplied windstorm TIV by county and segment."""
     path = data_dir() / "industry_exposure_counties.csv"
     county: dict[str, dict[str, float]] = {}
     if path.exists():
@@ -357,8 +357,9 @@ def _book_tiv() -> IndustryTiv:
                 county[gid] = {
                     "RESIDENTIAL": float(row["residentialTiv"]),
                     "COMMERCIAL": float(row["commercialTiv"]),
+                    "AUTO": float(row.get("autoTiv") or 0.0),
                 }
-    # build_industry_exposure.py bridges its inputs to early-2026 reconstruction dollars.
+    # The supplied workbook is valued at 2026-01-01 (import_usws_industry.py).
     return IndustryTiv(kind="book", year=None, currency="USD", county=county,
                        file="industry_exposure_counties.csv", as_of=BOOK_TIV_AS_OF)
 

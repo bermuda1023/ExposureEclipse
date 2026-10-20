@@ -126,8 +126,8 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
     notes: list[str] = []
     if tiv.kind == "book":
         notes.append(
-            "Using the built-in Industry book (census and build-cost estimate outside Florida, "
-            "no auto). Supply industry_tiv/<year>.csv to replace it."
+            "Using the built-in Industry book (supplied 2026 windstorm TIV by county, "
+            "23 states). Supply industry_tiv/<year>.csv to use a storm-year vintage."
         )
     elif tiv.year != storm.year:
         notes.append(f"No {storm.year} TIV supplied; using the {tiv.year} vintage.")
