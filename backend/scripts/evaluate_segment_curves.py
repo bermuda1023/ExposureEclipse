@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.services.curve_fit import FitOptions, Observation, fit_curve, predict
-from app.services.damage_curves import insured_prior, land_mph, load_curve_sets
+from app.services.damage_curves import insured_prior, land_mph, prior_curve_set
 from app.services.event_evidence import load_evidence
 from app.services.event_loss import resolve_storm, storm_impacts
 from app.services.industry_losses import LOSS_SEGMENTS, load_actuals, tiv_for_year
@@ -56,7 +56,7 @@ def observations() -> dict[str, list[Observation]]:
         for station in ((load_evidence(storm_id) or {}).get("stations") or [])
     ]
     shape = fit_land_shape(stations)
-    wind_factor = load_curve_sets()["kcc"].wind_factor
+    wind_factor = prior_curve_set().wind_factor
 
     def land(mph: float) -> float:
         return land_mph(mph, wind_factor, shape.exponent, shape.floor)
@@ -76,11 +76,11 @@ def observations() -> dict[str, list[Observation]]:
 
 
 def shared_prior() -> list[float]:
-    kcc = load_curve_sets()["kcc"]
+    prior_set = prior_curve_set()
     book = tiv_for_year(2026)
     weight = {s: sum(v.get(s, 0.0) for v in book.county.values()) for s in LOSS_SEGMENTS}
     total = sum(weight.values())
-    priors = {s: insured_prior(kcc, s) for s in LOSS_SEGMENTS}
+    priors = {s: insured_prior(prior_set, s) for s in LOSS_SEGMENTS}
     bands = len(next(iter(priors.values())))
     return [sum(weight[s] * priors[s][b] for s in LOSS_SEGMENTS) / total for b in range(bands)]
 
@@ -99,8 +99,8 @@ def segment_levels(train: dict[str, list[Observation]], curve: list[float]) -> d
 
 def holdout_cells(obs: dict[str, list[Observation]]) -> dict:
     """Per held-out event: segment [actual, model] cells and county log errors."""
-    kcc = load_curve_sets()["kcc"]
-    priors = {s: insured_prior(kcc, s) for s in LOSS_SEGMENTS}
+    prior_set = prior_curve_set()
+    priors = {s: insured_prior(prior_set, s) for s in LOSS_SEGMENTS}
     prior = shared_prior()
     events = sorted({row.event for rows in obs.values() for row in rows})
     out: dict[str, dict] = {}

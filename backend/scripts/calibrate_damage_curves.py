@@ -53,10 +53,11 @@ from app.services.damage_curves import (
     BAND_MPH_LO,
     DEFAULT_SIGMA_COUNTY,
     DEFAULT_SIGMA_EVENT,
+    PRIOR_SOURCE,
     curves_dir,
     insured_prior,
     land_mph,
-    load_curve_sets,
+    prior_curve_set,
 )
 from app.services.event_evidence import load_evidence
 from app.services.event_loss import resolve_storm, storm_impacts
@@ -157,7 +158,6 @@ def main() -> None:
                         help="ATCF storm ids (default: the wind-dominant events in event_set.json)")
     parser.add_argument("--all-events", action="store_true",
                         help="train on every supplied event, ignoring the event-set rules")
-    parser.add_argument("--prior", default="kcc", help="curve set used as the prior (default kcc)")
     parser.add_argument("--ridge", type=float, default=FitOptions().ridge)
     parser.add_argument("--alpha-event", type=float, default=FitOptions().alpha_event)
     # ASSUMPTION: picked by leave-one-event-out error (docs/CALCULATIONS.md):
@@ -219,7 +219,7 @@ def main() -> None:
         wanted = sorted(actuals)
     else:
         wanted = [sid for sid in sorted(actuals) if screened[sid].included]
-    prior = load_curve_sets()[args.prior]
+    prior = prior_curve_set()
     wind_factor = args.wind_factor if args.wind_factor is not None else prior.wind_factor
 
     shape = None
@@ -319,7 +319,7 @@ def main() -> None:
         if len(obs[seg]) < MIN_OBS_PER_SEGMENT:
             segments[seg] = list(prior_curve)
             fit_meta[seg] = {"status": "prior", "nObs": len(obs[seg])}
-            print(f"  {seg}: {len(obs[seg])} counties, keeping the {args.prior} prior")
+            print(f"  {seg}: {len(obs[seg])} counties, keeping the {PRIOR_SOURCE} prior")
             continue
         res = fit_with_holdout(obs[seg], prior_curve, opts)
         segments[seg] = res.curve
@@ -412,7 +412,7 @@ def main() -> None:
         "sigmaLogEvent": round(sigma_event, 4),
         "sigmaLogEventWeighted": round(sigma_event_weighted, 4),
         "fit": {
-            "prior": args.prior,
+            "prior": PRIOR_SOURCE,
             "target": "insured loss (deductible learned in the curve)",
             "ridge": args.ridge,
             "alphaEvent": args.alpha_event,

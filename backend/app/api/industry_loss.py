@@ -16,7 +16,12 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from ..services.damage_curves import default_curve_set_id, get_curve_set, load_curve_sets
+from ..services.damage_curves import (
+    RETIRED_CURVE_SET_IDS,
+    default_curve_set_id,
+    get_curve_set,
+    load_curve_sets,
+)
 from ..services.event_evidence import load_evidence
 from ..services.event_loss import event_loss, lognormal_band, resolve_storm, storm_impacts
 from ..services.industry_losses import (
@@ -80,11 +85,17 @@ def _error(status: int, code: str, message: str, **details) -> HTTPException:
 
 
 def _curve(curve_set_id: str | None):
+    """The curve set, plus a note when a retired vendor id was mapped to the default."""
     try:
-        return get_curve_set(curve_set_id)
+        curve = get_curve_set(curve_set_id)
     except KeyError as exc:
         raise _error(404, "VALIDATION_ERROR", f"Unknown curve set {curve_set_id!r}.",
                      available=sorted(load_curve_sets())) from exc
+    note = None
+    if curve_set_id and curve_set_id.lower() in RETIRED_CURVE_SET_IDS:
+        note = (f"Curve set {curve_set_id!r} has been retired; using {curve.label} "
+                f"({curve.id}) instead.")
+    return curve, note
 
 
 def _storm(storm_id: str):
@@ -146,7 +157,7 @@ def list_damage_curves() -> dict:
 @router.post("/hurricanes/{storm_id}/industry-loss")
 def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> dict:
     req = payload or IndustryLossRequest()
-    curve = _curve(req.curve_set_id)
+    curve, retired_note = _curve(req.curve_set_id)
     storm, track_source = _storm(storm_id)
     tiv = _tiv(storm.year)
     actuals = _actuals(storm.storm_id)
@@ -155,7 +166,7 @@ def industry_loss(storm_id: str, payload: IndustryLossRequest | None = None) -> 
     result = event_loss(impacts, tiv, curve, req.exposed_fraction, wind_mult)
     currency = tiv.currency
 
-    notes: list[str] = []
+    notes: list[str] = [retired_note] if retired_note else []
     if wind_info["applied"]:
         notes.append(
             f"Wind corrected to airport observations: county multipliers "
@@ -299,7 +310,7 @@ def industry_loss_backtest(
     if actuals is None:
         raise _error(404, "DATASET_NOT_FOUND", f"No industry losses supplied for '{storm_id}'.",
                      stormId=storm_id)
-    curve = _curve(curve_set_id)
+    curve, retired_note = _curve(curve_set_id)
     storm, track_source = _storm(storm_id)
     tiv = _tiv(storm.year)
     if actuals.currency != tiv.currency:
@@ -321,4 +332,5 @@ def industry_loss_backtest(
         "onLevel": on_level_info,
         "observedWind": wind_info,
         **result,
+        "notes": [retired_note] if retired_note else [],
     }

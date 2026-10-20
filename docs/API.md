@@ -313,7 +313,15 @@ built-in Industry book (residential + commercial, no auto). See
 
 `{ defaultId, curveSets: [{ id, label, kind: "vendor"|"calibrated", bandsMphLo,
 segments: {RESIDENTIAL|COMMERCIAL|AUTO: [DR per band]}, sigmaLogCounty,
-sigmaLogEvent, createdAt, fit }] }`. Default = newest calibrated set, else `kcc`.
+sigmaLogEvent, createdAt, fit }] }`. Lists the calibrated sets only; default =
+newest calibrated set. With no calibrated file installed it lists the
+uncalibrated Form V-1 prior (`form-v1-prior`, kind `vendor`) alone.
+
+The AIR / KCC / RMS presets are retired. For backward compatibility a
+`curveSetId` of `air`, `kcc` or `rms` (any case) on `/industry-loss` or
+`/backtest` is not an error: it resolves to the default calibrated set,
+`curveSet.id` reports the set actually used, and `notes[]` says the requested
+id was retired. Any other unknown id is a 404.
 
 ### `POST /api/hurricanes/{stormId}/industry-loss`
 
@@ -371,8 +379,8 @@ wind field, each with `belowMateriality` and `evidencePeril`),
 and `evidence` (event summary: ASOS `windBias`, Storm Events totals, sources,
 window). `countyLogRms` covers material rows only. `evidence`,
 `footprintMissByPeril` and `evidencePeril` are null when no evidence file has
-been built. 404 when no actuals are supplied. See `docs/CALCULATIONS.md
-§Post-event evidence`.
+been built. `notes[]` is empty unless a retired curve id was requested. 404
+when no actuals are supplied. See `docs/CALCULATIONS.md §Post-event evidence`.
 
 ## Live + replay storms
 

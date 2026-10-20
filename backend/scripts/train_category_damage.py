@@ -55,7 +55,7 @@ sys.path.insert(0, str(ROOT / "backend" / "scripts"))
 from _event_set import wind_dominant_ids
 
 from app.services.curve_fit import FitOptions, Observation, fit_with_holdout, predict
-from app.services.damage_curves import load_curve_sets
+from app.services.damage_curves import PRIOR_SOURCE, prior_curve_set
 from app.services.event_loss import resolve_storm
 from app.services.hurricane_impact import DAMAGING_WIND_MULTIPLIER, compute_impact
 from app.services.industry_losses import LOSS_SEGMENTS, data_dir, load_actuals, tiv_for_year
@@ -114,7 +114,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--events", nargs="*", help="default: the wind-dominant events in event_set.json")
     parser.add_argument("--all-events", action="store_true", help="every supplied event")
-    parser.add_argument("--prior", default="kcc")
     parser.add_argument("--ridge", type=float, default=FitOptions().ridge)
     parser.add_argument("--alpha-event", type=float, default=FitOptions().alpha_event)
     parser.add_argument("--multiplier", type=float, default=DAMAGING_WIND_MULTIPLIER)
@@ -133,7 +132,7 @@ def main() -> None:
         wanted = sorted(actuals)
     else:
         wanted = wind_dominant_ids(onlevel=not args.no_onlevel)
-    prior_set = load_curve_sets()[args.prior]
+    prior_set = prior_curve_set()
 
     obs: dict[str, list[Observation]] = {seg: [] for seg in (*LOSS_SEGMENTS, ALL)}
     dom: dict[tuple[str, str], int] = {}
@@ -303,7 +302,7 @@ def main() -> None:
         ),
         "windField": f"compute_impact, historical track, multiplier {args.multiplier}, "
                      + ("no" if args.no_ts_field else "with") + " tropical-storm field",
-        "prior": args.prior,
+        "prior": PRIOR_SOURCE,
         "ridge": args.ridge,
         "alphaEvent": args.alpha_event,
         "fixTsPct": args.fix_ts,

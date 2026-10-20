@@ -10,10 +10,14 @@ over land, so each set carries ``wind_factor``:
 
     curve_mph = marine_mph x wind_factor
 
-Vendor sets are ground-up building damage. They also carry a deductible per
-segment (fraction of TIV), applied per location with a beta spread of DR
-around the mean, so the output is insured loss (the PCS basis). Calibrated
-sets are fitted straight to insured loss, so their deductible is zero.
+The only selectable sets are the PCS-calibrated ones in ``damage_curves/``.
+The Form V-1 KCC table survives only as the calibration prior: the shape a
+fit shrinks toward, the shape for segments a fit had no data for, and the
+fallback set when no calibrated file is installed. It is ground-up building
+damage, so it carries a deductible per segment (fraction of TIV), applied per
+location with a beta spread of DR around the mean, so the output is insured
+loss (the PCS basis). Calibrated sets are fitted straight to insured loss, so
+their deductible is zero.
 """
 
 from __future__ import annotations
@@ -30,14 +34,15 @@ BAND_MPH_LO: tuple[int, ...] = (41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141,
 BAND_MID: tuple[float, ...] = tuple(lo + 4.5 for lo in BAND_MPH_LO)
 ZERO_DAMAGE_MPH = 39.0
 
-# Florida Commission Form V-1 Part A, building damage / building exposure (%).
-# Same table as frontend/src/state/damageAssumptions.ts.
-_FORM_V1_PCT: dict[str, tuple[float, ...]] = {
-    "air": (0.05, 0.12, 0.46, 0.96, 1.89, 3.55, 7.34, 20.6, 32.8, 42.1, 54.2, 61.8, 71.7),
-    "kcc": (0.11, 0.26, 0.73, 1.68, 3.79, 7.66, 14.6, 26.1, 32.6, 43.5, 52.4, 60.8, 72.1),
-    "rms": (0.13, 0.33, 1.43, 3.22, 6.97, 14.7, 25.4, 44.6, 57.5, 76.6, 85.5, 90.0, 93.9),
-}
-_VENDOR_LABEL = {"air": "AIR (Form V-1)", "kcc": "KCC (Form V-1)", "rms": "RMS (Form V-1)"}
+# Florida Commission Form V-1 Part A, KCC 2023, building damage / building
+# exposure (%). The calibration prior; not offered as a curve set.
+_PRIOR_PCT: tuple[float, ...] = (0.11, 0.26, 0.73, 1.68, 3.79, 7.66, 14.6, 26.1, 32.6, 43.5, 52.4, 60.8, 72.1)
+PRIOR_SOURCE = "kcc"
+PRIOR_ID = "form-v1-prior"
+
+# Vendor presets removed from the API. Old requests for them get the default
+# calibrated set instead of a 404.
+RETIRED_CURVE_SET_IDS = frozenset({"air", "kcc", "rms"})
 
 # ASSUMPTION: Form V-1 is residential building damage. Until calibrated,
 # commercial uses the same curve and auto uses 15% of it. Form V-1 does not
@@ -198,15 +203,17 @@ class CurveSet:
         }
 
 
-def vendor_curve(vendor: str) -> list[float]:
-    return [p / 100.0 for p in _FORM_V1_PCT[vendor]]
+def prior_curve() -> list[float]:
+    """Ground-up Form V-1 KCC DR at each band midpoint (0..1)."""
+    return [p / 100.0 for p in _PRIOR_PCT]
 
 
-def _vendor_set(vendor: str) -> CurveSet:
-    base = vendor_curve(vendor)
+@lru_cache(maxsize=1)
+def prior_curve_set() -> CurveSet:
+    base = prior_curve()
     return CurveSet(
-        id=vendor,
-        label=_VENDOR_LABEL[vendor],
+        id=PRIOR_ID,
+        label="Form V-1 prior (uncalibrated)",
         kind="vendor",
         segments={seg: [v * UNCALIBRATED_SEGMENT_SCALE[seg] for v in base] for seg in LOSS_SEGMENTS},
         deductible=dict(DEFAULT_DEDUCTIBLE),
@@ -255,30 +262,41 @@ def curves_dir() -> Path:
 
 @lru_cache(maxsize=1)
 def load_curve_sets() -> dict[str, CurveSet]:
-    out = {v: _vendor_set(v) for v in ("kcc", "air", "rms")}
+    """Selectable curve sets: the calibrated files, else the prior alone."""
+    out: dict[str, CurveSet] = {}
+    prior = prior_curve_set()
     folder = curves_dir()
     if folder.is_dir():
         for path in sorted(folder.glob("*.json")):
             curve = curve_set_from_json(json.loads(path.read_text(encoding="utf-8")))
-            # Segments the calibration had no data for keep the insured KCC shape.
+            # Segments the calibration had no data for keep the insured prior shape.
             for seg in LOSS_SEGMENTS:
                 if seg not in curve.segments:
-                    curve.segments[seg] = insured_prior(out["kcc"], seg)
+                    curve.segments[seg] = insured_prior(prior, seg)
             out[curve.id] = curve
+    if not out:
+        out[prior.id] = prior
     return out
 
 
 def default_curve_set_id() -> str:
-    """Newest calibrated set, else KCC."""
+    """Newest calibrated set, else the uncalibrated prior."""
     calibrated = [c for c in load_curve_sets().values() if c.kind == "calibrated"]
     if not calibrated:
-        return "kcc"
+        return PRIOR_ID
     return max(calibrated, key=lambda c: (c.created_at or "", c.id)).id
+
+
+def resolve_curve_set_id(curve_set_id: str | None) -> str:
+    """Requested id, with empty and retired vendor ids mapped to the default."""
+    if not curve_set_id or curve_set_id.lower() in RETIRED_CURVE_SET_IDS:
+        return default_curve_set_id()
+    return curve_set_id
 
 
 def get_curve_set(curve_set_id: str | None) -> CurveSet:
     sets = load_curve_sets()
-    key = curve_set_id or default_curve_set_id()
+    key = resolve_curve_set_id(curve_set_id)
     if key not in sets:
         raise KeyError(key)
     return sets[key]

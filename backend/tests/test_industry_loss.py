@@ -19,7 +19,7 @@ from app.services.curve_fit import (
     fit_with_holdout,
     residuals,
 )
-from app.services.damage_curves import BAND_MPH_LO, get_curve_set, vendor_curve
+from app.services.damage_curves import BAND_MPH_LO, get_curve_set, prior_curve, prior_curve_set
 from app.services.event_loss import lognormal_band
 from app.services.hurricane_impact import CountyImpact
 from app.services.ibtracs import Storm
@@ -230,9 +230,9 @@ def test_panel_band_is_held_out_on_the_wind_dominant_set() -> None:
 # ─────────────────────────────── event loss ───────────────────────────────
 
 
-def _plain(curve_id: str = "kcc"):
-    """Copy of a built-in set with no land factor and no deductible."""
-    base = get_curve_set(curve_id)
+def _plain():
+    """Copy of the Form V-1 prior with no land factor and no deductible."""
+    base = prior_curve_set()
     return damage_curves.CurveSet(
         id="plain", label="plain", kind="vendor",
         segments={k: list(v) for k, v in base.segments.items()},
@@ -248,7 +248,7 @@ def test_event_loss_sums_bins_by_segment(data_dir) -> None:
         county={"US-FL-12071": {"RESIDENTIAL": 1_000.0, "COMMERCIAL": 400.0, "AUTO": 100.0}},
     )
     res = event_loss.event_loss([imp], tiv, curve)
-    k = vendor_curve("kcc")
+    k = prior_curve()
     # Band midpoints 105.5 and 125.5 mph sit exactly on curve nodes 6 and 8.
     dr = 0.5 * k[6] + 0.25 * k[8]
     assert res.by_segment["RESIDENTIAL"] == pytest.approx(1_000 * dr)
@@ -261,7 +261,7 @@ def test_event_loss_sums_bins_by_segment(data_dir) -> None:
 def test_wind_factor_moves_marine_wind_onto_land_curve() -> None:
     curve = _plain()
     curve.wind_factor = 0.8
-    k = vendor_curve("kcc")
+    k = prior_curve()
     # 125.5 mph marine x 0.8 = 100.4 mph over land, between nodes 95.5 and 105.5.
     t = (100.4 - 95.5) / 10
     assert curve.ground_up_dr("RESIDENTIAL", 125.5) == pytest.approx(k[5] * (1 - t) + k[6] * t)
@@ -275,14 +275,13 @@ def test_deductible_turns_ground_up_into_insured() -> None:
     low = damage_curves.insured_dr(0.005, 0.013)
     assert 0 < low < 0.005  # some locations still exceed the deductible
     assert damage_curves.insured_dr(0.02, 0.03) < damage_curves.insured_dr(0.02, 0.013)
-    kcc = get_curve_set("kcc")
-    assert kcc.dr("RESIDENTIAL", 150.0) < kcc.ground_up_dr("RESIDENTIAL", 150.0)
+    prior = prior_curve_set()
+    assert prior.dr("RESIDENTIAL", 150.0) < prior.ground_up_dr("RESIDENTIAL", 150.0)
 
 
 def test_event_loss_reports_counties_without_tiv() -> None:
-    kcc = get_curve_set("kcc")
     tiv = IndustryTiv(kind="supplied", year=2022, currency="USD", county={})
-    res = event_loss.event_loss([_impact("US-FL-12071", [(101, 1.0)])], tiv, kcc)
+    res = event_loss.event_loss([_impact("US-FL-12071", [(101, 1.0)])], tiv, prior_curve_set())
     assert res.missing_tiv == ["US-FL-12071"]
     assert set(res.segments_without_tiv) == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
 
@@ -316,7 +315,7 @@ def _synthetic(truth: list[float]) -> list[Observation]:
 
 
 def test_fit_recovers_scaled_curve() -> None:
-    prior = vendor_curve("kcc")
+    prior = prior_curve()
     truth = [v * 0.6 for v in prior]
     obs = _synthetic(truth)
     res = fit_curve(obs, prior)
@@ -330,7 +329,7 @@ def test_fit_recovers_scaled_curve() -> None:
 
 
 def test_fit_with_holdout_scores_each_event() -> None:
-    prior = vendor_curve("kcc")
+    prior = prior_curve()
     obs = _synthetic([v * 1.5 for v in prior])
     res = fit_with_holdout(obs, prior)
     assert set(res.oos_event_errors) == {"EV1", "EV2", "EV3"}
@@ -338,7 +337,7 @@ def test_fit_with_holdout_scores_each_event() -> None:
 
 
 def test_below_materiality_rows_are_upper_bounds() -> None:
-    prior = vendor_curve("kcc")
+    prior = prior_curve()
     truth = [v * 0.6 for v in prior]
     clean = _synthetic(truth)
     # Token PCS allocations in barely touched counties: $5k on $100M of TIV
@@ -384,12 +383,12 @@ def test_match_event_censors_small_rows_and_low_claim_counts() -> None:
 
 
 def test_fit_without_data_returns_prior() -> None:
-    prior = vendor_curve("kcc")
+    prior = prior_curve()
     assert fit_curve([], prior).curve == prior
 
 
 def test_fixed_band_holds_and_the_rest_refit_around_it() -> None:
-    prior = vendor_curve("kcc")
+    prior = prior_curve()
     truth = [v * 0.6 for v in prior]
     obs = _synthetic(truth)
     res = fit_with_holdout(obs, prior, FitOptions(fixed=((0, 0.0004),)))
@@ -402,7 +401,7 @@ def test_fixed_band_holds_and_the_rest_refit_around_it() -> None:
 
 
 def test_unsupported_tail_follows_the_prior_shape() -> None:
-    prior = vendor_curve("kcc")
+    prior = prior_curve()
     truth = [v * 1.5 for v in prior]
     # Exposure only in the bottom eight bands.
     obs = [o for o in _synthetic(truth) if all(b < 8 for b, _ in o.bins)]
@@ -415,7 +414,7 @@ def test_unsupported_tail_follows_the_prior_shape() -> None:
 
 
 def test_calibrated_set_becomes_default(data_dir) -> None:
-    assert damage_curves.default_curve_set_id() == "kcc"
+    assert damage_curves.default_curve_set_id() == damage_curves.PRIOR_ID
     payload = {
         "id": "calibrated-test",
         "kind": "calibrated",
@@ -429,8 +428,12 @@ def test_calibrated_set_becomes_default(data_dir) -> None:
     assert damage_curves.default_curve_set_id() == "calibrated-test"
     cs = get_curve_set(None)
     assert cs.sigma_log_event == 0.2
-    # Segments missing from the file fall back to the insured KCC shape.
-    assert cs.segments["AUTO"] == damage_curves.insured_prior(get_curve_set("kcc"), "AUTO")
+    # Segments missing from the file fall back to the insured prior shape.
+    assert cs.segments["AUTO"] == damage_curves.insured_prior(prior_curve_set(), "AUTO")
+    # Retired vendor ids resolve to the calibrated default; the prior is no longer listed.
+    assert {c for c in damage_curves.load_curve_sets()} == {"calibrated-test"}
+    for retired in ("air", "kcc", "rms", "KCC"):
+        assert get_curve_set(retired).id == "calibrated-test"
     assert cs.wind_factor == damage_curves.DEFAULT_WIND_FACTOR
 
 
@@ -480,14 +483,14 @@ def _seed_files(root) -> None:
 
 def test_api_industry_loss(data_dir, fake_storm) -> None:
     _seed_files(data_dir)
-    r = client.post("/api/hurricanes/AL092022/industry-loss", json={"curveSetId": "kcc"})
+    r = client.post("/api/hurricanes/AL092022/industry-loss", json={})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["currency"] == "USD"
     assert body["tivSource"] == {"kind": "supplied", "year": 2022, "file": "2022.csv",
                                  "currency": "USD", "asOfDate": "2022-07-01"}
     assert body["actuals"]["onLevel"] is None  # no indices installed
-    assert body["curveSet"]["id"] == "kcc"
+    assert body["curveSet"]["id"] == damage_curves.PRIOR_ID
     seg = body["summary"]["bySegment"]
     assert seg["RESIDENTIAL"]["mean"] > 0 and seg["AUTO"]["mean"] > 0
     total = sum(s["mean"] for s in seg.values())
@@ -514,14 +517,14 @@ def test_api_onlevels_actuals_to_tiv_valuation_date(data_dir, fake_storm) -> Non
         2022-07,100,100,100
         2025-07,100,100,100
     """)
-    body = client.post("/api/hurricanes/AL092022/industry-loss", json={"curveSetId": "kcc"}).json()
+    body = client.post("/api/hurricanes/AL092022/industry-loss", json={}).json()
     info = body["actuals"]["onLevel"]
     assert info["eventDate"] == "2022-07-01" and info["targetDate"] == "2025-07-01"
     # Lee residential units grew 100 -> 120; everything else is flat.
     assert body["actuals"]["bySegment"]["RESIDENTIAL"] == pytest.approx(20e9 * 1.2 + 1.5e9 + 2e8, rel=1e-3)
     assert info["reportedTotal"] == pytest.approx(31e9)
     off = client.post("/api/hurricanes/AL092022/industry-loss",
-                      json={"curveSetId": "kcc", "onLevel": False}).json()
+                      json={"onLevel": False}).json()
     assert off["actuals"]["total"] == pytest.approx(31e9) and off["actuals"]["onLevel"] is None
 
 
@@ -534,7 +537,7 @@ def test_api_backtest(data_dir, fake_storm) -> None:
     _seed_files(data_dir)
     listing = client.get("/api/industry-losses").json()
     assert [e["stormId"] for e in listing["events"]] == ["AL092022"]
-    r = client.get("/api/industry-losses/AL092022/backtest?curveSetId=kcc")
+    r = client.get("/api/industry-losses/AL092022/backtest")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["total"]["actual"] == pytest.approx(31_000_000_000)
@@ -573,7 +576,7 @@ def test_api_backtest_explains_misses_with_evidence(data_dir, fake_storm) -> Non
                                      "modelLandKt": 92.0}},
         },
     }))
-    body = client.get("/api/industry-losses/AL092022/backtest?curveSetId=kcc").json()
+    body = client.get("/api/industry-losses/AL092022/backtest").json()
     assert body["evidence"]["windBias"]["medianObsOverModel"] == 0.8
     assert body["footprintMisses"][0]["evidencePeril"] == "flood"
     assert body["footprintMissByPeril"] == {"flood": 200_000_000}
@@ -584,6 +587,31 @@ def test_api_backtest_explains_misses_with_evidence(data_dir, fake_storm) -> Non
 
 def test_api_damage_curves(data_dir) -> None:
     body = client.get("/api/damage-curves").json()
-    assert body["defaultId"] == "kcc"
-    ids = {c["id"] for c in body["curveSets"]}
-    assert {"kcc", "air", "rms"} <= ids
+    assert body["defaultId"] == damage_curves.PRIOR_ID
+    assert [c["id"] for c in body["curveSets"]] == [damage_curves.PRIOR_ID]
+
+
+def test_api_damage_curves_lists_only_calibrated_sets() -> None:
+    body = client.get("/api/damage-curves").json()
+    ids = [c["id"] for c in body["curveSets"]]
+    assert body["defaultId"] in ids
+    assert all(c["kind"] == "calibrated" for c in body["curveSets"])
+    assert not {"air", "kcc", "rms", damage_curves.PRIOR_ID} & set(ids)
+
+
+@pytest.mark.parametrize("retired", ["air", "kcc", "rms"])
+def test_api_retired_vendor_curve_falls_back_to_pcs_calibrated(data_dir, fake_storm, retired) -> None:
+    _seed_files(data_dir)
+    payload = {"id": "calibrated-test", "kind": "calibrated",
+               "createdAt": "2026-10-13T00:00:00+00:00",
+               "segments": {"RESIDENTIAL": [0.01] * len(BAND_MPH_LO)}}
+    _write(data_dir / "damage_curves" / "calibrated-test.json", json.dumps(payload))
+    damage_curves.load_curve_sets.cache_clear()
+    r = client.post("/api/hurricanes/AL092022/industry-loss", json={"curveSetId": retired})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["curveSet"]["id"] == "calibrated-test"
+    assert any("retired" in n for n in body["notes"])
+    bt = client.get(f"/api/industry-losses/AL092022/backtest?curveSetId={retired}").json()
+    assert bt["curveSet"]["id"] == "calibrated-test"
+    assert any("retired" in n for n in bt["notes"])
