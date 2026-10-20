@@ -1,9 +1,14 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
 // docs/STACK_AND_SETUP.md — frontend on :5173, /api proxied to backend :8000.
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
+  define: {
+    __BUILD_SHA__: JSON.stringify(
+      (loadEnv(mode, ".", "VERCEL_GIT_").VERCEL_GIT_COMMIT_SHA ?? "dev").slice(0, 7),
+    ),
+  },
   server: {
     port: 5173,
     proxy: {
@@ -26,4 +31,4 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/tests/setup.ts"],
   },
-});
+}));

@@ -1,9 +1,12 @@
 import { BRAND } from "../../brand";
+import { BUILD_SHA } from "../../build";
 import { useHealth } from "../../api/hooks";
 import { BrandMark } from "./BrandMark";
+import { useNewBuildAvailable } from "./useNewBuildAvailable";
 
 export function Header() {
   const { data, error } = useHealth();
+  const newBuildAvailable = useNewBuildAvailable();
   return (
     <header
       style={{
@@ -34,6 +37,25 @@ export function Header() {
         </div>
       </div>
       <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: "0.72rem", opacity: 0.85 }}>
+        {newBuildAvailable && (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            title="This tab is running an older build. Reload to load the latest fixes."
+            style={{
+              background: "#f5b301",
+              color: "#1a1a1a",
+              border: "none",
+              padding: "5px 12px",
+              borderRadius: 999,
+              fontWeight: 700,
+              fontSize: "0.72rem",
+              cursor: "pointer",
+            }}
+          >
+            New version deployed — click to reload
+          </button>
+        )}
         <a
           href="/fund-analysis"
           style={{
@@ -80,6 +102,7 @@ export function Header() {
             />
             <span style={{ opacity: 0.85 }}>
               {BRAND.name} v{data.version}
+              {"  ·  "}build <code style={{ color: "#fff" }}>{BUILD_SHA}</code>
               {"  ·  "}provider <code style={{ color: "#fff" }}>{data.dataProvider}</code>
             </span>
           </span>
