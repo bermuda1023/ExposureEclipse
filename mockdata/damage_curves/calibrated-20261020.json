@@ -1,0 +1,782 @@
+{
+  "id": "calibrated-20261020",
+  "label": "Calibrated 2026-10-20 (15 events)",
+  "kind": "calibrated",
+  "createdAt": "2026-10-20T02:34:25+00:00",
+  "bandsMphLo": [
+    41,
+    51,
+    61,
+    71,
+    81,
+    91,
+    101,
+    111,
+    121,
+    131,
+    141,
+    151,
+    161
+  ],
+  "segments": {
+    "RESIDENTIAL": [
+      0.000408,
+      0.002013,
+      0.008276,
+      0.023457,
+      0.054126,
+      0.109547,
+      0.186602,
+      0.279748,
+      0.353159,
+      0.47614,
+      0.576573,
+      0.671338,
+      0.798758
+    ],
+    "COMMERCIAL": [
+      0.000104,
+      0.000784,
+      0.004672,
+      0.016702,
+      0.042288,
+      0.081968,
+      0.129571,
+      0.183044,
+      0.234546,
+      0.320898,
+      0.391425,
+      0.457973,
+      0.547453
+    ],
+    "AUTO": [
+      0.000968,
+      0.002926,
+      0.007941,
+      0.019203,
+      0.041035,
+      0.076733,
+      0.114951,
+      0.133668,
+      0.173982,
+      0.246393,
+      0.309111,
+      0.370778,
+      0.456729
+    ]
+  },
+  "windFactor": 0.8,
+  "windExponent": -0.3585,
+  "windFloor": 0.9103,
+  "deductible": {},
+  "sigmaLogCounty": 1.664,
+  "sigmaLogEvent": 1.0294,
+  "sigmaLogEventWeighted": 0.7915,
+  "fit": {
+    "prior": "kcc",
+    "target": "insured loss (deductible learned in the curve)",
+    "ridge": 0.05,
+    "alphaEvent": 1.0,
+    "smooth": 2.0,
+    "tailMinWeight": 0.0005,
+    "multiplier": 2.5,
+    "bookMix": {
+      "RESIDENTIAL": 0.4778,
+      "COMMERCIAL": 0.491,
+      "AUTO": 0.0311
+    },
+    "windCorrection": "none",
+    "windModel": "observed",
+    "countyWind": false,
+    "windShape": {
+      "ratioAtRef": 0.5127,
+      "exponent": -0.3585,
+      "floorRatio": 0.4666666666666667,
+      "nStations": 2126
+    },
+    "windBiasReference": null,
+    "excludeFlood": true,
+    "events": [
+      {
+        "stormId": "AL022024",
+        "name": "BERYL",
+        "year": 2024,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 3483490779.9812346,
+        "reportedTotal": 3250360000.0,
+        "onLevelFactor": 1.0717246028074534,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 467684830.8183896,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 39,
+          "COMMERCIAL": 39,
+          "AUTO": 39
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 0.0
+      },
+      {
+        "stormId": "AL042024",
+        "name": "DEBBY",
+        "year": 2024,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 1753775805.4344864,
+        "reportedTotal": 1648840000.0,
+        "onLevelFactor": 1.063642200234399,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 1084825402.6805525,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 154,
+          "COMMERCIAL": 154,
+          "AUTO": 154
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 213729488.4887526
+      },
+      {
+        "stormId": "AL062018",
+        "name": "FLORENCE",
+        "year": 2018,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 7862181007.470559,
+        "reportedTotal": 4960310000.0,
+        "onLevelFactor": 1.5850180749732494,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 1496644438.459408,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 120,
+          "COMMERCIAL": 120,
+          "AUTO": 120
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 1782248491.0190907
+      },
+      {
+        "stormId": "AL092020",
+        "name": "ISAIAS",
+        "year": 2020,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 2873437194.9651833,
+        "reportedTotal": 2036435500.0,
+        "onLevelFactor": 1.4110131133370947,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 203304698.76998094,
+        "exposureGapLoss": 10615453.576855704,
+        "countiesMatched": {
+          "RESIDENTIAL": 201,
+          "COMMERCIAL": 201,
+          "AUTO": 201
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 591390131.9915874
+      },
+      {
+        "stormId": "AL092021",
+        "name": "IDA",
+        "year": 2021,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 35750429275.8256,
+        "reportedTotal": 28075730000.0,
+        "onLevelFactor": 1.2733570694626855,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 896553751.8754387,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 113,
+          "COMMERCIAL": 113,
+          "AUTO": 113
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 6079613766.37334
+      },
+      {
+        "stormId": "AL092022",
+        "name": "IAN",
+        "year": 2022,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 57480689103.96546,
+        "reportedTotal": 48375580000.0,
+        "onLevelFactor": 1.188217052983457,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 218321610.06796288,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 144,
+          "COMMERCIAL": 144,
+          "AUTO": 144
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 308474599.80145925
+      },
+      {
+        "stormId": "AL092024",
+        "name": "HELENE",
+        "year": 2024,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 18311988311.64163,
+        "reportedTotal": 17173210000.0,
+        "onLevelFactor": 1.0663113251186953,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 1268565418.083629,
+        "exposureGapLoss": 454935347.2645308,
+        "countiesMatched": {
+          "RESIDENTIAL": 244,
+          "COMMERCIAL": 244,
+          "AUTO": 244
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 4732401454.398085
+      },
+      {
+        "stormId": "AL112017",
+        "name": "IRMA",
+        "year": 2017,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 45759792371.97314,
+        "reportedTotal": 27401620000.0,
+        "onLevelFactor": 1.6699666797792663,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 476745774.9306223,
+        "exposureGapLoss": 5583482075.330361,
+        "countiesMatched": {
+          "RESIDENTIAL": 215,
+          "COMMERCIAL": 215,
+          "AUTO": 215
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 397857905.9398826
+      },
+      {
+        "stormId": "AL132020",
+        "name": "LAURA",
+        "year": 2020,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 16375622892.54489,
+        "reportedTotal": 11386410000.0,
+        "onLevelFactor": 1.4381726015965426,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 424086224.72143644,
+        "exposureGapLoss": 106892856.09039907,
+        "countiesMatched": {
+          "RESIDENTIAL": 70,
+          "COMMERCIAL": 70,
+          "AUTO": 70
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 0.0
+      },
+      {
+        "stormId": "AL142018",
+        "name": "MICHAEL",
+        "year": 2018,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 19192260760.26969,
+        "reportedTotal": 12285025000.0,
+        "onLevelFactor": 1.5622484089588495,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 500009677.8321896,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 335,
+          "COMMERCIAL": 335,
+          "AUTO": 335
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 260847096.57633552
+      },
+      {
+        "stormId": "AL142024",
+        "name": "MILTON",
+        "year": 2024,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 25495958533.259415,
+        "reportedTotal": 23914809102.0,
+        "onLevelFactor": 1.0661159127181652,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 6307400.809937788,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 55,
+          "COMMERCIAL": 55,
+          "AUTO": 55
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 0.0
+      },
+      {
+        "stormId": "AL152017",
+        "name": "MARIA",
+        "year": 2017,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 42114863777.66427,
+        "reportedTotal": 26465850000.0,
+        "onLevelFactor": 1.5912908059882553,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 0,
+        "exposureGapLoss": 36100322168.597336,
+        "countiesMatched": {
+          "RESIDENTIAL": 0,
+          "COMMERCIAL": 0,
+          "AUTO": 0
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 0.0
+      },
+      {
+        "stormId": "AL192020",
+        "name": "SALLY",
+        "year": 2020,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 4990936927.340937,
+        "reportedTotal": 3364960000.0,
+        "onLevelFactor": 1.4832083969321883,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 559534219.2581123,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 26,
+          "COMMERCIAL": 26,
+          "AUTO": 26
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 145030234.3573839
+      },
+      {
+        "stormId": "AL262020",
+        "name": "DELTA",
+        "year": 2020,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 2586435767.143344,
+        "reportedTotal": 1799310000.0,
+        "onLevelFactor": 1.4374597857752938,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 331058062.75451225,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 75,
+          "COMMERCIAL": 75,
+          "AUTO": 75
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 144612898.68715134
+      },
+      {
+        "stormId": "AL282020",
+        "name": "ZETA",
+        "year": 2020,
+        "tiv": {
+          "kind": "book",
+          "year": null,
+          "file": "industry_exposure_counties.csv"
+        },
+        "actualTotal": 3591752514.0732555,
+        "reportedTotal": 2487000500.0,
+        "onLevelFactor": 1.444210611969421,
+        "onLevelTarget": "2026-01-01",
+        "footprintMissLoss": 51612586.24745202,
+        "exposureGapLoss": 0,
+        "countiesMatched": {
+          "RESIDENTIAL": 300,
+          "COMMERCIAL": 300,
+          "AUTO": 300
+        },
+        "windBias": null,
+        "windCorrection": 1.0,
+        "observedWindMultiplier": null,
+        "floodExcludedLoss": 17643782.6590001
+      }
+    ],
+    "segments": {
+      "RESIDENTIAL": {
+        "status": "fitted",
+        "nObs": 2091,
+        "events": [
+          "AL022024",
+          "AL042024",
+          "AL062018",
+          "AL092020",
+          "AL092021",
+          "AL092022",
+          "AL092024",
+          "AL112017",
+          "AL132020",
+          "AL142018",
+          "AL142024",
+          "AL192020",
+          "AL262020",
+          "AL282020"
+        ],
+        "iterations": 903,
+        "objective": 2.2232942504927293,
+        "countyLogRmsInSample": 1.6029484971341375,
+        "countyLogRmsHoldout": 1.6565645348875715,
+        "eventLogErrorInSample": {
+          "AL022024": 0.9337406559533701,
+          "AL042024": 1.067311803422195,
+          "AL062018": 0.07033463663364367,
+          "AL092020": 1.605335759634495,
+          "AL092021": -1.0268061229193604,
+          "AL092022": 0.44269467138575325,
+          "AL092024": -0.1382739852738569,
+          "AL112017": -0.34768931545599474,
+          "AL132020": -0.1781302684915638,
+          "AL142018": -0.11758699051333006,
+          "AL142024": 0.52783611134317,
+          "AL192020": -0.3924404734618194,
+          "AL262020": -0.883231009522147,
+          "AL282020": 1.1099654243520953
+        },
+        "eventLogErrorHoldout": {
+          "AL022024": 1.0307316391440902,
+          "AL042024": 1.301019774449814,
+          "AL062018": 0.06475500603452812,
+          "AL092020": 1.839602600786168,
+          "AL092021": -1.1617347246093377,
+          "AL092022": 0.6889320693839747,
+          "AL092024": -0.17509996684903872,
+          "AL112017": -0.41707832836563874,
+          "AL132020": -0.19834641925027893,
+          "AL142018": -0.16889436848356187,
+          "AL142024": 0.6224079914842346,
+          "AL192020": -0.4449857494874977,
+          "AL262020": -0.9767535644712249,
+          "AL282020": 1.2295521479210063
+        },
+        "bandWeight": [
+          0.5672,
+          0.3219,
+          0.0781,
+          0.0177,
+          0.0075,
+          0.002,
+          0.0044,
+          0.0011,
+          0.0001,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "impliedDrByBand": [
+          {
+            "curveMph": 55.5,
+            "n": 157,
+            "median": 0.0019873504069647966,
+            "min": 5.094455111929509e-05,
+            "max": 0.06826697932720655
+          },
+          {
+            "curveMph": 65.5,
+            "n": 18,
+            "median": 0.014952653388020109,
+            "min": 0.00030130055210796986,
+            "max": 0.07683067000450175
+          },
+          {
+            "curveMph": 75.5,
+            "n": 2,
+            "median": 0.03755654620512081,
+            "min": 0.004348473354465691,
+            "max": 0.03755654620512081
+          },
+          {
+            "curveMph": 105.5,
+            "n": 1,
+            "median": 0.1653710151944127,
+            "min": 0.1653710151944127,
+            "max": 0.1653710151944127
+          }
+        ]
+      },
+      "COMMERCIAL": {
+        "status": "fitted",
+        "nObs": 2091,
+        "events": [
+          "AL022024",
+          "AL042024",
+          "AL062018",
+          "AL092020",
+          "AL092021",
+          "AL092022",
+          "AL092024",
+          "AL112017",
+          "AL132020",
+          "AL142018",
+          "AL142024",
+          "AL192020",
+          "AL262020",
+          "AL282020"
+        ],
+        "iterations": 253,
+        "objective": 3.258771392918046,
+        "countyLogRmsInSample": 1.8490188809589203,
+        "countyLogRmsHoldout": 1.9520149340207948,
+        "eventLogErrorInSample": {
+          "AL022024": 1.5457018574623695,
+          "AL042024": 1.7111129365863362,
+          "AL062018": -0.3686343592208669,
+          "AL092020": 2.453684207871638,
+          "AL092021": -0.8972926150824986,
+          "AL092022": -0.1378836195319623,
+          "AL092024": -0.10911150753746984,
+          "AL112017": -0.28250954540869505,
+          "AL132020": 0.134889741008622,
+          "AL142018": 0.37497189389854757,
+          "AL142024": -0.40625551861763803,
+          "AL192020": -0.3280321323116158,
+          "AL262020": -0.43478179987059984,
+          "AL282020": 1.9145544013477027
+        },
+        "eventLogErrorHoldout": {
+          "AL022024": 1.694181666043092,
+          "AL042024": 2.2030458664293797,
+          "AL062018": -0.4136398027584121,
+          "AL092020": 2.897430383872574,
+          "AL092021": -1.0166812525747568,
+          "AL092022": -0.17098825824645078,
+          "AL092024": -0.12224827023869328,
+          "AL112017": -0.30850588165606824,
+          "AL132020": 0.22273411189875225,
+          "AL142018": 0.5217612965088758,
+          "AL142024": -0.4705338300692248,
+          "AL192020": -0.37225874840000556,
+          "AL262020": -0.5062410759072384,
+          "AL282020": 2.1730632588894627
+        },
+        "bandWeight": [
+          0.5786,
+          0.3187,
+          0.072,
+          0.0171,
+          0.0069,
+          0.002,
+          0.0037,
+          0.001,
+          0.0001,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "impliedDrByBand": [
+          {
+            "curveMph": 55.5,
+            "n": 98,
+            "median": 0.0030419706311296912,
+            "min": 2.7544191481512635e-05,
+            "max": 0.04876871685733478
+          },
+          {
+            "curveMph": 65.5,
+            "n": 16,
+            "median": 0.00439638233537284,
+            "min": 0.00020526603244833822,
+            "max": 0.035112339176420565
+          },
+          {
+            "curveMph": 75.5,
+            "n": 2,
+            "median": 0.02301184646645683,
+            "min": 0.0010490306317671489,
+            "max": 0.02301184646645683
+          },
+          {
+            "curveMph": 105.5,
+            "n": 1,
+            "median": 0.312939484259384,
+            "min": 0.312939484259384,
+            "max": 0.312939484259384
+          }
+        ]
+      },
+      "AUTO": {
+        "status": "fitted",
+        "nObs": 2091,
+        "events": [
+          "AL022024",
+          "AL042024",
+          "AL062018",
+          "AL092020",
+          "AL092021",
+          "AL092022",
+          "AL092024",
+          "AL112017",
+          "AL132020",
+          "AL142018",
+          "AL142024",
+          "AL192020",
+          "AL262020",
+          "AL282020"
+        ],
+        "iterations": 639,
+        "objective": 2.0069554520582606,
+        "countyLogRmsInSample": 1.2658433359161325,
+        "countyLogRmsHoldout": 1.323666089725555,
+        "eventLogErrorInSample": {
+          "AL022024": 0.6334107265952967,
+          "AL042024": 0.2086328378126937,
+          "AL062018": 0.14482470136203127,
+          "AL092020": 0.9907874761261571,
+          "AL092021": -0.5749949432052531,
+          "AL092022": -0.41025149663070976,
+          "AL092024": -1.1389052960867647,
+          "AL112017": 0.6670597641967696,
+          "AL132020": -0.3255636779573661,
+          "AL142018": 0.37533276249189,
+          "AL142024": 0.22956323232454398,
+          "AL192020": -1.3706515326447404,
+          "AL262020": -0.49093285249702023,
+          "AL282020": 1.3583828743256834
+        },
+        "eventLogErrorHoldout": {
+          "AL022024": 0.6976580136454957,
+          "AL042024": 0.2490085075327776,
+          "AL062018": 0.14980314020055224,
+          "AL092020": 1.1363613042202596,
+          "AL092021": -0.6218197207464029,
+          "AL092022": -0.5445550348125117,
+          "AL092024": -1.2994010578784538,
+          "AL112017": 0.7721803461364518,
+          "AL132020": -0.3862081934054959,
+          "AL142018": 0.4417558628739034,
+          "AL142024": 0.2740183959147999,
+          "AL192020": -1.5390690944630323,
+          "AL262020": -0.5389713689218484,
+          "AL282020": 1.4775521734559458
+        },
+        "bandWeight": [
+          0.5568,
+          0.3252,
+          0.0826,
+          0.019,
+          0.0082,
+          0.0022,
+          0.0047,
+          0.0012,
+          0.0001,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "impliedDrByBand": [
+          {
+            "curveMph": 55.5,
+            "n": 115,
+            "median": 0.0038776029691757357,
+            "min": 0.0001518653626463019,
+            "max": 0.05148322727815946
+          },
+          {
+            "curveMph": 65.5,
+            "n": 17,
+            "median": 0.009039516298153305,
+            "min": 0.0009899432685032022,
+            "max": 0.02952895740300009
+          },
+          {
+            "curveMph": 75.5,
+            "n": 2,
+            "median": 0.024402644410251768,
+            "min": 0.0023570645065321685,
+            "max": 0.024402644410251768
+          },
+          {
+            "curveMph": 105.5,
+            "n": 1,
+            "median": 0.2800009769406715,
+            "min": 0.2800009769406715,
+            "max": 0.2800009769406715
+          }
+        ]
+      }
+    }
+  }
+}

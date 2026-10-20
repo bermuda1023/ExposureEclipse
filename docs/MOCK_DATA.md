@@ -193,7 +193,12 @@ See `docs/CALCULATIONS.md §Post-event evidence`.
 
 `damage_curves/*.json` — written by
 `python backend/scripts/calibrate_damage_curves.py` (`--dry-run` to preview).
-The newest calibrated set becomes the API default.
+The newest calibrated set becomes the API default. The shipped
+`calibrated-20261020.json` was built with `--exclude-flood` and the script
+defaults (observed-wind shape, smoothing 2, prior-shaped tail). Besides the
+per-segment curves it records `windExponent` / `windFloor`, `fit.windShape`
+(the ASOS land-wind fit) and `fit.bookMix` (segment TIV shares, used by the
+panel's PCS-calibrated chip to blend one curve).
 
 `damage_assumptions/sshws_calibrated.json` — per-category (TS to Cat 5) mean
 and SD damage ratios trained on the PCS events by

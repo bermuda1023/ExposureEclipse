@@ -34,7 +34,9 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
   SD damage-ratio inputs (`damageAssumptions` zustand store) produce a
   probabilistic loss band. Defaults are trained on 15 PCS events
   (`train_category_damage.py`, `docs/CALCULATIONS.md §Trained category
-  defaults`); per-county **exposed-fraction overrides**
+  defaults`). A **PCS-calibrated** chip prices each county's 10 mph wind mix
+  with the backend's default calibrated curve (blended by book mix) and takes
+  SD from its holdout event spread; per-county **exposed-fraction overrides**
   (`countyOverrides` store) let an underwriter override partial-county
   exposure. Both persist to localStorage.
 - **Industry loss (calibrated)** — `POST /api/hurricanes/{id}/industry-loss`
@@ -44,7 +46,10 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
  versioned damage-curve set. Marine storm wind is converted to land wind
  (`windFactor`) and vendor curves are taken to insured loss via per-segment
  deductibles. Curves are fitted to supplied PCS county losses
- (`mockdata/industry_losses/*.csv`) by `backend/scripts/calibrate_damage_curves.py`.
+ (`mockdata/industry_losses/*.csv`) by `backend/scripts/calibrate_damage_curves.py`,
+ on modelled wind reshaped to ~2,100 ASOS airport observations
+ (`services/wind_calibration.py`; per-county station correction is opt-in via
+ `observedWind`).
  Bands are lognormal, using the fitted spread. `/api/industry-losses/{id}/backtest`
  compares modelled with actual losses. See `docs/CALCULATIONS.md §Industry loss`.
 - **Live + replay storms** — `/api/live/storms`. NHC `CurrentStorms.json`
