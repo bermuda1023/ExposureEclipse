@@ -25,22 +25,18 @@ describe("3D bar height scaling", () => {
 
   it("keeps feature-state normalization in the Mapbox expression", () => {
     expect(barHeightExpression(COUNTY_BAR_HEIGHT_STOPS)).toEqual([
-      "*",
-      ["coalesce", ["feature-state", "bar"], 0],
-      [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        4, 15_000,
-        5, 6_300,
-        6, 2_600,
-        7, 1_100,
-        8, 460,
-        9, 195,
-        10, 82,
-        11, 36,
-        12, 16,
-      ],
+      "interpolate",
+      ["linear"],
+      ["zoom"],
+      4, ["*", ["coalesce", ["feature-state", "bar"], 0], 15_000],
+      5, ["*", ["coalesce", ["feature-state", "bar"], 0], 6_300],
+      6, ["*", ["coalesce", ["feature-state", "bar"], 0], 2_600],
+      7, ["*", ["coalesce", ["feature-state", "bar"], 0], 1_250],
+      8, ["*", ["coalesce", ["feature-state", "bar"], 0], 600],
+      9, ["*", ["coalesce", ["feature-state", "bar"], 0], 280],
+      10, ["*", ["coalesce", ["feature-state", "bar"], 0], 130],
+      11, ["*", ["coalesce", ["feature-state", "bar"], 0], 60],
+      12, ["*", ["coalesce", ["feature-state", "bar"], 0], 28],
     ]);
   });
 });

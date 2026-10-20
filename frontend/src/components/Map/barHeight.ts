@@ -16,24 +16,28 @@ export const COUNTY_BAR_HEIGHT_STOPS: readonly BarHeightStop[] = [
   [4, 15_000],
   [5, 6_300],
   [6, 2_600],
-  [7, 1_100],
-  [8, 460],
-  [9, 195],
-  [10, 82],
-  [11, 36],
-  [12, 16],
+  [7, 1_250],
+  [8, 600],
+  [9, 280],
+  [10, 130],
+  [11, 60],
+  [12, 28],
 ];
 
 export function barHeightExpression(
   stops: readonly BarHeightStop[],
 ): ExpressionSpecification {
-  const maxHeight: unknown[] = ["interpolate", ["linear"], ["zoom"]];
-  for (const [zoom, height] of stops) maxHeight.push(zoom, height);
-  return [
-    "*",
-    ["coalesce", ["feature-state", "bar"], 0],
-    maxHeight,
-  ] as ExpressionSpecification;
+  // Mapbox requires a zoom expression to be the input of a top-level
+  // interpolate/step expression. Nesting interpolate(["zoom"]) inside a
+  // multiplication makes addLayer reject the whole extrusion layer.
+  const expression: unknown[] = ["interpolate", ["linear"], ["zoom"]];
+  for (const [zoom, height] of stops) {
+    expression.push(
+      zoom,
+      ["*", ["coalesce", ["feature-state", "bar"], 0], height],
+    );
+  }
+  return expression as ExpressionSpecification;
 }
 
 // Screen size is proportional to physical height × 2^zoom. Kept exported so
