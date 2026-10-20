@@ -51,12 +51,12 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
           <div style={{ fontSize: "0.66rem", color: "var(--ink-500)", marginTop: 1 }}>
             {vendor
               ? "Form V-1 building damage by 10 mph of 1-minute wind, on unmitigated reference structures. Each county uses its own mix. SD is still yours. Applied to bundled TIV."
-              : "Mean ± SD damage ratio per category — drives the loss band on every impacted county."}
+              : "Mean ± SD insured damage ratio per category, applied to TIV. Defaults are trained on 15 PCS events (2017–2024); SD is the storm-to-storm error."}
           </div>
         </div>
         <button
           onClick={reset}
-          title="Reset to your custom defaults"
+          title="Reset to the PCS-trained defaults"
           style={{
             all: "unset",
             cursor: "pointer",
@@ -109,15 +109,15 @@ export function DamageAssumptionsEditor({ compact = false }: Props) {
           {CATEGORY_ORDER.map((cat) => {
             const a = byCategory[cat];
             const mean = vendor ? categoryCurveMean(model, cat) : a.mean;
-            const lo = Math.max(0, mean - a.sd).toFixed(1);
-            const hi = Math.min(100, mean + a.sd).toFixed(1);
+            const lo = pct(Math.max(0, mean - a.sd));
+            const hi = pct(Math.min(100, mean + a.sd));
             return (
               <tr key={cat} style={{ borderTop: "1px solid var(--ink-100)" }}>
                 <td style={{ ...td, fontWeight: 600 }}>{CATEGORY_LABELS[cat]}</td>
                 <td style={{ ...td, textAlign: "right" }}>
                   {vendor ? (
                     <span title="Average of the 10 mph rows in this category. The county loss uses its own wind mix.">
-                      {mean.toFixed(1)}
+                      {pct(mean)}
                     </span>
                   ) : (
                     <Input
@@ -154,7 +154,7 @@ function Input({
   return (
     <input
       type="number"
-      step="0.1"
+      step="0.01"
       min="0"
       max="100"
       value={value}
@@ -186,6 +186,10 @@ export function _categoryUsedInImpact(
   void cat;
   void impactedWinds;
   return true;
+}
+
+function pct(v: number): string {
+  return v < 1 ? v.toFixed(2) : v.toFixed(1);
 }
 
 const th: React.CSSProperties = {

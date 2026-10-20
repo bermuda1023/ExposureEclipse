@@ -28,6 +28,7 @@ mockdata/
 ├── industry_losses/*.csv     ← supplied PCS-style event losses (see below)
 ├── industry_tiv/<year>.csv   ← supplied industry TIV vintages (see below)
 ├── damage_curves/*.json      ← calibrated curve sets (calibrate_damage_curves.py)
+├── damage_assumptions/sshws_calibrated.json ← trained panel defaults (train_category_damage.py)
 ├── event_evidence/<id>.json  ← ASOS / Storm Events / USGS HWM per storm (build_event_evidence.py)
 └── geo/                      ← tiny country + CRESTA features only
                                  (state + county come from Mapbox tilesets,
@@ -193,6 +194,14 @@ See `docs/CALCULATIONS.md §Post-event evidence`.
 `damage_curves/*.json` — written by
 `python backend/scripts/calibrate_damage_curves.py` (`--dry-run` to preview).
 The newest calibrated set becomes the API default.
+
+`damage_assumptions/sshws_calibrated.json` — per-category (TS to Cat 5) mean
+and SD damage ratios trained on the PCS events by
+`python backend/scripts/train_category_damage.py --no-ts-field --fix-ts 0.04`.
+Holds the fit, the holdout error per storm and category, and an all-segment
+plus per-segment table. The `ALL` table is copied into the impact panel's
+defaults (`frontend/src/state/damageAssumptions.ts`). See
+`docs/CALCULATIONS.md §Trained category defaults`.
 
 ## Treaty metadata + EDM linkage
 

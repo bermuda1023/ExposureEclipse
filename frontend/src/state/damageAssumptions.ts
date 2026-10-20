@@ -69,17 +69,60 @@ export const DAMAGE_MODEL_LABEL: Record<DamageModel, string> = {
   rms: "RMS",
 };
 
-// Sensible starting values — order-of-magnitude industry shape so the panel
-// has SOMETHING to show on first load. The user is expected to overwrite.
-const DEFAULTS: Record<Sshws, CategoryAssumption> = {
+// Trained on 15 PCS county-estimate events (Irma 2017 to Milton 2024) against
+// the supplied industry TIV, on the same wind bands this panel receives:
+// mockdata/damage_assumptions/sshws_calibrated.json, built by
+// backend/scripts/train_category_damage.py --no-ts-field --fix-ts 0.04.
+// Insured basis (PCS: after deductibles, private flood in, NFIP out), so they
+// apply to TIV, not ground-up. The categories are this app's modelled marine
+// wind, which runs hot over land, so they sit below textbook ground-up curves.
+// SD is the lognormal SD from leave-one-storm-out error on a storm's summed loss.
+// ASSUMPTION: TS is held at the tropical-storm-field fit (2,706 counties);
+// Cat 5 has no data and keeps the KCC shape scaled by the Cat 4 fit.
+export const DEFAULTS: Record<Sshws, CategoryAssumption> = {
   [-1]: { mean: 0.0, sd: 0.0 },     // TD
-  [0]:  { mean: 0.5, sd: 0.3 },     // TS
-  [1]:  { mean: 1.5, sd: 1.0 },     // Cat 1
-  [2]:  { mean: 4.5, sd: 2.0 },     // Cat 2
-  [3]:  { mean: 10.0, sd: 4.0 },    // Cat 3
-  [4]:  { mean: 22.0, sd: 7.0 },    // Cat 4
-  [5]:  { mean: 40.0, sd: 12.0 },   // Cat 5
+  [0]:  { mean: 0.04, sd: 0.06 },   // TS
+  [1]:  { mean: 1.0, sd: 1.4 },     // Cat 1
+  [2]:  { mean: 1.4, sd: 1.6 },     // Cat 2
+  [3]:  { mean: 3.3, sd: 2.5 },     // Cat 3
+  [4]:  { mean: 14.6, sd: 9.5 },    // Cat 4
+  [5]:  { mean: 28.2, sd: 18.3 },   // Cat 5
 };
+
+// The hand-set starting values before calibration. A stored table still equal
+// to these was never edited, so it moves to the trained defaults.
+const PRE_CALIBRATION_DEFAULTS: Record<Sshws, CategoryAssumption> = {
+  [-1]: { mean: 0.0, sd: 0.0 },
+  [0]:  { mean: 0.5, sd: 0.3 },
+  [1]:  { mean: 1.5, sd: 1.0 },
+  [2]:  { mean: 4.5, sd: 2.0 },
+  [3]:  { mean: 10.0, sd: 4.0 },
+  [4]:  { mean: 22.0, sd: 7.0 },
+  [5]:  { mean: 40.0, sd: 12.0 },
+};
+
+function sameTable(
+  a: Partial<Record<Sshws, CategoryAssumption>> | undefined,
+  b: Record<Sshws, CategoryAssumption>,
+): boolean {
+  if (!a) return false;
+  return (Object.keys(b) as unknown as Sshws[]).every(
+    (k) => a[k]?.mean === b[k].mean && a[k]?.sd === b[k].sd,
+  );
+}
+
+export function migrateDamageAssumptions(
+  persisted: unknown,
+  version: number,
+): Pick<DamageAssumptionsState, "byCategory" | "model"> {
+  const state = (persisted ?? {}) as Partial<DamageAssumptionsState>;
+  const byCategory = state.byCategory;
+  const model = state.model ?? "custom";
+  if (version < 1 && (!byCategory || sameTable(byCategory, PRE_CALIBRATION_DEFAULTS))) {
+    return { byCategory: { ...DEFAULTS }, model };
+  }
+  return { byCategory: { ...DEFAULTS, ...(byCategory ?? {}) }, model };
+}
 
 export const useDamageAssumptionsStore = create<DamageAssumptionsState>()(
   persist(
@@ -98,6 +141,10 @@ export const useDamageAssumptionsStore = create<DamageAssumptionsState>()(
     }),
     {
       name: "ee-damage-assumptions",
+      version: 1,
+      // persist merges the returned fields over the live store (actions included).
+      migrate: (persisted, version) =>
+        migrateDamageAssumptions(persisted, version) as DamageAssumptionsState,
       storage: createJSONStorage(() => localStorage),
     },
   ),

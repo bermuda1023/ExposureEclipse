@@ -238,6 +238,68 @@ Neither store is sent back to the backend; persistence is per browser
 in v1. This band is for the user's selection (portfolio). The industry loss
 below is computed on the backend.
 
+### Trained category defaults
+
+The `custom` defaults are trained on the 15 PCS events
+(`backend/scripts/train_category_damage.py`, output
+`mockdata/damage_assumptions/sshws_calibrated.json`). The panel's own model
+is linear in the six ratios:
+
+    loss_county = TIV × Σ_c areaFraction_c × DR_c        c = TS, Cat 1 … Cat 5
+
+so it is fitted with the curve-calibration machinery
+(`services/curve_fit.py`: county + event-total log error, sqrt(loss)
+weights, materiality censoring, ridge to the insured KCC category mean,
+monotone in category, leave-one-storm-out). Inputs:
+
+- `areaFraction_c` from `compute_impact` on the historical track, multiplier
+  2.5, **no** tropical-storm field: exactly the bands the panel receives.
+  The R34/R50 field reshapes the wind outside the eyewall, so a table fitted
+  on it under-prices the panel (Irma 27 vs 46 $B).
+- Loss = PCS county loss summed over residential, commercial and auto,
+  on-levelled to the TIV date. TIV = the supplied 2026 book, all three
+  segments. Maria (Puerto Rico / USVI) has no TIV and drops out.
+- TS is held at 0.04%, the fit on the tropical-storm field (2,706 counties).
+  On the panel field TS is only the fringe of a major's footprint (9
+  counties), where PCS loss is surge and flood and the free fit pools TS
+  with Cat 1. ASSUMPTION.
+- Cat 5 has no county where it is the largest slice. It keeps the KCC
+  shape, scaled by the Cat 4 fit / prior (0.69), and borrows Cat 4's sigma.
+  ASSUMPTION.
+
+SD is the spread of a storm's summed loss when the storm is priced by the
+table fitted without it: per category, the sqrt(loss)-weighted RMS log error
+of held-out event × category cells (≥ $25M reported), turned into the SD of
+a lognormal with the fitted mean: `SD = mean × sqrt(exp(σ²) − 1)`.
+
+| Category | Mean % | SD % | σ (log) | Counties | KCC insured % |
+|---|---|---|---|---|---|
+| TS | 0.04 | 0.06 | pooled 1.11 | 9 | 0.07 |
+| Cat 1 | 1.0 | 1.4 | 1.06 | 140 | 0.58 |
+| Cat 2 | 1.4 | 1.6 | 0.93 | 31 | 2.04 |
+| Cat 3 | 3.3 | 2.5 | 0.67 | 15 | 6.47 |
+| Cat 4 | 14.6 | 9.5 | 0.59 | 13 | 21.2 |
+| Cat 5 | 28.2 | 18.3 | Cat 4 | 0 | 40.8 |
+
+Reading it:
+- **Insured on modelled wind.** The ratios are insured loss over total TIV,
+  keyed on this app's marine-wind categories. That wind runs about 1.4× hot
+  over land (§Post-event evidence), so a modelled Cat 3 county mostly saw
+  Cat 1–2 on the ground. That is why Cat 2–4 sit below vendor ground-up
+  curves.
+- **Uncertainty falls as category rises.** σ ≈ 1 at TS–Cat 2 (a storm can
+  come in at a third or three times the mean) and ≈ 0.6 at Cat 3–4. Low-
+  category loss is driven by things a wind table cannot see: flood,
+  tornadoes, the size of the wind field.
+- **Event totals.** In-sample on the panel field: Ian 0.96, Laura 0.93,
+  Milton 0.84, Irma 0.72, Michael 0.70 of on-levelled PCS. Flood events read
+  low (Ida 0.24, Helene 0.21, Florence 0.41, Sally 0.46, Delta 0.23), and so
+  does most of Isaias and Debby, whose loss is outside the hurricane-force
+  field. Broad weak storms read high (Beryl 2.1, Zeta 2.0).
+
+The stored table is migrated to these defaults only when it still equals the
+pre-calibration hand-set values; edited tables are kept.
+
 ## Industry loss (backend, calibrated)
 
 `services/event_loss.py`, served by `POST /api/hurricanes/{id}/industry-loss`.

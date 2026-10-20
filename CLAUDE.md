@@ -32,7 +32,9 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
   filtered by **landfall state** before browsing.
 - **Hurricane loss assumptions (user-driven)** — per-SSHWS-category mean +
   SD damage-ratio inputs (`damageAssumptions` zustand store) produce a
-  probabilistic loss band; per-county **exposed-fraction overrides**
+  probabilistic loss band. Defaults are trained on 15 PCS events
+  (`train_category_damage.py`, `docs/CALCULATIONS.md §Trained category
+  defaults`); per-county **exposed-fraction overrides**
   (`countyOverrides` store) let an underwriter override partial-county
   exposure. Both persist to localStorage.
 - **Industry loss (calibrated)** — `POST /api/hurricanes/{id}/industry-loss`
