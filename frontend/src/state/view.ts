@@ -16,6 +16,9 @@ import {
 
 import type { Peril } from "../types/contracts";
 
+/** Flat choropleth, or 3D columns whose height is the metric value. */
+export type MapDisplay = "fill" | "bars";
+
 interface ViewState {
   aggregationLevel: Level;
   metric: Metric;
@@ -26,6 +29,7 @@ interface ViewState {
   perils: Peril[];
   /** Bumped when the user opens the Industry client, so the map drops to counties. */
   countyFocusToken: number;
+  mapDisplay: MapDisplay;
   setAggregationLevel: (level: Level) => void;
   setMetric: (metric: Metric) => void;
   setSelectedGeographyId: (id: string | null) => void;
@@ -33,6 +37,7 @@ interface ViewState {
   setPerils: (perils: Peril[]) => void;
   togglePeril: (peril: Peril) => void;
   focusCounties: () => void;
+  setMapDisplay: (mode: MapDisplay) => void;
 }
 
 export const useViewStore = create<ViewState>((set, get) => ({
@@ -42,6 +47,7 @@ export const useViewStore = create<ViewState>((set, get) => ({
   yoyMode: false,
   perils: [],
   countyFocusToken: 0,
+  mapDisplay: "fill",
   setAggregationLevel: (level) => set({ aggregationLevel: level, selectedGeographyId: null }),
   setMetric: (metric) => set({ metric }),
   setSelectedGeographyId: (id) => set({ selectedGeographyId: id }),
@@ -61,4 +67,5 @@ export const useViewStore = create<ViewState>((set, get) => ({
       aggregationLevel: AggregationLevel.COUNTY,
       selectedGeographyId: null,
     })),
+  setMapDisplay: (mapDisplay) => set({ mapDisplay }),
 }));

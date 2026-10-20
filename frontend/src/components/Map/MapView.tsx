@@ -73,6 +73,13 @@ const STATE_LINE = "state-line";
 const STATE_LINE_CASING = "state-line-casing";
 const COUNTY_FILL = "county-fill";
 const COUNTY_LINE = "county-line";
+const STATE_BARS = "state-bars";
+const COUNTY_BARS = "county-bars";
+// Tallest column in metres at zoom 3. Halves per zoom level so the tallest
+// bar stays about the same height on screen.
+const BAR_MAX_HEIGHT_Z3 = 3_500_000;
+const BAR_PITCH = 50;
+const BAR_FALLBACK_LAND = "#f4f3f0";
 
 // Zoom at which the county layer becomes the primary fill (and hover target).
 // Drives BOTH the visibility envelopes below AND the hover/click level pick
@@ -104,6 +111,9 @@ export function MapView({ data, isLoading, error }: Props) {
   const aggregationLevel = useViewStore((s) => s.aggregationLevel);
   const metric = useViewStore((s) => s.metric);
   const yoyMode = useViewStore((s) => s.yoyMode);
+  const mapDisplay = useViewStore((s) => s.mapDisplay);
+  const mapDisplayRef = useRef(mapDisplay);
+  mapDisplayRef.current = mapDisplay;
 
   const features = data?.features ?? [];
   const ramp = useMemo(
@@ -342,6 +352,52 @@ export function MapView({ data, isLoading, error }: Props) {
         },
       });
 
+      // ── 3D bars ── same feature-state as the fills, plus a 0..1 height.
+      // Extrusions draw every polygon, so empty ones take the land colour.
+      const bg = map.getStyle()?.layers?.find((l) => l.type === "background") as
+        | { paint?: Record<string, unknown> }
+        | undefined;
+      const landRaw = bg?.paint?.["background-color"];
+      const land = typeof landRaw === "string" ? landRaw : BAR_FALLBACK_LAND;
+      const firstSymbol = map.getStyle()?.layers?.find((l) => l.type === "symbol")?.id;
+      const barHeight = [
+        "interpolate",
+        ["exponential", 2],
+        ["zoom"],
+        3, ["*", ["coalesce", ["feature-state", "bar"], 0], BAR_MAX_HEIGHT_Z3],
+        12, ["*", ["coalesce", ["feature-state", "bar"], 0], BAR_MAX_HEIGHT_Z3 / 512],
+      ] as unknown as mapboxgl.ExpressionSpecification;
+      const barColor = [
+        "case",
+        ["boolean", ["feature-state", "hasData"], false],
+        ["coalesce", ["feature-state", "fill"], NO_DATA_COLOR],
+        land,
+      ] as unknown as mapboxgl.ExpressionSpecification;
+      for (const [id, tiles, env] of [
+        [STATE_BARS, STATE_TILESET, STATE_ENV],
+        [COUNTY_BARS, COUNTY_TILESET, COUNTY_ENV],
+      ] as const) {
+        map.addLayer(
+          {
+            id,
+            type: "fill-extrusion",
+            source: tiles.src,
+            "source-layer": tiles.layer,
+            minzoom: env[0],
+            maxzoom: env[1],
+            layout: { visibility: "none" },
+            paint: {
+              "fill-extrusion-color": barColor,
+              "fill-extrusion-height": barHeight,
+              "fill-extrusion-base": 0,
+              "fill-extrusion-opacity": 0.92,
+              "fill-extrusion-vertical-gradient": true,
+            },
+          },
+          firstSymbol,
+        );
+      }
+
       styleReadyRef.current = true;
       // First-paint sync of any data that arrived before the style was ready.
       flushFeatureState();
@@ -439,7 +495,7 @@ export function MapView({ data, isLoading, error }: Props) {
     const onMove = (e: MapMouseEvent) => {
       const z = map.getZoom();
       const isCounty = z >= COUNTY_THRESHOLD;
-      const layer = isCounty ? COUNTY_FILL : STATE_FILL;
+      const layer = pickLayer(isCounty, mapDisplayRef.current);
       const feats = map.queryRenderedFeatures(e.point, { layers: [layer] });
       const props = feats[0]?.properties as Record<string, unknown> | undefined;
       const gid = isCounty
@@ -466,7 +522,7 @@ export function MapView({ data, isLoading, error }: Props) {
     const onClick = (e: MapMouseEvent) => {
       const z = map.getZoom();
       const isCounty = z >= COUNTY_THRESHOLD;
-      const layer = isCounty ? COUNTY_FILL : STATE_FILL;
+      const layer = pickLayer(isCounty, mapDisplayRef.current);
       const feats = map.queryRenderedFeatures(e.point, { layers: [layer] });
       const props = feats[0]?.properties as Record<string, unknown> | undefined;
       const gid = isCounty
@@ -502,6 +558,14 @@ export function MapView({ data, isLoading, error }: Props) {
     }
     otherIdSetRef.current.clear();
 
+    // Bars scale to the largest absolute value at this level, so a YoY
+    // decrease is as tall as an equal increase (the colour shows the sign).
+    let maxAbs = 0;
+    for (const f of features) {
+      const v = f.metricValue;
+      if (v != null && Number.isFinite(v)) maxAbs = Math.max(maxAbs, Math.abs(v));
+    }
+
     // Diff current → desired ids for the active level.
     const desired = new Set<string>();
     for (const f of features) {
@@ -517,6 +581,10 @@ export function MapView({ data, isLoading, error }: Props) {
         {
           fill: colorForValue(f.metricValue, ramp),
           hasData: true,
+          bar:
+            maxAbs > 0 && f.metricValue != null && Number.isFinite(f.metricValue)
+              ? Math.abs(f.metricValue) / maxAbs
+              : 0,
         },
       );
     }
@@ -621,14 +689,17 @@ export function MapView({ data, isLoading, error }: Props) {
   useEffect(() => {
     const m = mapInstance;
     if (!m) return;
-    const visibility =
+    const hidden =
       hazardActive !== null || wildfireHidesExposures || floodHidesExposures
-        || stormHidesExposures
-        ? "none"
-        : "visible";
+        || stormHidesExposures;
+    const showBars = !hidden && mapDisplay === "bars";
+    const showFills = !hidden && mapDisplay === "fill";
     const apply = () => {
       for (const id of [STATE_FILL, COUNTY_FILL]) {
-        if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", visibility);
+        if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", showFills ? "visible" : "none");
+      }
+      for (const id of [STATE_BARS, COUNTY_BARS]) {
+        if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", showBars ? "visible" : "none");
       }
     };
     if (m.isStyleLoaded()) apply();
@@ -636,7 +707,22 @@ export function MapView({ data, isLoading, error }: Props) {
     return () => {
       m.off("style.load", apply);
     };
-  }, [mapInstance, hazardActive, wildfireHidesExposures, floodHidesExposures, stormHidesExposures]);
+  }, [
+    mapInstance,
+    hazardActive,
+    wildfireHidesExposures,
+    floodHidesExposures,
+    stormHidesExposures,
+    mapDisplay,
+  ]);
+
+  // Tilt for bars so the heights read; flat again for the choropleth.
+  useEffect(() => {
+    const m = mapInstance;
+    if (!m) return;
+    const target = mapDisplay === "bars" ? BAR_PITCH : 0;
+    if (Math.abs(m.getPitch() - target) > 0.5) m.easeTo({ pitch: target, duration: 600 });
+  }, [mapInstance, mapDisplay]);
 
   // ── Render ──
   if (!hasToken) {
@@ -705,6 +791,11 @@ export function MapView({ data, isLoading, error }: Props) {
       )}
     </div>
   );
+}
+
+function pickLayer(isCounty: boolean, display: "fill" | "bars"): string {
+  if (display === "bars") return isCounty ? COUNTY_BARS : STATE_BARS;
+  return isCounty ? COUNTY_FILL : STATE_FILL;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

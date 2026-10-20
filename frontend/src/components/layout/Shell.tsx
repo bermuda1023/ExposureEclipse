@@ -35,6 +35,7 @@ import { WildfireControls } from "../Map/WildfireControls";
 import { FloodControls } from "../Map/FloodControls";
 import { LiveStormControls } from "../Map/LiveStormControls";
 import { IndustrySegmentToggle } from "../Map/IndustrySegmentToggle";
+import { MapDisplayToggle } from "../Map/MapDisplayToggle";
 import { MetricSelector } from "../Map/MetricSelector";
 import { PerilSelector } from "../Map/PerilSelector";
 import { YoyToggle } from "../Map/YoyToggle";
@@ -411,6 +412,7 @@ function MapToolbar() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", rowGap: 6 }}>
         <IndustrySegmentToggle />
         <MetricSelector />
+        <MapDisplayToggle />
         <YoyToggle />
         <ExportButton />
         <a
