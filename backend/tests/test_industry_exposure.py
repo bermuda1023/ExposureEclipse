@@ -283,6 +283,56 @@ def test_industry_map_and_detail_bundle_three_segments() -> None:
     assert industry_fl["tiv"] > portfolio_fl_tiv * 10
 
 
+def _industry_map(segments: list[str], level: AggregationLevel = AggregationLevel.COUNTY) -> dict:
+    response = client.post(
+        "/api/exposures/map",
+        json={
+            "cedentId": "ced-industry",
+            "aggregationLevel": level.value,
+            "metric": "TIV",
+            "filters": {"occupancySegment": segments},
+        },
+    )
+    assert response.status_code == 200, response.text
+    return {row["geographyId"]: row for row in response.json()["features"]}
+
+
+def test_industry_map_segment_filter_selects_segments() -> None:
+    assert _industry_map(["AUTO"])[MIAMI]["tiv"] == MIAMI_AUTO
+    assert _industry_map(["RESIDENTIAL"])[MIAMI]["tiv"] == MIAMI_RES
+    assert _industry_map(["RESIDENTIAL", "COMMERCIAL"])[MIAMI]["tiv"] == MIAMI_RES + MIAMI_COM
+    assert _industry_map([])[MIAMI]["tiv"] == MIAMI_BUNDLED
+
+    summary = json.loads(
+        (Path(get_settings().mock_data_dir) / "industry_exposure_summary.json").read_text()
+    )
+    country = _industry_map(["AUTO"], AggregationLevel.COUNTRY)
+    assert round(sum(row["tiv"] for row in country.values())) == summary["autoTiv"]
+
+
+def test_industry_segment_filter_keeps_market_share_on_the_same_segments() -> None:
+    for segments in (["AUTO"], ["RESIDENTIAL", "COMMERCIAL"], []):
+        miami = _industry_map(segments)[MIAMI]
+        assert miami["clientMarketShare"] == pytest.approx(1.0)
+
+    detail = client.post(
+        "/api/exposures/detail",
+        json={
+            "cedentId": "ced-industry",
+            "aggregationLevel": AggregationLevel.COUNTY.value,
+            "metric": "TIV",
+            "geographyId": MIAMI,
+            "filters": {"occupancySegment": ["COMMERCIAL", "AUTO"]},
+        },
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["summary"]["tiv"] == MIAMI_COM + MIAMI_AUTO
+    assert body["marketShare"]["industryTiv"] == MIAMI_COM + MIAMI_AUTO
+    assert body["marketShare"]["segment"] == "AUTO+COMMERCIAL"
+    assert {row["key"] for row in body["breakdowns"]["occupancy"]} == {"COMMERCIAL", "AUTO"}
+
+
 def test_join_tiv_bundles_segments_and_ignores_state_rows() -> None:
     """Impact TIV is one number. The three segments stay informational."""
     residential = 100.0

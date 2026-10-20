@@ -213,6 +213,8 @@ export type GrainKey = readonly string[];
 export interface ExposureFilters {
   peril: Peril;
   occupancy: string[];
+  /** Empty = every segment. */
+  occupancySegment: OccupancySegment[];
   distanceToCoast: string[];
   geocoding: string[];
   construction: string[];

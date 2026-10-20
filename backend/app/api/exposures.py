@@ -188,13 +188,22 @@ def _geography_name_for(
     return None
 
 
-def _segment_for_market_share(facts: Sequence[ExposureFactNormalized]) -> OccupancySegment | None:
-    """Resolve a single occupancy segment for IED lookup, else ``None`` (= ALL).
+def _segment_for_market_share(
+    facts: Sequence[ExposureFactNormalized],
+    requested: Sequence[OccupancySegment | str] = (),
+) -> list[OccupancySegment] | None:
+    """Resolve the occupancy segments for IED lookup, else ``None`` (= ALL).
+
+    An explicit ``filters.occupancySegment`` wins so the denominator covers the
+    same segments as the numerator. Otherwise a single segment on the facts is
+    used, and anything mixed falls back to ALL.
 
     `use_enum_values=True` on the Pydantic config means `fact.occupancy_segment`
     is a raw string at runtime, not an OccupancySegment instance. Coerce back to
     the enum here so callers can rely on `.value` and `==` against enum members.
     """
+    if requested:
+        return sorted({OccupancySegment(s) for s in requested}, key=lambda s: s.value)
     raw = {f.occupancy_segment for f in facts if f.occupancy_segment}
     segments: set[OccupancySegment] = set()
     for value in raw:
@@ -205,8 +214,12 @@ def _segment_for_market_share(facts: Sequence[ExposureFactNormalized]) -> Occupa
     if len(segments) == 1:
         only = next(iter(segments))
         if only != OccupancySegment.UNKNOWN:
-            return only
+            return [only]
     return None
+
+
+def _segment_label(segments: Sequence[OccupancySegment] | None) -> str:
+    return "+".join(s.value for s in segments) if segments else "ALL"
 
 
 def _scope_aggregates(
@@ -384,7 +397,7 @@ def exposures_map(
 
     # ─── IED industry rows for market share ───
     ied_rows = provider.get_ied_industry()
-    segment = _segment_for_market_share(deal_facts)
+    segment = _segment_for_market_share(deal_facts, payload.filters.occupancy_segment)
 
     # ─── Assemble features ───
     features: list[MapFeature] = []
@@ -402,7 +415,7 @@ def exposures_map(
         if share_warning is not None:
             share_warning_with_ctx = make_warning(
                 share_warning.code,
-                context={"geographyId": geography_id, "segment": segment.value if segment else "ALL"},
+                context={"geographyId": geography_id, "segment": _segment_label(segment)},
             )
             feature_warnings.append(share_warning_with_ctx)
 
@@ -579,7 +592,7 @@ def exposures_detail(
     geo_share = geography_share_of_total_portfolio(portfolio_geo_tiv, total_portfolio_tiv)
     concentration = selected_deal_geography_concentration(deal_tiv, total_deal_tiv)
 
-    segment = _segment_for_market_share(geo_facts)
+    segment = _segment_for_market_share(geo_facts, payload.filters.occupancy_segment)
     industry_tiv = lookup_industry_tiv(provider.get_ied_industry(), geo_id, segment)
     share, share_warning = client_market_share(deal_tiv, industry_tiv)
 
@@ -588,7 +601,7 @@ def exposures_detail(
         feature_warnings.append(
             make_warning(
                 share_warning.code,
-                context={"geographyId": geo_id, "segment": segment.value if segment else "ALL"},
+                context={"geographyId": geo_id, "segment": _segment_label(segment)},
             )
         )
 
@@ -665,7 +678,7 @@ def exposures_detail(
             client_tiv=deal_tiv if industry_tiv is not None else None,
             industry_tiv=industry_tiv,
             share=share,
-            segment=(segment.value if segment else "ALL"),
+            segment=_segment_label(segment),
         ),
         yoy=YoyDetail(
             current_tiv=deal_tiv,

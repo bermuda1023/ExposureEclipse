@@ -115,7 +115,7 @@ Common fields across the three:
 |---|---|---|
 | `aggregationLevel` | AggregationLevel | required by `/map` and `/detail`; pivot derives finest level from rows+columns |
 | `metric` | MetricKey | required by `/map` and `/detail` |
-| `filters` | ExposureFilters | peril (ALL\|specific), occupancy[], distanceToCoast[], geocoding[], construction[], numberOfStories[], yearBuilt[] |
+| `filters` | ExposureFilters | peril (ALL\|specific), occupancy[], occupancySegment[] (OccupancySegment; empty = all, and the market-share denominator uses the same segments), distanceToCoast[], geocoding[], construction[], numberOfStories[], yearBuilt[] |
 | `perils` | Peril[] | top-of-page multi-select (empty / contains ALL = no filter) |
 | `comparisonProgrammeId` | str \| null | YoY override |
 | `yoyMode` | bool | when true, `metricValue` becomes YoY change of `metric` |

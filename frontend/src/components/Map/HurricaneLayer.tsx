@@ -288,6 +288,7 @@ export function HurricaneLayer({ map }: Props) {
               construction: filters.construction,
               numberOfStories: filters.numberOfStories,
               yearBuilt: filters.yearBuilt,
+              occupancySegment: filters.occupancySegment,
             },
           };
 

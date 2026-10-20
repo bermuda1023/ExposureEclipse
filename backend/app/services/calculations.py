@@ -23,7 +23,7 @@ Design rules (all derived from CALCULATION_RULES.md + CLAUDE.md):
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from typing import Any
 
 from app.models.enums import (
@@ -201,19 +201,26 @@ def client_market_share(
 def lookup_industry_tiv(
     ied: list[IEDIndustryRow],
     geography_id: str,
-    occupancy_segment: OccupancySegment | None = None,
+    occupancy_segment: OccupancySegment | Collection[OccupancySegment] | None = None,
 ) -> float | None:
-    """Find the matching IED row for the given ``geography_id`` (+ optional segment).
+    """Find the matching IED row for the given ``geography_id`` (+ optional segments).
 
     Sums any matching rows (geometry-level IED is typically one row per key but
-    we don't rely on that). ``UNKNOWN`` is treated literally — never force-mapped
-    onto another segment (CONTRACTS §6 / CALCULATION_RULES.md).
+    we don't rely on that). A collection sums those segments only. ``UNKNOWN``
+    is treated literally — never force-mapped onto another segment
+    (CONTRACTS §6 / CALCULATION_RULES.md).
     """
+    if occupancy_segment is None:
+        wanted: set[str] | None = None
+    elif isinstance(occupancy_segment, (str, OccupancySegment)):
+        wanted = {str(getattr(occupancy_segment, "value", occupancy_segment))}
+    else:
+        wanted = {str(getattr(s, "value", s)) for s in occupancy_segment}
     total: float | None = None
     for row in ied:
         if row.geography_id != geography_id:
             continue
-        if occupancy_segment is not None and row.occupancy_segment != occupancy_segment:
+        if wanted is not None and str(getattr(row.occupancy_segment, "value", row.occupancy_segment)) not in wanted:
             continue
         total = (total or 0.0) + float(row.industry_tiv or 0.0)
     return total
@@ -268,6 +275,7 @@ def apply_filters(
     """
     out: list[ExposureFactNormalized] = []
     occupancy = set(filters.occupancy)
+    segments = {str(getattr(s, "value", s)) for s in filters.occupancy_segment}
     dtc = set(filters.distance_to_coast)
     geocoding = set(filters.geocoding)
     construction = set(filters.construction)
@@ -279,6 +287,8 @@ def apply_filters(
         if peril_filter != Peril.ALL and f.peril != peril_filter:
             continue
         if occupancy and (f.occupancy or "") not in occupancy:
+            continue
+        if segments and str(getattr(f.occupancy_segment, "value", f.occupancy_segment)) not in segments:
             continue
         if dtc and (f.distance_to_coast or "") not in dtc:
             continue

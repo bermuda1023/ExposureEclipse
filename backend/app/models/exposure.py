@@ -90,6 +90,8 @@ class ExposureFilters(CamelModel):
 
     peril: Peril = Peril.ALL
     occupancy: list[str] = []
+    # Empty = every segment. The market-share denominator follows the same set.
+    occupancy_segment: list[OccupancySegment] = []
     distance_to_coast: list[str] = []
     geocoding: list[str] = []
     construction: list[str] = []

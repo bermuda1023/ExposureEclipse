@@ -129,6 +129,7 @@ export function LiveStormPanel() {
         construction: filters.construction,
         numberOfStories: filters.numberOfStories,
         yearBuilt: filters.yearBuilt,
+        occupancySegment: filters.occupancySegment,
       },
     };
     impactStore.start(activeId, payload);

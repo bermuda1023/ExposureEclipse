@@ -11,6 +11,7 @@ import type {
   JobStatus,
   Measure,
   MetricKey,
+  OccupancySegment,
   Peril,
   PortfolioScope,
   YoyStatus,
@@ -97,6 +98,8 @@ export interface DatasetGroupListResponse {
 export interface ExposureFilters {
   peril: Peril;
   occupancy: string[];
+  /** Empty = every segment. */
+  occupancySegment: OccupancySegment[];
   distanceToCoast: string[];
   geocoding: string[];
   construction: string[];

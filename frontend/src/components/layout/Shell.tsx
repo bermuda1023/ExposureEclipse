@@ -34,6 +34,7 @@ import { HazardOverlayControls } from "../Map/HazardOverlayControls";
 import { WildfireControls } from "../Map/WildfireControls";
 import { FloodControls } from "../Map/FloodControls";
 import { LiveStormControls } from "../Map/LiveStormControls";
+import { IndustrySegmentToggle } from "../Map/IndustrySegmentToggle";
 import { MetricSelector } from "../Map/MetricSelector";
 import { PerilSelector } from "../Map/PerilSelector";
 import { YoyToggle } from "../Map/YoyToggle";
@@ -84,6 +85,7 @@ export function Shell() {
         construction: filters.construction,
         numberOfStories: filters.numberOfStories,
         yearBuilt: filters.yearBuilt,
+        occupancySegment: filters.occupancySegment,
       },
       comparisonProgrammeId,
       perils,
@@ -107,6 +109,7 @@ export function Shell() {
     filters.construction,
     filters.numberOfStories,
     filters.yearBuilt,
+    filters.occupancySegment,
   ]);
 
   const debouncedMapRequest = useDebouncedValue(mapRequest);
@@ -406,6 +409,7 @@ function MapToolbar() {
         <LiveStormControls />
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", rowGap: 6 }}>
+        <IndustrySegmentToggle />
         <MetricSelector />
         <YoyToggle />
         <ExportButton />

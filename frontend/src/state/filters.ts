@@ -3,20 +3,22 @@
  */
 
 import { create } from "zustand";
-import { Peril, type ExposureFilters } from "../types/contracts";
+import { Peril, type ExposureFilters, type OccupancySegment } from "../types/contracts";
 
-type ListDim = Exclude<keyof ExposureFilters, "peril">;
+type ListDim = Exclude<keyof ExposureFilters, "peril" | "occupancySegment">;
 
 type FiltersState = ExposureFilters & {
   setPeril: (p: Peril) => void;
   toggle: (dim: ListDim, value: string) => void;
   setMulti: (dim: ListDim, values: string[]) => void;
+  setOccupancySegment: (segments: OccupancySegment[]) => void;
   reset: () => void;
 };
 
 const initial: ExposureFilters = {
   peril: Peril.ALL,
   occupancy: [],
+  occupancySegment: [],
   distanceToCoast: [],
   geocoding: [],
   construction: [],
@@ -36,5 +38,6 @@ export const useFiltersStore = create<FiltersState>((set, get) => ({
   },
   setMulti: (dim, values) =>
     set({ [dim]: values } as Pick<FiltersState, ListDim>),
+  setOccupancySegment: (segments) => set({ occupancySegment: segments }),
   reset: () => set({ ...initial }),
 }));

@@ -50,6 +50,7 @@ export function ExportButton() {
                 construction: filters.construction,
                 numberOfStories: filters.numberOfStories,
                 yearBuilt: filters.yearBuilt,
+                occupancySegment: filters.occupancySegment,
               },
               selectedGeographyId,
               pivot: {

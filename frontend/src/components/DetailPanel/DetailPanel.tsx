@@ -69,6 +69,7 @@ function CountyDetail() {
         construction: filters.construction,
         numberOfStories: filters.numberOfStories,
         yearBuilt: filters.yearBuilt,
+        occupancySegment: filters.occupancySegment,
       },
     };
   }, [
@@ -89,6 +90,7 @@ function CountyDetail() {
     filters.construction,
     filters.numberOfStories,
     filters.yearBuilt,
+    filters.occupancySegment,
   ]);
 
   const debouncedRequest = useDebouncedValue(request);

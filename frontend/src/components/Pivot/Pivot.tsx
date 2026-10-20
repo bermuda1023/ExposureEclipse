@@ -101,6 +101,7 @@ export function Pivot() {
         construction: filters.construction,
         numberOfStories: filters.numberOfStories,
         yearBuilt: filters.yearBuilt,
+        occupancySegment: filters.occupancySegment,
       },
       comparisonProgrammeId,
       perils,
@@ -123,6 +124,7 @@ export function Pivot() {
     filters.construction,
     filters.numberOfStories,
     filters.yearBuilt,
+    filters.occupancySegment,
   ]);
 
   const debouncedRequest = useDebouncedValue(request);
