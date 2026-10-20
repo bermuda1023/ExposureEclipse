@@ -80,6 +80,16 @@ describe("map paint expressions pass Mapbox style validation", () => {
     expect(styleErrors("line", { "line-opacity": countyLineOpacityExpression(4) })).toEqual([]);
   });
 
+  it("fades plain county borders on whole zooms, hidden at the state view", () => {
+    // Feature-state paint is evaluated at whole tile zooms and blended, so a
+    // fractional stop would leak borders into the state-level view.
+    const expression = countyLineOpacityExpression(4) as unknown[];
+    const [startZoom, startValue, endZoom] = expression.slice(3, 6) as [number, unknown[], number];
+    expect(Number.isInteger(startZoom) && Number.isInteger(endZoom)).toBe(true);
+    expect(startZoom).toBeGreaterThanOrEqual(4);
+    expect(startValue.at(-1)).toBe(0);
+  });
+
   it("rejects a zoom expression nested below the top level", () => {
     expect(
       styleErrors("line", {

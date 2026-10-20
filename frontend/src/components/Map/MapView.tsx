@@ -135,6 +135,7 @@ export function MapView({ data, isLoading, error }: Props) {
   const mapRef = useRef<MbMap | null>(null);
   const [mapInstance, setMapInstance] = useState<MbMap | null>(null);
   const styleReadyRef = useRef(false);
+  const [styleReady, setStyleReady] = useState(false);
   // Track which feature ids currently have state set so we can clear stale ones.
   const stateSetIdsRef = useRef<Set<string>>(new Set());
   const countySetIdsRef = useRef<Set<string>>(new Set());
@@ -382,19 +383,12 @@ export function MapView({ data, isLoading, error }: Props) {
       }
 
       styleReadyRef.current = true;
-      // `style.load` fires before this `load` callback has added our custom
-      // layers. A user who selected Bars during initial load previously ran
-      // the visibility effect too early: it found no layers, then the fills
-      // were added visible and the bars hidden. Synchronise from live store
-      // state only after every custom layer exists.
-      applyExposureVisibility(
-        map,
-        mapDisplayRef.current,
-        exposureLayersHidden(),
-      );
-      enforceDisplayPitch(map, mapDisplayRef.current);
-      // First-paint sync of any data that arrived before the style was ready.
-      flushFeatureState();
+      // The exposure response and store changes can both arrive before this
+      // callback has added the custom layers. Effects that sync layers or
+      // feature-state re-run on this state with the current render's data;
+      // calling them from here would use the first render's closure, whose
+      // features are still empty, and leave the map unpainted.
+      setStyleReady(true);
     });
 
     // Mapbox: feature-state set BEFORE a tile loads doesn't always apply to
@@ -445,6 +439,7 @@ export function MapView({ data, isLoading, error }: Props) {
       mapRef.current = null;
       setMapInstance(null);
       styleReadyRef.current = false;
+      setStyleReady(false);
       stateSetIdsRef.current.clear();
       countySetIdsRef.current.clear();
     };
@@ -595,7 +590,7 @@ export function MapView({ data, isLoading, error }: Props) {
   useEffect(() => {
     flushFeatureState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [features, ramp, aggregationLevel]);
+  }, [features, ramp, aggregationLevel, styleReady]);
 
   // ── Sync hurricane-impact county highlights via feature-state ──
   const impactStormId = useHurricaneImpactStore((s) => s.activeStormId);
@@ -631,7 +626,7 @@ export function MapView({ data, isLoading, error }: Props) {
         { padding: { top: 60, right: 380, bottom: 80, left: 60 }, duration: 900, maxZoom: 7 },
       );
     }
-  }, [impactData, impactStormId]);
+  }, [impactData, impactStormId, styleReady]);
 
   // ── Spotlight the county the user just clicked in the impact detail panel ──
   const focusedGeoid = useHurricaneImpactStore((s) => s.focusedGeoid);
@@ -663,7 +658,7 @@ export function MapView({ data, isLoading, error }: Props) {
         zoom: Math.max(m.getZoom(), 6),
       });
     }
-  }, [focusedGeoid, impactData]);
+  }, [focusedGeoid, impactData, styleReady]);
 
   // ── Exposure-fill visibility (single owner) ──
   // The hazard heatmap and the wildfire/flood overlays all want the TIV
@@ -690,6 +685,7 @@ export function MapView({ data, isLoading, error }: Props) {
     applyExposureVisibility(m, mapDisplay, hidden);
   }, [
     mapInstance,
+    styleReady,
     hazardActive,
     wildfireHidesExposures,
     floodHidesExposures,
@@ -784,15 +780,6 @@ export function MapView({ data, isLoading, error }: Props) {
 function pickLayer(isCounty: boolean, display: "fill" | "bars"): string {
   if (display === "bars") return isCounty ? COUNTY_BARS : STATE_BARS;
   return isCounty ? COUNTY_FILL : STATE_FILL;
-}
-
-function exposureLayersHidden(): boolean {
-  return (
-    useHazardOverlayStore.getState().active !== null
-    || (useLiveWildfireStore.getState().active && useLiveWildfireStore.getState().hideExposures)
-    || (useLiveFloodStore.getState().active && useLiveFloodStore.getState().hideExposures)
-    || liveStormHidesExposureFills(useLiveStormStore.getState())
-  );
 }
 
 function applyExposureVisibility(
