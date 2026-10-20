@@ -187,36 +187,44 @@ def test_tiv_falls_back_to_book_when_nothing_supplied(data_dir) -> None:
     assert tiv.segments_present() == {"RESIDENTIAL", "COMMERCIAL", "AUTO"}
 
 
-def test_panel_band_reports_honest_full_event_coverage() -> None:
-    """The displayed range is checked against full PCS totals, not fit rows."""
+def test_panel_band_is_held_out_on_the_wind_dominant_set() -> None:
+    """The displayed range is scored on held-out training events only, and
+    every excluded event is excluded by a rule its metrics satisfy."""
     curve = get_curve_set("calibrated-20261020")
     band = curve.fit["panelBand"]
-    trained = json.loads(
-        (
-            industry_losses.data_dir()
-            / "damage_assumptions"
-            / "sshws_calibrated.json"
-        ).read_text(encoding="utf-8")
-    )
-    errors = trained["segments"]["ALL"]["eventLogErrorHoldout"]
-    events = {event["stormId"]: event for event in trained["events"]}
-    factors = {
-        storm_id: event["actualTotal"] / (event["inField"] * math.exp(errors[storm_id]))
-        for storm_id, event in events.items()
-        if storm_id in errors and event["inField"] > 0
-    }
-    covered = {
-        storm_id
-        for storm_id, factor in factors.items()
-        if band["lowFactor"] <= factor <= band["highFactor"]
-    }
-    assert len(factors) == band["scorableEvents"] == 14
-    assert len(events) == band["suppliedEvents"] == 15
-    assert len(covered) == band["coveredEvents"] == 12
-    assert set(factors) - covered == set(band["outsideEvents"]) == {
-        "AL042024",
-        "AL282020",
-    }
+    rules = curve.fit["eventRules"]
+    screened = {e["stormId"]: e for e in curve.fit["eventSet"]}
+    notes = json.loads(
+        (industry_losses.data_dir() / "industry_losses" / "event_set.json").read_text(encoding="utf-8")
+    )["events"]
+    assert set(screened) == set(industry_losses.load_actuals()) == set(notes)
+
+    for storm_id, event in screened.items():
+        m = event["metrics"]
+        expected = []
+        if m["noTivShare"] is None or m["noTivShare"] > rules["noExposure"]["maxShare"]:
+            expected.append("noExposure")
+        if m["stallHours"] is not None and m["stallHours"] >= rules["stalled"]["minHours"]:
+            expected.append("stalled")
+        if (
+            "noExposure" not in expected
+            and m["outsideFootprintShare"] is not None
+            and m["outsideFootprintShare"] > rules["outsideFootprint"]["maxShare"]
+        ):
+            expected.append("outsideFootprint")
+        assert event["reasons"] == expected, storm_id
+        assert event["included"] is (not expected)
+
+    rows = {r["stormId"]: r for r in band["events"]}
+    trained = {sid for sid, r in rows.items() if r["trained"]}
+    assert trained == {sid for sid, e in screened.items() if e["included"]}
+    assert curve.fit["events"] and {e["stormId"] for e in curve.fit["events"]} == trained
+    inside = {sid for sid in trained if band["lowFactor"] <= rows[sid]["factor"] <= band["highFactor"]}
+    assert len(inside) == band["coveredEvents"] >= band["coverageTarget"] * band["scorableEvents"]
+    assert band["scorableEvents"] == len(trained)
+    assert set(trained) - inside == set(band["outsideEvents"])
+    # A Cat 5 county must never be shown a high anywhere near total loss.
+    assert band["highFactor"] < 2.5
 
 
 # ─────────────────────────────── event loss ───────────────────────────────

@@ -201,8 +201,17 @@ per-segment curves it records `windExponent` / `windFloor`, `fit.windShape`
 (the ASOS land-wind fit) and `fit.bookMix` (segment TIV shares, used by the
 panel's PCS-calibrated chip to blend one curve).
 
+`industry_losses/event_set.json` — which PCS events train and score the
+hurricane curves: three exclusion rules (no matching TIV, stalled storm,
+loss mostly outside the modelled wind field) and a loss-mechanism note per
+event. `backend/scripts/_event_set.py` measures the rules; both training
+scripts default to the events that pass. The decision and metrics are copied
+into the calibrated curve set as `fit.eventSet`, and the panel range and
+per-storm scores as `fit.panelBand`. See `docs/CALCULATIONS.md §Calibration
+storm set`.
+
 `damage_assumptions/sshws_calibrated.json` — per-category (TS to Cat 5) mean
-and SD damage ratios trained on the PCS events by
+and SD damage ratios trained on the wind-dominant PCS events by
 `python backend/scripts/train_category_damage.py --no-ts-field --fix-ts 0.04`.
 Holds the fit, the holdout error per storm and category, and an all-segment
 plus per-segment table. The `ALL` table is copied into the impact panel's

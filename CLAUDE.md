@@ -32,11 +32,13 @@ databases via a multi-host connection registry (`EDMRef.serverName`).
   filtered by **landfall state** before browsing.
 - **Hurricane loss assumptions (user-driven)** — per-SSHWS-category mean +
   SD damage-ratio inputs (`damageAssumptions` zustand store) produce a
-  probabilistic loss band. Defaults are trained on 15 PCS events
+  probabilistic loss band. Defaults are trained on the 7 wind-dominant PCS events
   (`train_category_damage.py`, `docs/CALCULATIONS.md §Trained category
   defaults`). A **PCS-calibrated** chip prices each county's 10 mph wind mix
-  with the backend's default calibrated curve (blended by book mix) and takes
-  SD from its holdout event spread; per-county **exposed-fraction overrides**
+  with the backend's default calibrated curve (blended by book mix) and shows
+  the PCS holdout 80% range (held-out wind-dominant storms; stalled, no-TIV and
+  mostly-outside-the-wind-field storms are excluded by
+  `mockdata/industry_losses/event_set.json`); per-county **exposed-fraction overrides**
   (`countyOverrides` store) let an underwriter override partial-county
   exposure. Both persist to localStorage.
 - **Industry loss (calibrated)** — `POST /api/hurricanes/{id}/industry-loss`

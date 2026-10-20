@@ -238,12 +238,52 @@ Neither store is sent back to the backend; persistence is per browser
 in v1. This band is for the user's selection (portfolio). The industry loss
 below is computed on the backend.
 
+### Calibration storm set (wind-dominant events)
+
+Both the 10 mph curve set (PCS-calibrated chip) and the category defaults are
+trained only on **wind-dominant** PCS events. `mockdata/industry_losses/event_set.json`
+holds three rules and a loss-mechanism note per event;
+`backend/scripts/_event_set.py` measures each rule's metric from the track,
+the PCS county rows and the industry TIV. No metric uses a fitted curve, so no
+event is dropped for fitting badly.
+
+| Rule | Metric | Threshold |
+|---|---|---|
+| `noExposure` | share of on-levelled PCS loss in counties with no book TIV | > 50% |
+| `stalled` | hours the centre stays within 100 nm of the strongest US landfall | ≥ 36 h |
+| `outsideFootprint` | share of PCS loss (with TIV) in counties with no modelled wind on the panel field | > 50% |
+
+The stall threshold sits in a clear gap: Sally 51 h and Florence 45 h; every
+other supplied storm is 24 h or less (Ian, Irma, Debby 24 h). Harvey 2017 would
+be far above it. Sandy (surge, extratropical transition) and Katrina (levee
+failure) are not in the supplied PCS set; they would need their own rule.
+
+| Storm | Decision | Outside field | Stall h | Mechanism |
+|---|---|---:|---:|---|
+| Beryl 2024 | included | 25% | 15 | Cat 1 Matagorda; Houston tree fall and roof wind |
+| Ida 2021 | included | 28% | 21 | Cat 4 Louisiana wind; ASOS in Orleans matches the model. 28% is NE remnant flash flooding, under the threshold |
+| Ian 2022 | included | 7% | 24 | Cat 4 peninsula-wide wind; surge material in Lee / Charlotte |
+| Irma 2017 | included | 24% | 24 | Cat 4 Keys / Cat 3 Marco Island; USVI / PR rows (12%) are outside the book and not scored |
+| Laura 2020 | included | 21% | 12 | Compact Cat 4 wind |
+| Michael 2018 | included | 14% | 9 | Compact Cat 5 wind |
+| Milton 2024 | included | 24% | 12 | Cat 3 wind plus the pre-landfall tornado outbreak |
+| Maria 2017 | `noExposure` | – | – | Puerto Rico / USVI; no book TIV |
+| Florence 2018 | `stalled`, `outsideFootprint` | 65% | 45 | Stalled; record NC rain and river flooding |
+| Sally 2020 | `stalled` | 20% | 51 | Walking-pace landfall; rain flooding and long-duration wind |
+| Debby 2024 | `outsideFootprint` | 99.5% | 24 | Rain and remnant flooding, GA / SC to the Northeast |
+| Isaias 2020 | `outsideFootprint` | 98% | 6 | Tropical-storm-force tree fall and tornadoes up the East Coast |
+| Helene 2024 | `outsideFootprint` | 89% | 6 | Inland tropical-storm wind and Appalachian flooding |
+| Delta 2020 | `outsideFootprint` | 70% | 9 | Landed ~12 mi from Laura six weeks later, on damaged roofs; PCS split confounded |
+| Zeta 2020 | `outsideFootprint` | 56% | 6 | Very fast; tropical-storm wind carried far inland |
+
+`--all-events` on either training script restores the old all-event fit.
+
 ### Trained category defaults
 
-The `custom` defaults are trained on the 15 PCS events
-(`backend/scripts/train_category_damage.py`, output
-`mockdata/damage_assumptions/sshws_calibrated.json`). The panel's own model
-is linear in the six ratios:
+The `custom` defaults are trained on the 7 wind-dominant PCS events
+(`backend/scripts/train_category_damage.py --no-ts-field --fix-ts 0.04`,
+output `mockdata/damage_assumptions/sshws_calibrated.json`). The panel's own
+model is linear in the six ratios:
 
     loss_county = TIV × Σ_c areaFraction_c × DR_c        c = TS, Cat 1 … Cat 5
 
@@ -254,17 +294,12 @@ monotone in category, leave-one-storm-out). Inputs:
 
 - `areaFraction_c` from `compute_impact` on the historical track, multiplier
   2.5, **no** tropical-storm field: exactly the bands the panel receives.
-  The R34/R50 field reshapes the wind outside the eyewall, so a table fitted
-  on it under-prices the panel (Irma 27 vs 46 $B).
 - Loss = PCS county loss summed over residential, commercial and auto,
   on-levelled to the TIV date. TIV = the supplied 2026 book, all three
-  segments. Maria (Puerto Rico / USVI) has no TIV and drops out.
-- TS is held at 0.04%, the fit on the tropical-storm field (2,706 counties).
-  On the panel field TS is only the fringe of a major's footprint (9
-  counties), where PCS loss is surge and flood and the free fit pools TS
-  with Cat 1. ASSUMPTION.
+  segments.
+- TS is held at 0.04%, the fit on the tropical-storm field. ASSUMPTION.
 - Cat 5 has no county where it is the largest slice. It keeps the KCC
-  shape, scaled by the Cat 4 fit / prior (0.69), and borrows Cat 4's sigma.
+  shape, scaled by the Cat 4 fit / prior, and borrows Cat 4's sigma.
   ASSUMPTION.
 
 SD is the spread of a storm's summed loss when the storm is priced by the
@@ -272,34 +307,20 @@ table fitted without it: per category, the sqrt(loss)-weighted RMS log error
 of held-out event × category cells (≥ $25M reported), turned into the SD of
 a lognormal with the fitted mean: `SD = mean × sqrt(exp(σ²) − 1)`.
 
-| Category | Mean % | SD % | σ (log) | Counties | KCC insured % |
-|---|---|---|---|---|---|
-| TS | 0.04 | 0.06 | pooled 1.11 | 9 | 0.07 |
-| Cat 1 | 1.0 | 1.4 | 1.06 | 140 | 0.58 |
-| Cat 2 | 1.4 | 1.6 | 0.93 | 31 | 2.04 |
-| Cat 3 | 3.3 | 2.5 | 0.67 | 15 | 6.47 |
-| Cat 4 | 14.6 | 9.5 | 0.59 | 13 | 21.2 |
-| Cat 5 | 28.2 | 18.3 | Cat 4 | 0 | 40.8 |
+| Category | Mean % | SD % | Counties | KCC insured % |
+|---|---|---|---|---|
+| TS | 0.04 | 0.06 | 9 | 0.07 |
+| Cat 1 | 1.4 | 2.3 | 81 | 0.58 |
+| Cat 2 | 2.4 | 1.7 | 16 | 2.04 |
+| Cat 3 | 4.3 | 4.2 | 10 | 6.47 |
+| Cat 4 | 14.2 | 7.5 | 10 | 21.2 |
+| Cat 5 | 27.3 | 14.5 | 0 | 40.8 |
 
-Reading it:
-- **Insured on modelled wind.** The ratios are insured loss over total TIV,
-  keyed on this app's marine-wind categories. That wind runs about 1.4× hot
-  over land (§Post-event evidence), so a modelled Cat 3 county mostly saw
-  Cat 1–2 on the ground. That is why Cat 2–4 sit below vendor ground-up
-  curves.
-- **Uncertainty falls as category rises.** σ ≈ 1 at TS–Cat 2 (a storm can
-  come in at a third or three times the mean) and ≈ 0.6 at Cat 3–4. Low-
-  category loss is driven by things a vulnerability table cannot see:
-  wind-footprint error, tornadoes, demand surge and loss development.
-- **Event totals.** In-sample on the panel field: Ian 0.96, Laura 0.93,
-  Milton 0.84, Irma 0.72, Michael 0.70 of on-levelled PCS. Ida, Helene,
-  Florence, Sally and Delta read
-  low, and so
-  does most of Isaias and Debby, whose loss is outside the hurricane-force
-  field. Broad weak storms read high (Beryl 2.1, Zeta 2.0).
-
-The stored table is migrated to these defaults only when it still equals the
-pre-calibration hand-set values; edited tables are kept.
+The ratios are insured loss over total TIV on this app's marine-wind
+categories, which run about 1.4× hot over land (§Post-event evidence), so
+Cat 2–4 sit below vendor ground-up curves. A stored table still equal to the
+earlier all-event defaults (or the pre-calibration hand-set values) moves to
+these on load; edited tables are kept.
 
 ### PCS-calibrated chip
 
@@ -310,48 +331,53 @@ Each county's speed bins are priced at their midpoint with the same transform
 as the backend (`calibratedLandMph` = `damage_curves.land_mph`, then linear
 between band midpoints, zero at 39 mph land).
 
-The panel does **not** use the all-event log RMS as a symmetric `mean ± SD`.
-That mixed vulnerability uncertainty with footprint, wind-field, exposure,
-loss-development and weak-metro event bias;
-at `σ=1.03`, the implied SD was 1.38× the mean, so every low bound clipped to
-zero. Instead it reports an asymmetric empirical **P10–P90 holdout range**.
-For every one of the 14 events with matching TIV, the curve is fitted without
-that event, then the ratio
-`full on-levelled PCS event total / held-out model` is measured. The observed
-finite-sample interval uses the second-lowest and second-highest factors:
-`[0.415968, 6.559247] × model mean`. That is the equal-tail order-statistic
-analogue of P10–P90 with only 14 observations. It covers 12/14 scorable events
-(85.7%; 12/15 supplied events, with Maria unscorable because the book has no
-matching TIV). Debby lies above it and Zeta below it. The width is real:
-full PCS event totals include losses outside this panel's hurricane-force
-footprint and the wind field has event-specific bias. This is an empirical
-full-event range, not a statement that every dollar outside the wind footprint
-was flood.
+**PCS holdout 80% range.** For each of the 7 wind-dominant training storms,
+the curves are refitted without it and the storm is priced exactly as the
+panel prices it (`_event_set.panel_loss`: panel wind field, bundled book TIV,
+book-mix curve). The factor is on-levelled PCS loss in counties with book TIV
+÷ that held-out panel mean; it includes PCS loss outside the footprint. The
+range is the narrowest span of factors that holds at least 80% of the storms
+(`shortest_coverage`); the panel shows `[low × mean, high × mean]` and each
+category's Low / High DR as `mean × factor`.
 
-Held-out full-event factors and diagnosis:
+| Storm | Held-out factor | In range |
+|---|---:|---|
+| Beryl | 0.596 | yes (low edge) |
+| Milton | 0.919 | yes |
+| Ian | 0.948 | yes |
+| Laura | 1.147 | yes |
+| Michael | 1.379 | yes |
+| Irma | 1.862 | yes (high edge) |
+| Ida | 4.909 | **no** |
 
-| Event | Actual / panel model | Result | Evidence-led reading |
-|---|---:|---|---|
-| Zeta | 0.280 | below range | Broad low wind over New Orleans / Atlanta overprices dense exposure; the model still overstates despite 27% of reported loss outside its field. |
-| Beryl | 0.416 | boundary | Houston low-wind vulnerability is lower than the curve learned from fringes of major storms; observed winds do not support weakening the field. |
-| Laura | 0.949 | covered | Compact major; model and total agree. |
-| Ian | 0.977 | covered | Footprint captures 93% of reported loss; model and total agree. |
-| Milton | 1.141 | covered | Footprint and wind observations are well aligned. |
-| Irma | 1.310 | covered | Remaining difference includes an exposure gap and long loss-development / re-estimation risk. |
-| Michael | 1.327 | covered | Compact major; modest footprint miss and possible demand-surge / loss-development effect. |
-| Florence | 2.507 | covered | 66% of reported loss is outside the panel's hurricane-force field; this is first a footprint mismatch, not proof of insured flood. |
-| Sally | 2.722 | covered | Core station winds ran well above the smooth field and 20% of loss is outside it. |
-| Helene | 4.202 | covered | About 90% of loss is outside the panel field. Hazard reports show water impacts, but PCS excludes NFIP and the PCS cause split is not supplied. |
-| Delta | 4.330 | covered | Wind footprint is too small: nine stations observed TS-force wind where the model had none. |
-| Ida | 4.844 | covered | Footprint miss, demand surge / loss development and possible private or commercial water loss are confounded; the supplied PCS rows do not identify the split. |
-| Isaias | 6.559 | boundary | Almost all loss is outside the panel's hurricane-force-only field; a TS-wind footprint is required for event-total use. |
-| Debby | 35.664 | above range | 99.6% of loss is outside the panel field; a hurricane-force panel cannot price this tropical-storm event total. |
+Range **0.596–1.862 × mean**, 6 of 7 held-out storms inside (86%). An
+equal-tail P10–P90 is not estimable from 7 storms (it would be set by Ida
+alone), so the range is labelled "80% holdout range", not P10–P90. Under
+exchangeability a new storm lands between the 1st and 6th of 7 order
+statistics with probability 5/8, so treat the range as the central spread of
+wind-dominant outcomes, not a guarantee. A lognormal fit to all 7 factors
+gives about 0.58–3.1×; that width is Ida's, and multiplied onto Cat 4–5 it
+would put the high DR near 80%.
 
-No separate demand-surge or loss-creep multiplier is fitted: with 14 scorable
-events it is not identifiable apart from wind and exposure error. The latest
-supplied PCS estimates are used as-is and on-levelled. Ian still agrees at
-0.977; Irma's 1.310 factor remains inside the interval, so neither supports an
-extra post-event multiplier on its own.
+Ida is not excluded. Its biggest-loss parishes saw the modelled wind (Orleans
+ASOS 57 kt sustained vs 54 kt modelled land wind) and still lost 2.4–3.8% of
+TIV at modelled Cat 1, four to six times the curve. That is a vulnerability /
+claims miss on a wind event, which is what the range should report. Its
+remnant NE flooding (28% of its loss) is under the 50% footprint rule.
+
+Excluded storms, scored on the final 7-storm curve (out of sample): Zeta
+0.348, Sally 2.082, Florence 2.723, Helene 4.397, Delta 6.108, Isaias 6.409,
+Debby 79.6; Maria has no TIV to price. None falls inside the range, which is
+why the range is stated for wind-dominant storms only. The panel names an
+excluded storm and says the range does not apply to it.
+
+PCS-calibrated category means (book-mix curve, averaged over each
+category's marine wind) with the range: TS 0.14 (0.08–0.26), Cat 1 0.68
+(0.41–1.3), Cat 2 2.0 (1.2–3.7), Cat 3 5.5 (3.3–10.3), Cat 4 13.5
+(8.0–25.0), Cat 5 24.9 (14.8–46.3) %.
+
+No separate demand-surge or loss-creep multiplier is fitted: with 7 training
+storms it is not identifiable apart from wind and exposure error.
 
 The curve was fitted on the
 tropical-storm field (`ts_field=True`), the panel receives the radii-free
@@ -569,9 +595,10 @@ last supported band (`--tail-min-weight`, as for Cat 5 in the panel table).
 
 We tested whether the PCS set supports segment-specific damage curves, rather
 than assuming that separate residential / commercial / auto curves are better.
-The run uses the corrected event set: no flood-based row exclusion (PCS
-excludes NFIP), every supplied county row on-levelled to the TIV date. Maria
-has no matching TIV, so 14 of 15 events can be scored. Every fold left one
+The run predates the wind-dominant storm set (§Calibration storm set) and
+uses all supplied events: no flood-based row exclusion (PCS excludes NFIP),
+every supplied county row on-levelled to the TIV date. Maria has no matching
+TIV, so 14 of 15 events can be scored. Every fold left one
 whole event out and refitted all loss parameters on the other 13, with the same
 observed-wind transform, on-levelling, KCC insured prior, smoothness, tail rule
 and materiality censoring used by the shipped calibration. The shared prior is

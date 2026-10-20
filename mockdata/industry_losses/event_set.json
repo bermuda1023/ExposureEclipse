@@ -1,0 +1,80 @@
+{
+  "description": "Which supplied PCS events train and score the hurricane damage curves. An event is excluded only by a rule about its loss mechanism or data coverage, never by how well it fits. backend/scripts/_event_set.py computes each metric; the notes record the physical reading.",
+  "rules": {
+    "noExposure": {
+      "maxShare": 0.5,
+      "reason": "Most of the PCS loss is where the industry book has no TIV, so the event cannot be priced."
+    },
+    "stalled": {
+      "minHours": 36,
+      "radiusNm": 100,
+      "reason": "Stalled storm: the centre stayed 36+ hours within 100 nm of its strongest US landfall. Loss is driven by rainfall flooding and wind duration, which a peak-wind damage curve cannot represent (Harvey 2017 is the archetype)."
+    },
+    "outsideFootprint": {
+      "maxShare": 0.5,
+      "reason": "Most of the PCS loss is in counties outside the modelled hurricane-force wind field (inland tropical-storm-force wind, tornadoes, remnant rainfall or flooding), so the curve never sees the wind that caused it."
+    }
+  },
+  "events": {
+    "AL022024": {
+      "name": "Beryl",
+      "mechanism": "Cat 1 landfall at Matagorda Bay. Houston loss is wind: tree fall onto roofs and lines across the metro."
+    },
+    "AL042024": {
+      "name": "Debby",
+      "mechanism": "Cat 1 Big Bend landfall, then a slow track over Georgia and South Carolina with extreme rainfall, and remnant flooding as far as the Northeast. Rain and flood driven."
+    },
+    "AL062018": {
+      "name": "Florence",
+      "mechanism": "Stalled near Wilmington and set North Carolina's rainfall record; river and flash flooding drove the loss. The closest supplied analogue to Harvey."
+    },
+    "AL092020": {
+      "name": "Isaias",
+      "mechanism": "Cat 1 North Carolina landfall, then raced up the East Coast as a tropical storm. Loss came from tropical-storm-force tree fall and tornadoes in the Mid-Atlantic and Northeast."
+    },
+    "AL092021": {
+      "name": "Ida",
+      "mechanism": "Cat 4 Port Fourchon landfall. Louisiana loss is wind, and ASOS winds in Orleans Parish match the model. About 28% of the loss is remnant flash flooding in NY, NJ and PA, below the exclusion threshold, so Ida stays in."
+    },
+    "AL092022": {
+      "name": "Ian",
+      "mechanism": "Cat 4 Cayo Costa landfall with peninsula-wide wind. Lee and Charlotte surge is material, but 93% of the PCS loss is inside the modelled wind field and PCS excludes NFIP."
+    },
+    "AL092024": {
+      "name": "Helene",
+      "mechanism": "Large, fast-moving Cat 4. Loss came from tropical-storm-force wind far inland across Georgia and the Carolinas and from Appalachian freshwater flooding."
+    },
+    "AL112017": {
+      "name": "Irma",
+      "mechanism": "Cat 4 Keys and Cat 3 Marco Island landfalls with peninsula-wide wind. Loss outside the book (USVI / Puerto Rico rows) is left out of the score."
+    },
+    "AL132020": {
+      "name": "Laura",
+      "mechanism": "Compact Cat 4 Cameron landfall. Wind-driven."
+    },
+    "AL142018": {
+      "name": "Michael",
+      "mechanism": "Compact Cat 5 Mexico Beach landfall. Wind-driven; surge was local to the landfall coast."
+    },
+    "AL142024": {
+      "name": "Milton",
+      "mechanism": "Cat 3 Siesta Key landfall. Wind, plus the tornado outbreak ahead of landfall."
+    },
+    "AL152017": {
+      "name": "Maria",
+      "mechanism": "Puerto Rico and USVI, where the industry book carries no TIV."
+    },
+    "AL192020": {
+      "name": "Sally",
+      "mechanism": "Crawled ashore at Gulf Shores at walking pace, with extreme rainfall over Baldwin County and Pensacola. Rain flooding and long-duration wind, not peak wind."
+    },
+    "AL262020": {
+      "name": "Delta",
+      "mechanism": "Landed about 12 miles east of Laura's landfall six weeks later, on Laura-damaged and tarped roofs, so the PCS split between the two events is confounded. Most of the loss was inland, outside the modelled field."
+    },
+    "AL282020": {
+      "name": "Zeta",
+      "mechanism": "Very fast-moving Cat 3 in southeast Louisiana. Tropical-storm-force wind was carried far inland across Mississippi, Alabama, Georgia and the Carolinas."
+    }
+  }
+}

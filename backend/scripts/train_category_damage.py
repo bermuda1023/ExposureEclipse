@@ -30,6 +30,9 @@ table fitted without it. For each category the script reports
 The panel shows mean +/- SD, so SD = mean x sqrt(exp(sigma_event^2) - 1),
 the standard deviation of a lognormal with that mean.
 
+By default only the wind-dominant events in
+``mockdata/industry_losses/event_set.json`` train the table (``_event_set.py``).
+
 Writes ``mockdata/damage_assumptions/sshws_calibrated.json``.
 
   python backend/scripts/train_category_damage.py
@@ -48,6 +51,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT / "backend" / "scripts"))
+
+from _event_set import wind_dominant_ids
 
 from app.services.curve_fit import FitOptions, Observation, fit_with_holdout, predict
 from app.services.damage_curves import load_curve_sets
@@ -107,7 +112,8 @@ def lognormal_sd(mean: float, sigma: float) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--events", nargs="*")
+    parser.add_argument("--events", nargs="*", help="default: the wind-dominant events in event_set.json")
+    parser.add_argument("--all-events", action="store_true", help="every supplied event")
     parser.add_argument("--prior", default="kcc")
     parser.add_argument("--ridge", type=float, default=FitOptions().ridge)
     parser.add_argument("--alpha-event", type=float, default=FitOptions().alpha_event)
@@ -121,7 +127,12 @@ def main() -> None:
     args = parser.parse_args()
 
     actuals = load_actuals()
-    wanted = [e.upper() for e in args.events] if args.events else sorted(actuals)
+    if args.events:
+        wanted = [e.upper() for e in args.events]
+    elif args.all_events:
+        wanted = sorted(actuals)
+    else:
+        wanted = wind_dominant_ids(onlevel=not args.no_onlevel)
     prior_set = load_curve_sets()[args.prior]
 
     obs: dict[str, list[Observation]] = {seg: [] for seg in (*LOSS_SEGMENTS, ALL)}
@@ -298,6 +309,8 @@ def main() -> None:
         "fixTsPct": args.fix_ts,
         "onLevel": not args.no_onlevel,
         "bookMix": {k: round(v, 4) for k, v in mix.items()},
+        "eventSet": "wind-dominant (industry_losses/event_set.json)" if not (args.events or args.all_events)
+        else "explicit",
         "events": events,
         "segments": tables,
     }

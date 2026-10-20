@@ -6,6 +6,13 @@ storm year, and fits one monotone damage curve per segment (residential,
 commercial, auto). With two or more events each event is also scored
 unseen (fit on the others), which is the honest accuracy figure.
 
+By default only the wind-dominant events train the curves: the rules in
+``mockdata/industry_losses/event_set.json`` (``_event_set.py``) drop events
+with no matching TIV, stalled rain-driven storms and storms whose loss is
+mostly outside the modelled wind field. The impact panel's range is the
+narrowest span of leave-one-event-out factors (on-levelled PCS / panel model)
+covering 80% of those events; excluded events are scored on the final curve.
+
 Writes ``mockdata/damage_curves/calibrated-<YYYYMMDD>.json``. The API picks
 the newest calibrated set as the default.
 
@@ -36,6 +43,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "backend" / "scripts"))
+
+from _event_set import blend, load_event_set, panel_loss, scored_actual, screen, shortest_coverage
 
 from app.services.curve_fit import FitOptions, Observation, fit_with_holdout, predict
 from app.services.damage_curves import (
@@ -50,7 +60,7 @@ from app.services.damage_curves import (
 )
 from app.services.event_evidence import load_evidence
 from app.services.event_loss import resolve_storm, storm_impacts
-from app.services.industry_losses import LOSS_SEGMENTS, data_dir, load_actuals, tiv_for_year
+from app.services.industry_losses import LOSS_SEGMENTS, load_actuals, tiv_for_year
 from app.services.loss_calibration import implied_dr_by_band, match_event
 from app.services.onlevel import onlevel_actuals
 from app.services.wind_calibration import county_multipliers, fit_land_shape
@@ -64,6 +74,9 @@ SIGMA_EVENT_FLOOR = 0.15
 MIN_BIAS_STATIONS = 20
 MIN_STRONG_STATIONS = 10
 WIND_CORRECTION_CLAMP = (0.7, 1.3)
+# ASSUMPTION: the panel shows the range that holds 80% of held-out
+# wind-dominant events, an empirical stand-in for P10-P90.
+BAND_COVERAGE = 0.8
 
 
 def event_wind_bias(storm_id: str) -> float | None:
@@ -82,52 +95,68 @@ def _rms(values: list[float]) -> float | None:
     return math.sqrt(sum(v * v for v in values) / len(values))
 
 
-def panel_holdout_band() -> dict | None:
-    """Finite-sample P10-P90 analogue from the panel model's full-event holdouts."""
-    path = data_dir() / "damage_assumptions" / "sshws_calibrated.json"
-    if not path.exists():
+def panel_band(wanted, screened, county_loss, storms, segments, oos_curves, mix, land) -> dict:
+    """Range on the panel's PCS-calibrated mean, from held-out training events."""
+    def oos_blend(storm_id: str) -> list[float]:
+        return blend({seg: (oos_curves.get(seg) or {}).get(storm_id, segments[seg]) for seg in segments}, mix)
+
+    final = blend(segments, mix)
+    rows = []
+    for storm_id in sorted(screened):
+        storm = storms.get(storm_id) or resolve_storm(storm_id)[0]
+        tiv = tiv_for_year(storm.year)
+        actual = scored_actual(county_loss[storm_id], tiv)
+        trained = storm_id in wanted
+        model = panel_loss(storm, oos_blend(storm_id) if trained else final, tiv, land)
+        rows.append({
+            "stormId": storm_id,
+            "name": screened[storm_id].name,
+            "trained": trained,
+            "reasons": screened[storm_id].reasons,
+            "actual": round(actual),
+            "model": round(model),
+            "factor": round(actual / model, 4) if actual > 0 and model > 0 else None,
+        })
+    factors = {r["stormId"]: r["factor"] for r in rows if r["trained"] and r["factor"]}
+    if len(factors) < 3:
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    errors = ((payload.get("segments") or {}).get("ALL") or {}).get(
-        "eventLogErrorHoldout", {}
-    )
-    events = {event["stormId"]: event for event in payload.get("events", [])}
-    factors: dict[str, float] = {}
-    for storm_id, error in errors.items():
-        event = events.get(storm_id) or {}
-        actual = float(event.get("actualTotal") or 0)
-        in_field = float(event.get("inField") or 0)
-        if actual > 0 and in_field > 0:
-            factors[storm_id] = actual / (in_field * math.exp(float(error)))
-    if len(factors) < 5:
-        return None
-    ordered = sorted(factors.items(), key=lambda item: item[1])
-    # With n=14, dropping one observation from each tail is the conservative
-    # finite-sample equal-tail analogue of P10-P90: 12/14 = 85.7% coverage.
-    low = ordered[1][1]
-    high = ordered[-2][1]
-    outside = [storm_id for storm_id, value in factors.items() if not low <= value <= high]
+    low, high, outside = shortest_coverage(factors, BAND_COVERAGE)
+    low = math.floor(low * 1000) / 1000
+    high = math.ceil(high * 1000) / 1000
+    for r in rows:
+        r["withinRange"] = r["factor"] is not None and low <= r["factor"] <= high
+    covered = sum(1 for r in rows if r["trained"] and r["withinRange"])
+    names = {r["stormId"]: r["name"] for r in rows}
+    print(f"Panel range x{low:.3f} - x{high:.3f}: {covered}/{len(factors)} held-out events")
+    for r in sorted(rows, key=lambda r: (not r["trained"], r["factor"] or 0)):
+        tag = "held out" if r["trained"] else "excluded, final curve"
+        print(f"  {r['name']:<9} {tag:<22} actual {r['actual'] / 1e9:6.1f}B model {r['model'] / 1e9:6.1f}B "
+              f"x{(r['factor'] or float('nan')):7.3f} {'in' if r['withinRange'] else 'OUT'}")
     return {
-        # Round outward so both boundary observations remain covered on wire.
-        "lowFactor": math.floor(low * 1_000_000) / 1_000_000,
-        "highFactor": math.ceil(high * 1_000_000) / 1_000_000,
-        "coveredEvents": len(factors) - len(outside),
+        "lowFactor": low,
+        "highFactor": high,
+        "coverageTarget": BAND_COVERAGE,
+        "coveredEvents": covered,
         "scorableEvents": len(factors),
-        "suppliedEvents": len(events),
-        "outsideEvents": sorted(outside),
+        "suppliedEvents": len(screened),
+        "outsideEvents": outside,
+        "appliesTo": "wind-dominant events",
         "basis": (
-            "Finite-sample empirical P10-P90 order-statistic range of full "
-            "on-levelled PCS event total / leave-one-event-out panel model "
-            f"across all {len(factors)} scorable events ({len(factors) - len(outside)}/"
-            f"{len(factors)} covered); PCS excludes NFIP. Maria is unscorable "
-            "because the book has no matching TIV."
+            f"Narrowest range of leave-one-event-out factors (on-levelled PCS loss in the book / "
+            f"panel PCS-calibrated mean) holding {covered} of the {len(factors)} wind-dominant "
+            f"training events; outside it: {', '.join(names[s] for s in outside) or 'none'}. "
+            "PCS excludes NFIP."
         ),
+        "events": rows,
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--events", nargs="*", help="ATCF storm ids (default: every supplied event)")
+    parser.add_argument("--events", nargs="*",
+                        help="ATCF storm ids (default: the wind-dominant events in event_set.json)")
+    parser.add_argument("--all-events", action="store_true",
+                        help="train on every supplied event, ignoring the event-set rules")
     parser.add_argument("--prior", default="kcc", help="curve set used as the prior (default kcc)")
     parser.add_argument("--ridge", type=float, default=FitOptions().ridge)
     parser.add_argument("--alpha-event", type=float, default=FitOptions().alpha_event)
@@ -162,9 +191,34 @@ def main() -> None:
     args = parser.parse_args()
 
     actuals = load_actuals()
-    wanted = [e.upper() for e in args.events] if args.events else sorted(actuals)
-    if not wanted:
+    if not actuals:
         raise SystemExit("No events in mockdata/industry_losses/. Add a CSV first.")
+    event_set = load_event_set()
+    screened = {}
+    county_loss: dict[str, dict[str, float]] = {}
+    for storm_id in sorted(actuals):
+        found = resolve_storm(storm_id)
+        if found is None:
+            raise SystemExit(f"{storm_id}: storm not found in IBTrACS")
+        storm = found[0]
+        tiv = tiv_for_year(storm.year)
+        act = actuals[storm_id] if args.no_onlevel else onlevel_actuals(actuals[storm_id], tiv.as_of)[0]
+        by_county: dict[str, float] = {}
+        for (gid, _seg), loss in act.county.items():
+            by_county[gid] = by_county.get(gid, 0.0) + loss
+        county_loss[storm_id] = by_county
+        screened[storm_id] = screen(storm, by_county, tiv, event_set)
+        s = screened[storm_id]
+        print(f"{storm_id} {s.name:<9} {'IN ' if s.included else 'OUT'} "
+              f"no TIV {s.metrics['noTivShare']:.0%}, outside field "
+              f"{(s.metrics['outsideFootprintShare'] or 0):.0%}, stall {s.metrics['stallHours']} h"
+              + (f"  [{', '.join(s.reasons)}]" if s.reasons else ""))
+    if args.events:
+        wanted = [e.upper() for e in args.events]
+    elif args.all_events:
+        wanted = sorted(actuals)
+    else:
+        wanted = [sid for sid in sorted(actuals) if screened[sid].included]
     prior = load_curve_sets()[args.prior]
     wind_factor = args.wind_factor if args.wind_factor is not None else prior.wind_factor
 
@@ -189,6 +243,7 @@ def main() -> None:
 
     obs: dict[str, list[Observation]] = {seg: [] for seg in LOSS_SEGMENTS}
     event_meta: list[dict] = []
+    storms = {}
     for storm_id in wanted:
         act = actuals.get(storm_id)
         if act is None:
@@ -197,6 +252,7 @@ def main() -> None:
         if found is None:
             raise SystemExit(f"{storm_id}: storm not found in IBTrACS")
         storm, source = found
+        storms[storm_id] = storm
         tiv = tiv_for_year(storm.year)
         if tiv.currency != act.currency:
             raise SystemExit(f"{storm_id}: actuals {act.currency} vs TIV {tiv.currency}")
@@ -257,6 +313,7 @@ def main() -> None:
     weighted_errs: list[tuple[float, float]] = []
     # event -> [reported in field, holdout model, in-sample model], all segments
     holdout_totals: dict[str, list[float]] = {}
+    oos_curves: dict[str, dict[str, list[float]]] = {}
     for seg in LOSS_SEGMENTS:
         prior_curve = insured_prior(prior, seg)
         if len(obs[seg]) < MIN_OBS_PER_SEGMENT:
@@ -266,6 +323,7 @@ def main() -> None:
             continue
         res = fit_with_holdout(obs[seg], prior_curve, opts)
         segments[seg] = res.curve
+        oos_curves[seg] = {ev: res.oos_curves.get(ev, res.curve) for ev in wanted}
         for o in obs[seg]:
             cell = holdout_totals.setdefault(o.event, [0.0, 0.0, 0.0])
             cell[0] += o.actual
@@ -334,12 +392,14 @@ def main() -> None:
     book = tiv_for_year(datetime.now(UTC).year)
     seg_tiv = {seg: sum(v.get(seg, 0.0) for v in book.county.values()) for seg in LOSS_SEGMENTS}
     book_total = sum(seg_tiv.values()) or 1.0
+    book_mix = {seg: v / book_total for seg, v in seg_tiv.items()}
+    band = panel_band(wanted, screened, county_loss, storms, segments, oos_curves, book_mix, land)
 
     now = datetime.now(UTC)
     curve_id = args.id or f"calibrated-{now:%Y%m%d}"
     payload = {
         "id": curve_id,
-        "label": f"Calibrated {now:%Y-%m-%d} ({len(wanted)} events)",
+        "label": f"Calibrated {now:%Y-%m-%d} ({len(wanted)} wind-dominant events)",
         "kind": "calibrated",
         "createdAt": now.isoformat(timespec="seconds"),
         "bandsMphLo": list(BAND_MPH_LO),
@@ -361,8 +421,10 @@ def main() -> None:
             "multiplier": args.multiplier,
             # TIV share by segment in the industry book: the impact panel blends
             # the segment curves with it for a client's bundled TIV.
-            "bookMix": {seg: round(v / book_total, 4) for seg, v in seg_tiv.items()},
-            "panelBand": panel_holdout_band(),
+            "bookMix": {seg: round(v, 4) for seg, v in book_mix.items()},
+            "panelBand": band,
+            "eventRules": {k: {kk: vv for kk, vv in v.items()} for k, v in event_set["rules"].items()},
+            "eventSet": [screened[sid].to_wire() for sid in sorted(screened)],
             "windCorrection": args.wind_correction,
             "windModel": args.wind_model,
             "countyWind": args.county_wind,

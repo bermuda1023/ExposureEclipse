@@ -1,6 +1,6 @@
 {
   "id": "sshws-calibrated-20261020",
-  "createdAt": "2026-10-20T15:22:32+00:00",
+  "createdAt": "2026-10-20T17:07:57+00:00",
   "basis": "insured PCS loss (NFIP and LAE out; private/commercial flood or surge may be in), on-levelled to the TIV date",
   "windField": "compute_impact, historical track, multiplier 2.5, no tropical-storm field",
   "prior": "kcc",
@@ -13,6 +13,7 @@
     "COMMERCIAL": 0.491,
     "AUTO": 0.0311
   },
+  "eventSet": "wind-dominant (industry_losses/event_set.json)",
   "events": [
     {
       "stormId": "AL022024",
@@ -21,33 +22,6 @@
       "actualTotal": 3483490779.9812346,
       "inField": 2406518851.2869835,
       "footprintMiss": 1075936244.190266,
-      "exposureGap": 0.0
-    },
-    {
-      "stormId": "AL042024",
-      "name": "DEBBY",
-      "year": 2024,
-      "actualTotal": 1753775805.4344864,
-      "inField": 6362213.445561068,
-      "footprintMiss": 1746468327.0587325,
-      "exposureGap": 0.0
-    },
-    {
-      "stormId": "AL062018",
-      "name": "FLORENCE",
-      "year": 2018,
-      "actualTotal": 7862181007.470559,
-      "inField": 2707430368.310595,
-      "footprintMiss": 5043125364.673719,
-      "exposureGap": 0.0
-    },
-    {
-      "stormId": "AL092020",
-      "name": "ISAIAS",
-      "year": 2020,
-      "actualTotal": 2873437194.9651833,
-      "inField": 53591395.76719454,
-      "footprintMiss": 2816993725.38624,
       "exposureGap": 0.0
     },
     {
@@ -66,15 +40,6 @@
       "actualTotal": 57480689103.96546,
       "inField": 53510082640.15765,
       "footprintMiss": 3970088082.959601,
-      "exposureGap": 0.0
-    },
-    {
-      "stormId": "AL092024",
-      "name": "HELENE",
-      "year": 2024,
-      "actualTotal": 18311988311.64163,
-      "inField": 1913637614.8035452,
-      "footprintMiss": 16395884753.260057,
       "exposureGap": 0.0
     },
     {
@@ -112,79 +77,29 @@
       "inField": 19264370821.68129,
       "footprintMiss": 6231496073.372349,
       "exposureGap": 0.0
-    },
-    {
-      "stormId": "AL152017",
-      "name": "MARIA",
-      "year": 2017,
-      "actualTotal": 42114863777.66427,
-      "inField": 0.0,
-      "footprintMiss": 0.0,
-      "exposureGap": 36100322168.59732
-    },
-    {
-      "stormId": "AL192020",
-      "name": "SALLY",
-      "year": 2020,
-      "actualTotal": 4990936927.340937,
-      "inField": 4011158856.3595023,
-      "footprintMiss": 978530905.8107724,
-      "exposureGap": 0.0
-    },
-    {
-      "stormId": "AL262020",
-      "name": "DELTA",
-      "year": 2020,
-      "actualTotal": 2586435767.143344,
-      "inField": 784903280.3570248,
-      "footprintMiss": 1800422014.2939756,
-      "exposureGap": 0.0
-    },
-    {
-      "stormId": "AL282020",
-      "name": "ZETA",
-      "year": 2020,
-      "actualTotal": 3591752514.0732555,
-      "inField": 1576441767.0501027,
-      "footprintMiss": 2014832112.5388255,
-      "exposureGap": 0.0
     }
   ],
   "segments": {
     "ALL": {
-      "nObs": 208,
+      "nObs": 126,
       "events": [
         "AL022024",
-        "AL042024",
-        "AL062018",
-        "AL092020",
         "AL092021",
         "AL092022",
-        "AL092024",
         "AL112017",
         "AL132020",
         "AL142018",
-        "AL142024",
-        "AL192020",
-        "AL262020",
-        "AL282020"
+        "AL142024"
       ],
-      "pooledSigmaLogEvent": 1.109,
+      "pooledSigmaLogEvent": 1.067,
       "eventLogErrorHoldout": {
-        "AL022024": 1.247,
-        "AL042024": 2.045,
-        "AL062018": 0.147,
-        "AL092020": 2.101,
-        "AL092021": -1.249,
-        "AL092022": 0.095,
-        "AL092024": 0.823,
-        "AL112017": 0.135,
-        "AL132020": 0.312,
-        "AL142018": -0.125,
-        "AL142024": 0.148,
-        "AL192020": -0.783,
-        "AL262020": -0.273,
-        "AL282020": 2.096
+        "AL022024": 1.926,
+        "AL092021": -1.03,
+        "AL092022": 0.204,
+        "AL112017": 0.688,
+        "AL132020": 0.394,
+        "AL142018": -0.089,
+        "AL142024": 0.93
       },
       "categories": [
         {
@@ -194,27 +109,27 @@
           "fitPct": 0.04,
           "identified": true,
           "fixed": true,
-          "sdPct": 0.062,
+          "sdPct": 0.058,
           "priorPct": 0.067,
-          "tivAreaShare": 0.055,
+          "tivAreaShare": 0.0639,
           "countiesDominant": 9,
           "empiricalPct": 1.26,
-          "sigmaLogCountyHoldout": 3.09,
-          "countyBiasHoldout": -2.269,
-          "sigmaLogEventHoldout": 2.991,
-          "sigmaUsed": 1.109,
+          "sigmaLogCountyHoldout": 2.92,
+          "countyBiasHoldout": -2.237,
+          "sigmaLogEventHoldout": 2.669,
+          "sigmaUsed": 1.067,
           "sigmaSource": "pooled event holdout (ratio fixed)",
           "eventErrors": {
             "AL092021": {
-              "logError": -5.399,
+              "logError": -5.15,
               "actual": 145268860
             },
             "AL092022": {
-              "logError": -3.0,
+              "logError": -2.676,
               "actual": 897223509
             },
             "AL112017": {
-              "logError": -2.222,
+              "logError": -1.811,
               "actual": 3738963337
             }
           }
@@ -222,215 +137,167 @@
         {
           "category": 1,
           "label": "Cat 1",
-          "meanPct": 1.0,
-          "fitPct": 1.0,
+          "meanPct": 1.439,
+          "fitPct": 1.439,
           "identified": true,
           "fixed": false,
-          "sdPct": 1.443,
+          "sdPct": 2.252,
           "priorPct": 0.581,
-          "tivAreaShare": 0.6478,
-          "countiesDominant": 140,
-          "empiricalPct": 1.292,
-          "sigmaLogCountyHoldout": 1.791,
-          "countyBiasHoldout": -0.383,
-          "sigmaLogEventHoldout": 1.061,
-          "sigmaUsed": 1.061,
+          "tivAreaShare": 0.6665,
+          "countiesDominant": 81,
+          "empiricalPct": 1.335,
+          "sigmaLogCountyHoldout": 1.829,
+          "countyBiasHoldout": -0.227,
+          "sigmaLogEventHoldout": 1.113,
+          "sigmaUsed": 1.113,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL022024": {
-              "logError": 1.247,
+              "logError": 1.926,
               "actual": 2406518851
             },
-            "AL062018": {
-              "logError": 0.147,
-              "actual": 2707430368
-            },
-            "AL092020": {
-              "logError": 2.101,
-              "actual": 53591396
-            },
             "AL092021": {
-              "logError": -1.67,
+              "logError": -1.426,
               "actual": 15369773468
             },
             "AL092022": {
-              "logError": -0.171,
+              "logError": 0.064,
               "actual": 22358975877
             },
-            "AL092024": {
-              "logError": 0.162,
-              "actual": 862534104
-            },
             "AL112017": {
-              "logError": 0.5,
+              "logError": 1.057,
               "actual": 17111757806
             },
             "AL132020": {
-              "logError": -1.666,
+              "logError": -1.324,
               "actual": 3253364271
             },
             "AL142018": {
-              "logError": -1.595,
+              "logError": -1.339,
               "actual": 4653606941
             },
             "AL142024": {
-              "logError": -0.042,
+              "logError": 0.543,
               "actual": 8460167759
-            },
-            "AL192020": {
-              "logError": -1.788,
-              "actual": 1076364969
-            },
-            "AL262020": {
-              "logError": -0.355,
-              "actual": 778772334
-            },
-            "AL282020": {
-              "logError": 0.82,
-              "actual": 577365546
             }
           }
         },
         {
           "category": 2,
           "label": "Cat 2",
-          "meanPct": 1.362,
-          "fitPct": 1.362,
+          "meanPct": 2.39,
+          "fitPct": 2.39,
           "identified": true,
           "fixed": false,
-          "sdPct": 1.591,
+          "sdPct": 1.741,
           "priorPct": 2.044,
-          "tivAreaShare": 0.1854,
-          "countiesDominant": 31,
-          "empiricalPct": 1.683,
-          "sigmaLogCountyHoldout": 1.46,
-          "countyBiasHoldout": -0.364,
-          "sigmaLogEventHoldout": 0.928,
-          "sigmaUsed": 0.928,
+          "tivAreaShare": 0.1486,
+          "countiesDominant": 16,
+          "empiricalPct": 2.242,
+          "sigmaLogCountyHoldout": 0.923,
+          "countyBiasHoldout": -0.427,
+          "sigmaLogEventHoldout": 0.652,
+          "sigmaUsed": 0.652,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -1.133,
+              "logError": -0.782,
               "actual": 5795780689
             },
             "AL092022": {
-              "logError": -0.117,
+              "logError": 0.285,
               "actual": 548622831
             },
-            "AL092024": {
-              "logError": 0.341,
-              "actual": 294413811
-            },
             "AL112017": {
-              "logError": -0.426,
+              "logError": 0.117,
               "actual": 9658561431
             },
             "AL132020": {
-              "logError": -0.776,
+              "logError": -0.339,
               "actual": 691020898
             },
             "AL142018": {
-              "logError": -1.424,
+              "logError": -0.94,
               "actual": 85760668
             },
             "AL142024": {
-              "logError": -0.032,
+              "logError": 0.96,
               "actual": 5929412493
-            },
-            "AL192020": {
-              "logError": -0.574,
-              "actual": 2934793888
-            },
-            "AL282020": {
-              "logError": 2.463,
-              "actual": 925223751
             }
           }
         },
         {
           "category": 3,
           "label": "Cat 3",
-          "meanPct": 3.325,
-          "fitPct": 3.325,
+          "meanPct": 4.328,
+          "fitPct": 4.328,
           "identified": true,
           "fixed": false,
-          "sdPct": 2.506,
+          "sdPct": 4.245,
           "priorPct": 6.469,
-          "tivAreaShare": 0.0595,
-          "countiesDominant": 15,
-          "empiricalPct": 2.299,
-          "sigmaLogCountyHoldout": 1.121,
-          "countyBiasHoldout": 0.308,
-          "sigmaLogEventHoldout": 0.671,
-          "sigmaUsed": 0.671,
+          "tivAreaShare": 0.061,
+          "countiesDominant": 10,
+          "empiricalPct": 2.512,
+          "sigmaLogCountyHoldout": 0.76,
+          "countyBiasHoldout": 0.036,
+          "sigmaLogEventHoldout": 0.821,
+          "sigmaUsed": 0.821,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.242,
+              "logError": -0.15,
               "actual": 1874914505
             },
             "AL092022": {
-              "logError": -0.455,
+              "logError": -0.266,
               "actual": 743277590
             },
-            "AL092024": {
-              "logError": 1.0,
-              "actual": 575021171
-            },
             "AL132020": {
-              "logError": -0.596,
+              "logError": -0.439,
               "actual": 1018580110
             },
             "AL142018": {
-              "logError": 0.003,
+              "logError": 0.169,
               "actual": 925253076
             },
             "AL142024": {
-              "logError": 0.553,
+              "logError": 1.347,
               "actual": 4874790570
-            },
-            "AL282020": {
-              "logError": 2.185,
-              "actual": 73852470
             }
           }
         },
         {
           "category": 4,
           "label": "Cat 4",
-          "meanPct": 14.631,
-          "fitPct": 14.631,
+          "meanPct": 14.185,
+          "fitPct": 14.185,
           "identified": true,
           "fixed": false,
-          "sdPct": 9.531,
+          "sdPct": 7.508,
           "priorPct": 21.205,
-          "tivAreaShare": 0.0508,
-          "countiesDominant": 13,
-          "empiricalPct": 9.463,
-          "sigmaLogCountyHoldout": 1.347,
-          "countyBiasHoldout": 0.419,
-          "sigmaLogEventHoldout": 0.595,
-          "sigmaUsed": 0.595,
+          "tivAreaShare": 0.0583,
+          "countiesDominant": 10,
+          "empiricalPct": 9.624,
+          "sigmaLogCountyHoldout": 0.815,
+          "countyBiasHoldout": 0.36,
+          "sigmaLogEventHoldout": 0.497,
+          "sigmaUsed": 0.497,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.799,
+              "logError": -0.729,
               "actual": 2549194270
             },
             "AL092022": {
-              "logError": 0.298,
+              "logError": 0.334,
               "actual": 28961982833
             },
-            "AL092024": {
-              "logError": 2.019,
-              "actual": 181668529
-            },
             "AL132020": {
-              "logError": 0.721,
+              "logError": 0.779,
               "actual": 7672649585
             },
             "AL142018": {
-              "logError": 0.158,
+              "logError": 0.164,
               "actual": 10721971001
             }
           }
@@ -438,58 +305,44 @@
         {
           "category": 5,
           "label": "Cat 5",
-          "meanPct": 28.161,
-          "fitPct": 41.922,
+          "meanPct": 27.302,
+          "fitPct": 41.999,
           "identified": false,
           "fixed": false,
-          "sdPct": 18.343,
+          "sdPct": 14.45,
           "priorPct": 40.812,
-          "tivAreaShare": 0.0014,
+          "tivAreaShare": 0.0017,
           "countiesDominant": 0,
           "empiricalPct": null,
           "sigmaLogCountyHoldout": null,
           "countyBiasHoldout": null,
           "sigmaLogEventHoldout": null,
-          "sigmaUsed": 0.595,
+          "sigmaUsed": 0.497,
           "sigmaSource": "Cat 4 event holdout (not identified)",
           "eventErrors": {}
         }
       ]
     },
     "RESIDENTIAL": {
-      "nObs": 208,
+      "nObs": 126,
       "events": [
         "AL022024",
-        "AL042024",
-        "AL062018",
-        "AL092020",
         "AL092021",
         "AL092022",
-        "AL092024",
         "AL112017",
         "AL132020",
         "AL142018",
-        "AL142024",
-        "AL192020",
-        "AL262020",
-        "AL282020"
+        "AL142024"
       ],
-      "pooledSigmaLogEvent": 1.173,
+      "pooledSigmaLogEvent": 1.202,
       "eventLogErrorHoldout": {
-        "AL022024": 1.328,
-        "AL042024": 1.972,
-        "AL062018": 0.309,
-        "AL092020": 2.305,
-        "AL092021": -1.382,
-        "AL092022": 0.648,
-        "AL092024": 0.719,
-        "AL112017": 0.007,
-        "AL132020": 0.119,
-        "AL142018": -0.555,
-        "AL142024": 0.564,
-        "AL192020": -0.743,
-        "AL262020": -0.643,
-        "AL282020": 1.845
+        "AL022024": 1.913,
+        "AL092021": -1.247,
+        "AL092022": 0.775,
+        "AL112017": 0.47,
+        "AL132020": 0.177,
+        "AL142018": -0.511,
+        "AL142024": 1.342
       },
       "categories": [
         {
@@ -499,27 +352,27 @@
           "fitPct": 0.04,
           "identified": true,
           "fixed": true,
-          "sdPct": 0.069,
+          "sdPct": 0.072,
           "priorPct": 0.081,
-          "tivAreaShare": 0.0532,
+          "tivAreaShare": 0.0613,
           "countiesDominant": 9,
           "empiricalPct": 1.879,
-          "sigmaLogCountyHoldout": 3.167,
-          "countyBiasHoldout": -2.652,
-          "sigmaLogEventHoldout": 2.859,
-          "sigmaUsed": 1.173,
+          "sigmaLogCountyHoldout": 3.009,
+          "countyBiasHoldout": -2.46,
+          "sigmaLogEventHoldout": 2.539,
+          "sigmaUsed": 1.202,
           "sigmaSource": "pooled event holdout (ratio fixed)",
           "eventErrors": {
             "AL092021": {
-              "logError": -5.148,
+              "logError": -4.916,
               "actual": 87160581
             },
             "AL092022": {
-              "logError": -2.578,
+              "logError": -2.262,
               "actual": 469167387
             },
             "AL112017": {
-              "logError": -2.369,
+              "logError": -1.979,
               "actual": 2909691338
             }
           }
@@ -527,211 +380,163 @@
         {
           "category": 1,
           "label": "Cat 1",
-          "meanPct": 1.276,
-          "fitPct": 1.276,
+          "meanPct": 1.8,
+          "fitPct": 1.8,
           "identified": true,
           "fixed": false,
-          "sdPct": 1.984,
+          "sdPct": 3.121,
           "priorPct": 0.693,
-          "tivAreaShare": 0.6544,
-          "countiesDominant": 140,
-          "empiricalPct": 1.523,
-          "sigmaLogCountyHoldout": 1.833,
-          "countyBiasHoldout": -0.424,
-          "sigmaLogEventHoldout": 1.108,
-          "sigmaUsed": 1.108,
+          "tivAreaShare": 0.6677,
+          "countiesDominant": 81,
+          "empiricalPct": 1.578,
+          "sigmaLogCountyHoldout": 1.782,
+          "countyBiasHoldout": -0.42,
+          "sigmaLogEventHoldout": 1.178,
+          "sigmaUsed": 1.178,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL022024": {
-              "logError": 1.328,
+              "logError": 1.913,
               "actual": 1846852714
             },
-            "AL062018": {
-              "logError": 0.309,
-              "actual": 1662102949
-            },
-            "AL092020": {
-              "logError": 2.305,
-              "actual": 33710932
-            },
             "AL092021": {
-              "logError": -1.724,
+              "logError": -1.531,
               "actual": 9360375427
             },
             "AL092022": {
-              "logError": 0.207,
+              "logError": 0.414,
               "actual": 11668631265
             },
-            "AL092024": {
-              "logError": 0.242,
-              "actual": 429021649
-            },
             "AL112017": {
-              "logError": 0.194,
+              "logError": 0.666,
               "actual": 12976577234
             },
             "AL132020": {
-              "logError": -1.539,
+              "logError": -1.249,
               "actual": 1752959104
             },
             "AL142018": {
-              "logError": -1.871,
+              "logError": -1.639,
               "actual": 3150377118
             },
             "AL142024": {
-              "logError": 0.4,
+              "logError": 0.917,
               "actual": 3316755788
-            },
-            "AL192020": {
-              "logError": -1.522,
-              "actual": 639309952
-            },
-            "AL262020": {
-              "logError": -0.677,
-              "actual": 539560760
-            },
-            "AL282020": {
-              "logError": 0.984,
-              "actual": 289261884
             }
           }
         },
         {
           "category": 2,
           "label": "Cat 2",
-          "meanPct": 1.532,
-          "fitPct": 1.532,
+          "meanPct": 2.233,
+          "fitPct": 2.233,
           "identified": true,
           "fixed": false,
-          "sdPct": 1.945,
+          "sdPct": 2.802,
           "priorPct": 2.391,
-          "tivAreaShare": 0.1797,
-          "countiesDominant": 31,
-          "empiricalPct": 1.683,
-          "sigmaLogCountyHoldout": 1.419,
-          "countyBiasHoldout": -0.158,
-          "sigmaLogEventHoldout": 0.98,
-          "sigmaUsed": 0.98,
+          "tivAreaShare": 0.1491,
+          "countiesDominant": 16,
+          "empiricalPct": 2.045,
+          "sigmaLogCountyHoldout": 1.282,
+          "countyBiasHoldout": -0.525,
+          "sigmaLogEventHoldout": 0.972,
+          "sigmaUsed": 0.972,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -1.48,
+              "logError": -1.322,
               "actual": 3578135855
             },
             "AL092022": {
-              "logError": -0.226,
+              "logError": 0.044,
               "actual": 288515644
             },
-            "AL092024": {
-              "logError": 0.191,
-              "actual": 148975907
-            },
             "AL112017": {
-              "logError": -0.003,
+              "logError": 0.429,
               "actual": 4055309349
             },
             "AL132020": {
-              "logError": -0.981,
+              "logError": -0.663,
               "actual": 383703488
             },
             "AL142024": {
-              "logError": 0.324,
+              "logError": 1.223,
               "actual": 2312415461
-            },
-            "AL192020": {
-              "logError": -0.557,
-              "actual": 1686061013
-            },
-            "AL282020": {
-              "logError": 2.097,
-              "actual": 571600634
             }
           }
         },
         {
           "category": 3,
           "label": "Cat 3",
-          "meanPct": 2.779,
-          "fitPct": 2.779,
+          "meanPct": 3.427,
+          "fitPct": 3.427,
           "identified": true,
           "fixed": false,
-          "sdPct": 2.408,
+          "sdPct": 5.422,
           "priorPct": 7.264,
-          "tivAreaShare": 0.0603,
-          "countiesDominant": 15,
-          "empiricalPct": 1.994,
-          "sigmaLogCountyHoldout": 1.078,
-          "countyBiasHoldout": 0.422,
-          "sigmaLogEventHoldout": 0.748,
-          "sigmaUsed": 0.748,
+          "tivAreaShare": 0.062,
+          "countiesDominant": 10,
+          "empiricalPct": 2.088,
+          "sigmaLogCountyHoldout": 0.956,
+          "countyBiasHoldout": 0.564,
+          "sigmaLogEventHoldout": 1.12,
+          "sigmaUsed": 1.12,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.294,
+              "logError": -0.24,
               "actual": 1123626031
             },
             "AL092022": {
-              "logError": -0.479,
+              "logError": -0.353,
               "actual": 383649768
             },
-            "AL092024": {
-              "logError": 0.562,
-              "actual": 363590376
-            },
             "AL132020": {
-              "logError": -0.549,
+              "logError": -0.449,
               "actual": 540948967
             },
             "AL142018": {
-              "logError": 0.405,
+              "logError": 0.524,
               "actual": 246624335
             },
             "AL142024": {
-              "logError": 0.986,
+              "logError": 1.895,
               "actual": 1905678188
-            },
-            "AL282020": {
-              "logError": 1.92,
-              "actual": 46458853
             }
           }
         },
         {
           "category": 4,
           "label": "Cat 4",
-          "meanPct": 18.962,
-          "fitPct": 18.962,
+          "meanPct": 18.645,
+          "fitPct": 18.645,
           "identified": true,
           "fixed": false,
-          "sdPct": 18.313,
+          "sdPct": 16.865,
           "priorPct": 22.66,
-          "tivAreaShare": 0.0514,
-          "countiesDominant": 13,
-          "empiricalPct": 10.623,
-          "sigmaLogCountyHoldout": 1.495,
-          "countyBiasHoldout": 0.689,
-          "sigmaLogEventHoldout": 0.812,
-          "sigmaUsed": 0.812,
+          "tivAreaShare": 0.0586,
+          "countiesDominant": 10,
+          "empiricalPct": 10.775,
+          "sigmaLogCountyHoldout": 0.831,
+          "countyBiasHoldout": 0.529,
+          "sigmaLogEventHoldout": 0.773,
+          "sigmaUsed": 0.773,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.92,
+              "logError": -0.871,
               "actual": 1549253783
             },
             "AL092022": {
-              "logError": 0.939,
+              "logError": 1.033,
               "actual": 14918112851
             },
-            "AL092024": {
-              "logError": 2.333,
-              "actual": 68801783
-            },
             "AL132020": {
-              "logError": 0.497,
+              "logError": 0.533,
               "actual": 4214706058
             },
             "AL142018": {
-              "logError": -0.327,
+              "logError": -0.308,
               "actual": 7391622341
             }
           }
@@ -739,58 +544,44 @@
         {
           "category": 5,
           "label": "Cat 5",
-          "meanPct": 35.849,
-          "fitPct": 81.101,
+          "meanPct": 35.25,
+          "fitPct": 90.656,
           "identified": false,
           "fixed": false,
-          "sdPct": 34.622,
+          "sdPct": 31.884,
           "priorPct": 42.841,
-          "tivAreaShare": 0.0011,
+          "tivAreaShare": 0.0012,
           "countiesDominant": 0,
           "empiricalPct": null,
           "sigmaLogCountyHoldout": null,
           "countyBiasHoldout": null,
           "sigmaLogEventHoldout": null,
-          "sigmaUsed": 0.812,
+          "sigmaUsed": 0.773,
           "sigmaSource": "Cat 4 event holdout (not identified)",
           "eventErrors": {}
         }
       ]
     },
     "COMMERCIAL": {
-      "nObs": 208,
+      "nObs": 126,
       "events": [
         "AL022024",
-        "AL042024",
-        "AL062018",
-        "AL092020",
         "AL092021",
         "AL092022",
-        "AL092024",
         "AL112017",
         "AL132020",
         "AL142018",
-        "AL142024",
-        "AL192020",
-        "AL262020",
-        "AL282020"
+        "AL142024"
       ],
-      "pooledSigmaLogEvent": 1.247,
+      "pooledSigmaLogEvent": 1.095,
       "eventLogErrorHoldout": {
-        "AL022024": 1.211,
-        "AL042024": 3.307,
-        "AL062018": -0.419,
-        "AL092020": 2.978,
-        "AL092021": -1.134,
-        "AL092022": -0.52,
-        "AL092024": 1.272,
-        "AL112017": -0.007,
-        "AL132020": 0.412,
-        "AL142018": 0.41,
-        "AL142024": -0.274,
-        "AL192020": -0.438,
-        "AL262020": -0.053,
-        "AL282020": 2.423
+        "AL022024": 2.396,
+        "AL092021": -0.763,
+        "AL092022": -0.329,
+        "AL112017": 0.888,
+        "AL132020": 0.48,
+        "AL142018": 0.446,
+        "AL142024": 0.623
       },
       "categories": [
         {
@@ -800,27 +591,27 @@
           "fitPct": 0.04,
           "identified": true,
           "fixed": true,
-          "sdPct": 0.077,
+          "sdPct": 0.061,
           "priorPct": 0.057,
-          "tivAreaShare": 0.0565,
+          "tivAreaShare": 0.0664,
           "countiesDominant": 9,
           "empiricalPct": 0.674,
-          "sigmaLogCountyHoldout": 3.095,
-          "countyBiasHoldout": -1.691,
-          "sigmaLogEventHoldout": 3.506,
-          "sigmaUsed": 1.247,
+          "sigmaLogCountyHoldout": 2.862,
+          "countyBiasHoldout": -1.465,
+          "sigmaLogEventHoldout": 3.02,
+          "sigmaUsed": 1.095,
           "sigmaSource": "pooled event holdout (ratio fixed)",
           "eventErrors": {
             "AL092021": {
-              "logError": -6.126,
+              "logError": -5.616,
               "actual": 55527932
             },
             "AL092022": {
-              "logError": -3.849,
+              "logError": -3.256,
               "actual": 366930093
             },
             "AL112017": {
-              "logError": -1.958,
+              "logError": -1.457,
               "actual": 781061350
             }
           }
@@ -828,211 +619,167 @@
         {
           "category": 1,
           "label": "Cat 1",
-          "meanPct": 0.508,
-          "fitPct": 0.508,
+          "meanPct": 1.002,
+          "fitPct": 1.002,
           "identified": true,
           "fixed": false,
-          "sdPct": 0.937,
+          "sdPct": 1.746,
           "priorPct": 0.504,
-          "tivAreaShare": 0.6409,
-          "countiesDominant": 140,
-          "empiricalPct": 1.027,
-          "sigmaLogCountyHoldout": 2.096,
-          "countyBiasHoldout": -0.687,
-          "sigmaLogEventHoldout": 1.218,
-          "sigmaUsed": 1.218,
+          "tivAreaShare": 0.6665,
+          "countiesDominant": 81,
+          "empiricalPct": 1.062,
+          "sigmaLogCountyHoldout": 2.16,
+          "countyBiasHoldout": -0.217,
+          "sigmaLogEventHoldout": 1.181,
+          "sigmaUsed": 1.181,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL022024": {
-              "logError": 1.211,
+              "logError": 2.396,
               "actual": 404009846
             },
-            "AL062018": {
-              "logError": -0.419,
-              "actual": 873947594
-            },
             "AL092021": {
-              "logError": -1.824,
+              "logError": -1.366,
               "actual": 5736119899
             },
             "AL092022": {
-              "logError": -0.65,
+              "logError": -0.24,
               "actual": 9175871370
             },
-            "AL092024": {
-              "logError": 0.196,
-              "actual": 260299444
-            },
             "AL112017": {
-              "logError": 0.719,
+              "logError": 1.668,
               "actual": 3718069612
             },
             "AL132020": {
-              "logError": -2.004,
+              "logError": -1.445,
               "actual": 1397864448
             },
             "AL142018": {
-              "logError": -1.474,
+              "logError": -1.037,
               "actual": 1445456220
             },
             "AL142024": {
-              "logError": -0.634,
+              "logError": 0.22,
               "actual": 4800921598
-            },
-            "AL192020": {
-              "logError": -2.387,
-              "actual": 329850816
-            },
-            "AL262020": {
-              "logError": -0.224,
-              "actual": 205043866
-            },
-            "AL282020": {
-              "logError": 0.478,
-              "actual": 233442267
             }
           }
         },
         {
           "category": 2,
           "label": "Cat 2",
-          "meanPct": 1.331,
-          "fitPct": 1.331,
+          "meanPct": 2.782,
+          "fitPct": 2.782,
           "identified": true,
           "fixed": false,
-          "sdPct": 1.822,
+          "sdPct": 1.717,
           "priorPct": 1.821,
-          "tivAreaShare": 0.1921,
-          "countiesDominant": 31,
-          "empiricalPct": 1.695,
-          "sigmaLogCountyHoldout": 1.727,
-          "countyBiasHoldout": 0.062,
-          "sigmaLogEventHoldout": 1.027,
-          "sigmaUsed": 1.027,
+          "tivAreaShare": 0.1474,
+          "countiesDominant": 16,
+          "empiricalPct": 2.556,
+          "sigmaLogCountyHoldout": 1.058,
+          "countyBiasHoldout": -0.055,
+          "sigmaLogEventHoldout": 0.568,
+          "sigmaUsed": 0.568,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.67,
+              "logError": -0.172,
               "actual": 2114180372
             },
             "AL092022": {
-              "logError": 0.093,
+              "logError": 0.57,
               "actual": 221834929
             },
-            "AL092024": {
-              "logError": 0.933,
-              "actual": 87579070
-            },
             "AL112017": {
-              "logError": -0.92,
+              "logError": -0.218,
               "actual": 5501638211
             },
             "AL132020": {
-              "logError": -0.511,
+              "logError": 0.028,
               "actual": 285870168
             },
             "AL142018": {
-              "logError": -2.136,
+              "logError": -1.5,
               "actual": 79018840
             },
             "AL142024": {
-              "logError": -0.272,
+              "logError": 0.839,
               "actual": 3378438811
-            },
-            "AL192020": {
-              "logError": -0.174,
-              "actual": 936045188
-            },
-            "AL282020": {
-              "logError": 2.895,
-              "actual": 321446500
             }
           }
         },
         {
           "category": 3,
           "label": "Cat 3",
-          "meanPct": 3.973,
-          "fitPct": 3.973,
+          "meanPct": 5.229,
+          "fitPct": 5.229,
           "identified": true,
           "fixed": false,
-          "sdPct": 3.339,
+          "sdPct": 3.155,
           "priorPct": 6.063,
-          "tivAreaShare": 0.0585,
-          "countiesDominant": 15,
-          "empiricalPct": 2.704,
-          "sigmaLogCountyHoldout": 1.399,
-          "countyBiasHoldout": 0.378,
-          "sigmaLogEventHoldout": 0.731,
-          "sigmaUsed": 0.731,
+          "tivAreaShare": 0.0598,
+          "countiesDominant": 10,
+          "empiricalPct": 3.096,
+          "sigmaLogCountyHoldout": 0.749,
+          "countyBiasHoldout": 0.558,
+          "sigmaLogEventHoldout": 0.557,
+          "sigmaUsed": 0.557,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.188,
+              "logError": -0.038,
               "actual": 718995127
             },
             "AL092022": {
-              "logError": -0.271,
+              "logError": 0.01,
               "actual": 308624337
             },
-            "AL092024": {
-              "logError": 1.679,
-              "actual": 180677783
-            },
             "AL132020": {
-              "logError": -0.658,
+              "logError": -0.478,
               "actual": 446921850
             },
             "AL142018": {
-              "logError": -0.223,
+              "logError": -0.015,
               "actual": 665912671
             },
             "AL142024": {
-              "logError": 0.145,
+              "logError": 0.87,
               "actual": 2773104768
-            },
-            "AL282020": {
-              "logError": 2.646,
-              "actual": 25230547
             }
           }
         },
         {
           "category": 4,
           "label": "Cat 4",
-          "meanPct": 10.9,
-          "fitPct": 10.9,
+          "meanPct": 10.207,
+          "fitPct": 10.207,
           "identified": true,
           "fixed": false,
-          "sdPct": 9.895,
+          "sdPct": 7.624,
           "priorPct": 20.995,
-          "tivAreaShare": 0.0501,
-          "countiesDominant": 13,
-          "empiricalPct": 7.905,
-          "sigmaLogCountyHoldout": 1.594,
-          "countyBiasHoldout": 0.809,
-          "sigmaLogEventHoldout": 0.775,
-          "sigmaUsed": 0.775,
+          "tivAreaShare": 0.0578,
+          "countiesDominant": 10,
+          "empiricalPct": 8.074,
+          "sigmaLogCountyHoldout": 1.049,
+          "countyBiasHoldout": 0.66,
+          "sigmaLogEventHoldout": 0.666,
+          "sigmaUsed": 0.666,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.695,
+              "logError": -0.581,
               "actual": 955739210
             },
             "AL092022": {
-              "logError": -0.426,
+              "logError": -0.41,
               "actual": 12144036702
             },
-            "AL092024": {
-              "logError": 2.386,
-              "actual": 51885079
-            },
             "AL132020": {
-              "logError": 0.843,
+              "logError": 0.877,
               "actual": 3229794141
             },
             "AL142018": {
-              "logError": 0.856,
+              "logError": 0.851,
               "actual": 2866721825
             }
           }
@@ -1040,58 +787,44 @@
         {
           "category": 5,
           "label": "Cat 5",
-          "meanPct": 21.359,
-          "fitPct": 21.113,
+          "meanPct": 20.002,
+          "fitPct": 17.612,
           "identified": false,
           "fixed": false,
-          "sdPct": 19.389,
+          "sdPct": 14.94,
           "priorPct": 41.141,
-          "tivAreaShare": 0.0018,
+          "tivAreaShare": 0.0022,
           "countiesDominant": 0,
           "empiricalPct": null,
           "sigmaLogCountyHoldout": null,
           "countyBiasHoldout": null,
           "sigmaLogEventHoldout": null,
-          "sigmaUsed": 0.775,
+          "sigmaUsed": 0.666,
           "sigmaSource": "Cat 4 event holdout (not identified)",
           "eventErrors": {}
         }
       ]
     },
     "AUTO": {
-      "nObs": 208,
+      "nObs": 126,
       "events": [
         "AL022024",
-        "AL042024",
-        "AL062018",
-        "AL092020",
         "AL092021",
         "AL092022",
-        "AL092024",
         "AL112017",
         "AL132020",
         "AL142018",
-        "AL142024",
-        "AL192020",
-        "AL262020",
-        "AL282020"
+        "AL142024"
       ],
-      "pooledSigmaLogEvent": 0.939,
+      "pooledSigmaLogEvent": 0.92,
       "eventLogErrorHoldout": {
-        "AL022024": 0.762,
-        "AL042024": 0.802,
-        "AL062018": 0.254,
-        "AL092020": 0.39,
-        "AL092021": -0.374,
-        "AL092022": -0.419,
-        "AL092024": -0.45,
-        "AL112017": 1.41,
-        "AL132020": 0.154,
-        "AL142018": 0.017,
-        "AL142024": 0.277,
-        "AL192020": -1.55,
-        "AL262020": -0.281,
-        "AL282020": 1.497
+        "AL022024": 0.641,
+        "AL092021": -0.472,
+        "AL092022": -0.439,
+        "AL112017": 1.46,
+        "AL132020": 0.199,
+        "AL142018": 0.046,
+        "AL142024": 0.225
       },
       "categories": [
         {
@@ -1101,23 +834,23 @@
           "fitPct": 0.04,
           "identified": true,
           "fixed": true,
-          "sdPct": 0.048,
+          "sdPct": 0.046,
           "priorPct": 0.009,
-          "tivAreaShare": 0.0605,
+          "tivAreaShare": 0.07,
           "countiesDominant": 9,
           "empiricalPct": 0.68,
-          "sigmaLogCountyHoldout": 2.36,
+          "sigmaLogCountyHoldout": 2.461,
           "countyBiasHoldout": -1.435,
           "sigmaLogEventHoldout": null,
-          "sigmaUsed": 0.939,
+          "sigmaUsed": 0.92,
           "sigmaSource": "pooled event holdout (ratio fixed)",
           "eventErrors": {
             "AL092022": {
-              "logError": -3.263,
+              "logError": -3.595,
               "actual": 61126028
             },
             "AL112017": {
-              "logError": -0.415,
+              "logError": -0.374,
               "actual": 48210649
             }
           }
@@ -1125,155 +858,119 @@
         {
           "category": 1,
           "label": "Cat 1",
-          "meanPct": 1.535,
-          "fitPct": 1.535,
+          "meanPct": 1.308,
+          "fitPct": 1.308,
           "identified": true,
           "fixed": false,
-          "sdPct": 1.818,
+          "sdPct": 1.55,
           "priorPct": 0.071,
-          "tivAreaShare": 0.6433,
-          "countiesDominant": 140,
-          "empiricalPct": 1.446,
-          "sigmaLogCountyHoldout": 1.494,
-          "countyBiasHoldout": -0.134,
+          "tivAreaShare": 0.6513,
+          "countiesDominant": 81,
+          "empiricalPct": 1.367,
+          "sigmaLogCountyHoldout": 1.563,
+          "countyBiasHoldout": -0.119,
           "sigmaLogEventHoldout": 0.936,
           "sigmaUsed": 0.936,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL022024": {
-              "logError": 0.762,
+              "logError": 0.641,
               "actual": 155656292
             },
-            "AL062018": {
-              "logError": 0.254,
-              "actual": 171379826
-            },
             "AL092021": {
-              "logError": -0.696,
+              "logError": -0.873,
               "actual": 273278142
             },
             "AL092022": {
-              "logError": -0.591,
+              "logError": -0.75,
               "actual": 1514473242
             },
-            "AL092024": {
-              "logError": -0.933,
-              "actual": 173213012
-            },
             "AL112017": {
-              "logError": 1.539,
+              "logError": 1.589,
               "actual": 417110960
             },
             "AL132020": {
-              "logError": -1.147,
+              "logError": -1.323,
               "actual": 102540719
             },
             "AL142018": {
-              "logError": 0.019,
+              "logError": -0.078,
               "actual": 57773604
             },
             "AL142024": {
-              "logError": 0.309,
+              "logError": 0.128,
               "actual": 342490373
-            },
-            "AL192020": {
-              "logError": -2.136,
-              "actual": 107204201
-            },
-            "AL262020": {
-              "logError": -0.343,
-              "actual": 34167708
-            },
-            "AL282020": {
-              "logError": 0.219,
-              "actual": 54661394
             }
           }
         },
         {
           "category": 2,
           "label": "Cat 2",
-          "meanPct": 1.777,
-          "fitPct": 1.777,
+          "meanPct": 1.308,
+          "fitPct": 1.308,
           "identified": true,
           "fixed": false,
-          "sdPct": 2.819,
+          "sdPct": 1.134,
           "priorPct": 0.232,
-          "tivAreaShare": 0.1812,
-          "countiesDominant": 31,
-          "empiricalPct": 1.538,
-          "sigmaLogCountyHoldout": 1.401,
-          "countyBiasHoldout": 0.089,
-          "sigmaLogEventHoldout": 1.122,
-          "sigmaUsed": 1.122,
+          "tivAreaShare": 0.1557,
+          "countiesDominant": 16,
+          "empiricalPct": 1.246,
+          "sigmaLogCountyHoldout": 1.109,
+          "countyBiasHoldout": -0.251,
+          "sigmaLogEventHoldout": 0.749,
+          "sigmaUsed": 0.749,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": -0.522,
+              "logError": -0.714,
               "actual": 103464462
             },
             "AL092022": {
-              "logError": -0.612,
+              "logError": -0.55,
               "actual": 38272258
             },
-            "AL092024": {
-              "logError": -0.911,
-              "actual": 57858834
-            },
             "AL112017": {
-              "logError": 1.226,
+              "logError": 1.276,
               "actual": 101613872
             },
             "AL142024": {
-              "logError": 0.291,
+              "logError": -0.017,
               "actual": 238558221
-            },
-            "AL192020": {
-              "logError": -1.409,
-              "actual": 312687687
-            },
-            "AL282020": {
-              "logError": 2.25,
-              "actual": 32176617
             }
           }
         },
         {
           "category": 3,
           "label": "Cat 3",
-          "meanPct": 1.777,
-          "fitPct": 1.777,
+          "meanPct": 2.585,
+          "fitPct": 2.585,
           "identified": true,
           "fixed": false,
-          "sdPct": 1.024,
+          "sdPct": 1.772,
           "priorPct": 0.671,
-          "tivAreaShare": 0.0615,
-          "countiesDominant": 15,
-          "empiricalPct": 1.962,
-          "sigmaLogCountyHoldout": 1.076,
-          "countyBiasHoldout": 0.109,
-          "sigmaLogEventHoldout": 0.536,
-          "sigmaUsed": 0.536,
+          "tivAreaShare": 0.0626,
+          "countiesDominant": 10,
+          "empiricalPct": 2.06,
+          "sigmaLogCountyHoldout": 0.758,
+          "countyBiasHoldout": 0.452,
+          "sigmaLogEventHoldout": 0.621,
+          "sigmaUsed": 0.621,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": 0.745,
+              "logError": 0.79,
               "actual": 32293347
             },
             "AL092022": {
-              "logError": -0.845,
+              "logError": -0.672,
               "actual": 51003485
             },
-            "AL092024": {
-              "logError": 0.042,
-              "actual": 30753012
-            },
             "AL132020": {
-              "logError": -0.609,
+              "logError": -0.429,
               "actual": 30709293
             },
             "AL142024": {
-              "logError": 0.201,
+              "logError": 0.578,
               "actual": 196007614
             }
           }
@@ -1281,39 +978,35 @@
         {
           "category": 4,
           "label": "Cat 4",
-          "meanPct": 15.883,
-          "fitPct": 15.883,
+          "meanPct": 16.335,
+          "fitPct": 16.335,
           "identified": true,
           "fixed": false,
-          "sdPct": 4.669,
+          "sdPct": 4.788,
           "priorPct": 2.183,
-          "tivAreaShare": 0.0521,
-          "countiesDominant": 13,
-          "empiricalPct": 12.894,
-          "sigmaLogCountyHoldout": 0.759,
-          "countyBiasHoldout": 0.382,
-          "sigmaLogEventHoldout": 0.288,
-          "sigmaUsed": 0.288,
+          "tivAreaShare": 0.0587,
+          "countiesDominant": 10,
+          "empiricalPct": 13.029,
+          "sigmaLogCountyHoldout": 0.72,
+          "countyBiasHoldout": 0.56,
+          "sigmaLogEventHoldout": 0.287,
+          "sigmaUsed": 0.287,
           "sigmaSource": "event holdout",
           "eventErrors": {
             "AL092021": {
-              "logError": 0.08,
+              "logError": 0.087,
               "actual": 44201277
             },
             "AL092022": {
-              "logError": -0.263,
+              "logError": -0.214,
               "actual": 1899833280
             },
-            "AL092024": {
-              "logError": 0.3,
-              "actual": 60981666
-            },
             "AL132020": {
-              "logError": 0.52,
+              "logError": 0.581,
               "actual": 228149386
             },
             "AL142018": {
-              "logError": -0.018,
+              "logError": 0.021,
               "actual": 463626835
             }
           }
@@ -1321,19 +1014,19 @@
         {
           "category": 5,
           "label": "Cat 5",
-          "meanPct": 32.772,
-          "fitPct": 15.883,
+          "meanPct": 33.705,
+          "fitPct": 16.335,
           "identified": false,
           "fixed": false,
-          "sdPct": 9.635,
+          "sdPct": 9.879,
           "priorPct": 4.504,
-          "tivAreaShare": 0.0015,
+          "tivAreaShare": 0.0017,
           "countiesDominant": 0,
           "empiricalPct": null,
           "sigmaLogCountyHoldout": null,
           "countyBiasHoldout": null,
           "sigmaLogEventHoldout": null,
-          "sigmaUsed": 0.288,
+          "sigmaUsed": 0.287,
           "sigmaSource": "Cat 4 event holdout (not identified)",
           "eventErrors": {}
         }

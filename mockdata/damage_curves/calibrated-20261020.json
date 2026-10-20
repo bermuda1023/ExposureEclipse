@@ -1,8 +1,8 @@
 {
   "id": "calibrated-20261020",
-  "label": "Calibrated 2026-10-20 (15 events)",
+  "label": "Calibrated 2026-10-20 (7 wind-dominant events)",
   "kind": "calibrated",
-  "createdAt": "2026-10-20T15:25:09+00:00",
+  "createdAt": "2026-10-20T17:07:27+00:00",
   "bandsMphLo": [
     41,
     51,
@@ -20,58 +20,58 @@
   ],
   "segments": {
     "RESIDENTIAL": [
-      0.000519,
-      0.002019,
-      0.007719,
-      0.022067,
-      0.05154,
-      0.105005,
-      0.180453,
-      0.273015,
-      0.34466,
-      0.464681,
-      0.562696,
-      0.655181,
-      0.779534
+      0.00084,
+      0.002799,
+      0.0084,
+      0.022254,
+      0.050668,
+      0.101701,
+      0.168645,
+      0.246306,
+      0.310942,
+      0.419222,
+      0.507648,
+      0.591085,
+      0.703273
     ],
     "COMMERCIAL": [
-      0.000163,
-      0.000864,
-      0.004421,
-      0.015634,
-      0.040705,
-      0.081033,
-      0.13025,
-      0.185631,
-      0.237861,
-      0.325434,
-      0.396958,
-      0.464446,
-      0.55519
+      0.000503,
+      0.001723,
+      0.005609,
+      0.01804,
+      0.044156,
+      0.07821,
+      0.111907,
+      0.146485,
+      0.1877,
+      0.256805,
+      0.313246,
+      0.366502,
+      0.438109
     ],
     "AUTO": [
-      0.001482,
-      0.002946,
-      0.006792,
-      0.016031,
-      0.035355,
-      0.068944,
-      0.107628,
-      0.128771,
-      0.167609,
-      0.237366,
-      0.297787,
-      0.357195,
-      0.439997
+      0.002004,
+      0.00282,
+      0.005247,
+      0.012314,
+      0.030751,
+      0.069452,
+      0.121663,
+      0.150643,
+      0.196077,
+      0.277683,
+      0.348367,
+      0.417865,
+      0.514731
     ]
   },
   "windFactor": 0.8,
   "windExponent": -0.3585,
   "windFloor": 0.9103,
   "deductible": {},
-  "sigmaLogCounty": 1.7542,
-  "sigmaLogEvent": 1.1023,
-  "sigmaLogEventWeighted": 0.8395,
+  "sigmaLogCounty": 1.5934,
+  "sigmaLogEvent": 0.8145,
+  "sigmaLogEventWeighted": 0.6283,
   "fit": {
     "prior": "kcc",
     "target": "insured loss (deductible learned in the curve)",
@@ -86,17 +86,516 @@
       "AUTO": 0.0311
     },
     "panelBand": {
-      "lowFactor": 0.415968,
-      "highFactor": 6.559247,
-      "coveredEvents": 12,
-      "scorableEvents": 14,
+      "lowFactor": 0.596,
+      "highFactor": 1.862,
+      "coverageTarget": 0.8,
+      "coveredEvents": 6,
+      "scorableEvents": 7,
       "suppliedEvents": 15,
       "outsideEvents": [
-        "AL042024",
-        "AL282020"
+        "AL092021"
       ],
-      "basis": "Finite-sample empirical P10-P90 order-statistic range of full on-levelled PCS event total / leave-one-event-out panel model across all 14 scorable events (12/14 covered); PCS excludes NFIP. Maria is unscorable because the book has no matching TIV."
+      "appliesTo": "wind-dominant events",
+      "basis": "Narrowest range of leave-one-event-out factors (on-levelled PCS loss in the book / panel PCS-calibrated mean) holding 6 of the 7 wind-dominant training events; outside it: Ida. PCS excludes NFIP.",
+      "events": [
+        {
+          "stormId": "AL022024",
+          "name": "Beryl",
+          "trained": true,
+          "reasons": [],
+          "actual": 3215393500,
+          "model": 5394377626,
+          "factor": 0.5961,
+          "withinRange": true
+        },
+        {
+          "stormId": "AL042024",
+          "name": "Debby",
+          "trained": false,
+          "reasons": [
+            "outsideFootprint"
+          ],
+          "actual": 1415377260,
+          "model": 17786412,
+          "factor": 79.5763,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL062018",
+          "name": "Florence",
+          "trained": false,
+          "reasons": [
+            "stalled",
+            "outsideFootprint"
+          ],
+          "actual": 7750555733,
+          "model": 2846312978,
+          "factor": 2.723,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL092020",
+          "name": "Isaias",
+          "trained": false,
+          "reasons": [
+            "outsideFootprint"
+          ],
+          "actual": 2859955089,
+          "model": 446264791,
+          "factor": 6.4087,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL092021",
+          "name": "Ida",
+          "trained": true,
+          "reasons": [],
+          "actual": 35703979584,
+          "model": 7273923320,
+          "factor": 4.9085,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL092022",
+          "name": "Ian",
+          "trained": true,
+          "reasons": [],
+          "actual": 57480170723,
+          "model": 60607859018,
+          "factor": 0.9484,
+          "withinRange": true
+        },
+        {
+          "stormId": "AL092024",
+          "name": "Helene",
+          "trained": false,
+          "reasons": [
+            "outsideFootprint"
+          ],
+          "actual": 17496860860,
+          "model": 3979095581,
+          "factor": 4.3972,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL112017",
+          "name": "Irma",
+          "trained": true,
+          "reasons": [],
+          "actual": 40068602398,
+          "model": 21523218333,
+          "factor": 1.8616,
+          "withinRange": true
+        },
+        {
+          "stormId": "AL132020",
+          "name": "Laura",
+          "trained": true,
+          "reasons": [],
+          "actual": 16053243012,
+          "model": 14000061668,
+          "factor": 1.1467,
+          "withinRange": true
+        },
+        {
+          "stormId": "AL142018",
+          "name": "Michael",
+          "trained": true,
+          "reasons": [],
+          "actual": 18975523111,
+          "model": 13763130884,
+          "factor": 1.3787,
+          "withinRange": true
+        },
+        {
+          "stormId": "AL142024",
+          "name": "Milton",
+          "trained": true,
+          "reasons": [],
+          "actual": 25495866895,
+          "model": 27744681971,
+          "factor": 0.9189,
+          "withinRange": true
+        },
+        {
+          "stormId": "AL152017",
+          "name": "Maria",
+          "trained": false,
+          "reasons": [
+            "noExposure"
+          ],
+          "actual": 0,
+          "model": 0,
+          "factor": null,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL192020",
+          "name": "Sally",
+          "trained": false,
+          "reasons": [
+            "stalled"
+          ],
+          "actual": 4989689762,
+          "model": 2396958769,
+          "factor": 2.0817,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL262020",
+          "name": "Delta",
+          "trained": false,
+          "reasons": [
+            "outsideFootprint"
+          ],
+          "actual": 2574198064,
+          "model": 421416965,
+          "factor": 6.1084,
+          "withinRange": false
+        },
+        {
+          "stormId": "AL282020",
+          "name": "Zeta",
+          "trained": false,
+          "reasons": [
+            "outsideFootprint"
+          ],
+          "actual": 3591273880,
+          "model": 10331462752,
+          "factor": 0.3476,
+          "withinRange": false
+        }
+      ]
     },
+    "eventRules": {
+      "noExposure": {
+        "maxShare": 0.5,
+        "reason": "Most of the PCS loss is where the industry book has no TIV, so the event cannot be priced."
+      },
+      "stalled": {
+        "minHours": 36,
+        "radiusNm": 100,
+        "reason": "Stalled storm: the centre stayed 36+ hours within 100 nm of its strongest US landfall. Loss is driven by rainfall flooding and wind duration, which a peak-wind damage curve cannot represent (Harvey 2017 is the archetype)."
+      },
+      "outsideFootprint": {
+        "maxShare": 0.5,
+        "reason": "Most of the PCS loss is in counties outside the modelled hurricane-force wind field (inland tropical-storm-force wind, tornadoes, remnant rainfall or flooding), so the curve never sees the wind that caused it."
+      }
+    },
+    "eventSet": [
+      {
+        "stormId": "AL022024",
+        "name": "Beryl",
+        "year": 2024,
+        "included": true,
+        "reasons": [],
+        "mechanism": "Cat 1 landfall at Matagorda Bay. Houston loss is wind: tree fall onto roofs and lines across the metro.",
+        "metrics": {
+          "pcsLoss": 3482455095,
+          "noTivShare": 0.0767,
+          "outsideFootprintShare": 0.2516,
+          "stallHours": 15.0,
+          "landfall": {
+            "time": "2024-07-08T08:40:00Z",
+            "lat": 28.6,
+            "lon": -96.0,
+            "windKt": 80
+          }
+        }
+      },
+      {
+        "stormId": "AL042024",
+        "name": "Debby",
+        "year": 2024,
+        "included": false,
+        "reasons": [
+          "outsideFootprint"
+        ],
+        "mechanism": "Cat 1 Big Bend landfall, then a slow track over Georgia and South Carolina with extreme rainfall, and remnant flooding as far as the Northeast. Rain and flood driven.",
+        "metrics": {
+          "pcsLoss": 1752830541,
+          "noTivShare": 0.1925,
+          "outsideFootprintShare": 0.9955,
+          "stallHours": 24.0,
+          "landfall": {
+            "time": "2024-08-05T11:00:00Z",
+            "lat": 29.7,
+            "lon": -83.5,
+            "windKt": 70
+          }
+        }
+      },
+      {
+        "stormId": "AL062018",
+        "name": "Florence",
+        "year": 2018,
+        "included": false,
+        "reasons": [
+          "stalled",
+          "outsideFootprint"
+        ],
+        "mechanism": "Stalled near Wilmington and set North Carolina's rainfall record; river and flash flooding drove the loss. The closest supplied analogue to Harvey.",
+        "metrics": {
+          "pcsLoss": 7750555733,
+          "noTivShare": 0.0,
+          "outsideFootprintShare": 0.6507,
+          "stallHours": 45.0,
+          "landfall": {
+            "time": "2018-09-14T11:15:00Z",
+            "lat": 34.2,
+            "lon": -77.8,
+            "windKt": 80
+          }
+        }
+      },
+      {
+        "stormId": "AL092020",
+        "name": "Isaias",
+        "year": 2020,
+        "included": false,
+        "reasons": [
+          "outsideFootprint"
+        ],
+        "mechanism": "Cat 1 North Carolina landfall, then raced up the East Coast as a tropical storm. Loss came from tropical-storm-force tree fall and tornadoes in the Mid-Atlantic and Northeast.",
+        "metrics": {
+          "pcsLoss": 2870585121,
+          "noTivShare": 0.0037,
+          "outsideFootprintShare": 0.9813,
+          "stallHours": 6.0,
+          "landfall": {
+            "time": "2020-08-04T03:10:00Z",
+            "lat": 33.9,
+            "lon": -78.5,
+            "windKt": 80
+          }
+        }
+      },
+      {
+        "stormId": "AL092021",
+        "name": "Ida",
+        "year": 2021,
+        "included": true,
+        "reasons": [],
+        "mechanism": "Cat 4 Port Fourchon landfall. Louisiana loss is wind, and ASOS winds in Orleans Parish match the model. About 28% of the loss is remnant flash flooding in NY, NJ and PA, below the exclusion threshold, so Ida stays in.",
+        "metrics": {
+          "pcsLoss": 35748727253,
+          "noTivShare": 0.0013,
+          "outsideFootprintShare": 0.2792,
+          "stallHours": 21.0,
+          "landfall": {
+            "time": "2021-08-29T16:55:00Z",
+            "lat": 29.1,
+            "lon": -90.2,
+            "windKt": 130
+          }
+        }
+      },
+      {
+        "stormId": "AL092022",
+        "name": "Ian",
+        "year": 2022,
+        "included": true,
+        "reasons": [],
+        "mechanism": "Cat 4 Cayo Costa landfall with peninsula-wide wind. Lee and Charlotte surge is material, but 93% of the PCS loss is inside the modelled wind field and PCS excludes NFIP.",
+        "metrics": {
+          "pcsLoss": 57480170723,
+          "noTivShare": 0.0,
+          "outsideFootprintShare": 0.0691,
+          "stallHours": 24.0,
+          "landfall": {
+            "time": "2022-09-28T19:05:00Z",
+            "lat": 26.7,
+            "lon": -82.2,
+            "windKt": 130
+          }
+        }
+      },
+      {
+        "stormId": "AL092024",
+        "name": "Helene",
+        "year": 2024,
+        "included": false,
+        "reasons": [
+          "outsideFootprint"
+        ],
+        "mechanism": "Large, fast-moving Cat 4. Loss came from tropical-storm-force wind far inland across Georgia and the Carolinas and from Appalachian freshwater flooding.",
+        "metrics": {
+          "pcsLoss": 18309522368,
+          "noTivShare": 0.0444,
+          "outsideFootprintShare": 0.8906,
+          "stallHours": 6.0,
+          "landfall": {
+            "time": "2024-09-27T03:10:00Z",
+            "lat": 30.0,
+            "lon": -83.7,
+            "windKt": 120
+          }
+        }
+      },
+      {
+        "stormId": "AL112017",
+        "name": "Irma",
+        "year": 2017,
+        "included": true,
+        "reasons": [],
+        "mechanism": "Cat 4 Keys and Cat 3 Marco Island landfalls with peninsula-wide wind. Loss outside the book (USVI / Puerto Rico rows) is left out of the score.",
+        "metrics": {
+          "pcsLoss": 45652084473,
+          "noTivShare": 0.1223,
+          "outsideFootprintShare": 0.2386,
+          "stallHours": 24.0,
+          "landfall": {
+            "time": "2017-09-10T13:00:00Z",
+            "lat": 24.7,
+            "lon": -81.5,
+            "windKt": 115
+          }
+        }
+      },
+      {
+        "stormId": "AL132020",
+        "name": "Laura",
+        "year": 2020,
+        "included": true,
+        "reasons": [],
+        "mechanism": "Compact Cat 4 Cameron landfall. Wind-driven.",
+        "metrics": {
+          "pcsLoss": 16373726989,
+          "noTivShare": 0.0196,
+          "outsideFootprintShare": 0.2129,
+          "stallHours": 12.0,
+          "landfall": {
+            "time": "2020-08-27T06:00:00Z",
+            "lat": 29.8,
+            "lon": -93.3,
+            "windKt": 130
+          }
+        }
+      },
+      {
+        "stormId": "AL142018",
+        "name": "Michael",
+        "year": 2018,
+        "included": true,
+        "reasons": [],
+        "mechanism": "Compact Cat 5 Mexico Beach landfall. Wind-driven; surge was local to the landfall coast.",
+        "metrics": {
+          "pcsLoss": 18975523111,
+          "noTivShare": 0.0,
+          "outsideFootprintShare": 0.1364,
+          "stallHours": 9.0,
+          "landfall": {
+            "time": "2018-10-10T17:30:00Z",
+            "lat": 30.0,
+            "lon": -85.5,
+            "windKt": 140
+          }
+        }
+      },
+      {
+        "stormId": "AL142024",
+        "name": "Milton",
+        "year": 2024,
+        "included": true,
+        "reasons": [],
+        "mechanism": "Cat 3 Siesta Key landfall. Wind, plus the tornado outbreak ahead of landfall.",
+        "metrics": {
+          "pcsLoss": 25495866895,
+          "noTivShare": 0.0,
+          "outsideFootprintShare": 0.2444,
+          "stallHours": 12.0,
+          "landfall": {
+            "time": "2024-10-10T00:30:00Z",
+            "lat": 27.4,
+            "lon": -82.6,
+            "windKt": 100
+          }
+        }
+      },
+      {
+        "stormId": "AL152017",
+        "name": "Maria",
+        "year": 2017,
+        "included": false,
+        "reasons": [
+          "noExposure"
+        ],
+        "mechanism": "Puerto Rico and USVI, where the industry book carries no TIV.",
+        "metrics": {
+          "pcsLoss": 36100322169,
+          "noTivShare": 1.0,
+          "outsideFootprintShare": null,
+          "stallHours": null,
+          "landfall": null
+        }
+      },
+      {
+        "stormId": "AL192020",
+        "name": "Sally",
+        "year": 2020,
+        "included": false,
+        "reasons": [
+          "stalled"
+        ],
+        "mechanism": "Crawled ashore at Gulf Shores at walking pace, with extreme rainfall over Baldwin County and Pensacola. Rain flooding and long-duration wind, not peak wind.",
+        "metrics": {
+          "pcsLoss": 4989689762,
+          "noTivShare": 0.0,
+          "outsideFootprintShare": 0.1961,
+          "stallHours": 51.0,
+          "landfall": {
+            "time": "2020-09-16T09:45:00Z",
+            "lat": 30.3,
+            "lon": -87.7,
+            "windKt": 95
+          }
+        }
+      },
+      {
+        "stormId": "AL262020",
+        "name": "Delta",
+        "year": 2020,
+        "included": false,
+        "reasons": [
+          "outsideFootprint"
+        ],
+        "mechanism": "Landed about 12 miles east of Laura's landfall six weeks later, on Laura-damaged and tarped roofs, so the PCS split between the two events is confounded. Most of the loss was inland, outside the modelled field.",
+        "metrics": {
+          "pcsLoss": 2585325295,
+          "noTivShare": 0.0043,
+          "outsideFootprintShare": 0.6951,
+          "stallHours": 9.0,
+          "landfall": {
+            "time": "2020-10-09T23:00:00Z",
+            "lat": 29.8,
+            "lon": -93.1,
+            "windKt": 85
+          }
+        }
+      },
+      {
+        "stormId": "AL282020",
+        "name": "Zeta",
+        "year": 2020,
+        "included": false,
+        "reasons": [
+          "outsideFootprint"
+        ],
+        "mechanism": "Very fast-moving Cat 3 in southeast Louisiana. Tropical-storm-force wind was carried far inland across Mississippi, Alabama, Georgia and the Carolinas.",
+        "metrics": {
+          "pcsLoss": 3591273880,
+          "noTivShare": 0.0,
+          "outsideFootprintShare": 0.561,
+          "stallHours": 6.0,
+          "landfall": {
+            "time": "2020-10-28T21:00:00Z",
+            "lat": 29.2,
+            "lon": -90.6,
+            "windKt": 100
+          }
+        }
+      }
+    ],
     "windCorrection": "none",
     "windModel": "observed",
     "countyWind": false,
@@ -127,78 +626,6 @@
           "RESIDENTIAL": 39,
           "COMMERCIAL": 39,
           "AUTO": 39
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL042024",
-        "name": "DEBBY",
-        "year": 2024,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 1753775805.4344864,
-        "reportedTotal": 1648840000.0,
-        "onLevelFactor": 1.063642200234399,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 1084825402.6805525,
-        "exposureGapLoss": 0,
-        "countiesMatched": {
-          "RESIDENTIAL": 197,
-          "COMMERCIAL": 197,
-          "AUTO": 197
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL062018",
-        "name": "FLORENCE",
-        "year": 2018,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 7862181007.470559,
-        "reportedTotal": 4960310000.0,
-        "onLevelFactor": 1.5850180749732494,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 1496644438.459408,
-        "exposureGapLoss": 0,
-        "countiesMatched": {
-          "RESIDENTIAL": 138,
-          "COMMERCIAL": 138,
-          "AUTO": 138
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL092020",
-        "name": "ISAIAS",
-        "year": 2020,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 2873437194.9651833,
-        "reportedTotal": 2036435500.0,
-        "onLevelFactor": 1.4110131133370947,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 203304698.76998094,
-        "exposureGapLoss": 10615453.576855704,
-        "countiesMatched": {
-          "RESIDENTIAL": 254,
-          "COMMERCIAL": 254,
-          "AUTO": 254
         },
         "windBias": null,
         "windCorrection": 1.0,
@@ -247,30 +674,6 @@
           "RESIDENTIAL": 148,
           "COMMERCIAL": 148,
           "AUTO": 148
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL092024",
-        "name": "HELENE",
-        "year": 2024,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 18311988311.64163,
-        "reportedTotal": 17173210000.0,
-        "onLevelFactor": 1.0663113251186953,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 1268565418.083629,
-        "exposureGapLoss": 454935347.2645308,
-        "countiesMatched": {
-          "RESIDENTIAL": 293,
-          "COMMERCIAL": 293,
-          "AUTO": 293
         },
         "windBias": null,
         "windCorrection": 1.0,
@@ -371,169 +774,52 @@
         "windBias": null,
         "windCorrection": 1.0,
         "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL152017",
-        "name": "MARIA",
-        "year": 2017,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 42114863777.66427,
-        "reportedTotal": 26465850000.0,
-        "onLevelFactor": 1.5912908059882553,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 0,
-        "exposureGapLoss": 36100322168.597336,
-        "countiesMatched": {
-          "RESIDENTIAL": 0,
-          "COMMERCIAL": 0,
-          "AUTO": 0
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL192020",
-        "name": "SALLY",
-        "year": 2020,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 4990936927.340937,
-        "reportedTotal": 3364960000.0,
-        "onLevelFactor": 1.4832083969321883,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 559534219.2581123,
-        "exposureGapLoss": 0,
-        "countiesMatched": {
-          "RESIDENTIAL": 37,
-          "COMMERCIAL": 37,
-          "AUTO": 37
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL262020",
-        "name": "DELTA",
-        "year": 2020,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 2586435767.143344,
-        "reportedTotal": 1799310000.0,
-        "onLevelFactor": 1.4374597857752938,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 331058062.75451225,
-        "exposureGapLoss": 0,
-        "countiesMatched": {
-          "RESIDENTIAL": 81,
-          "COMMERCIAL": 81,
-          "AUTO": 81
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
-      },
-      {
-        "stormId": "AL282020",
-        "name": "ZETA",
-        "year": 2020,
-        "tiv": {
-          "kind": "book",
-          "year": null,
-          "file": "industry_exposure_counties.csv"
-        },
-        "actualTotal": 3591752514.0732555,
-        "reportedTotal": 2487000500.0,
-        "onLevelFactor": 1.444210611969421,
-        "onLevelTarget": "2026-01-01",
-        "footprintMissLoss": 51612586.24745202,
-        "exposureGapLoss": 0,
-        "countiesMatched": {
-          "RESIDENTIAL": 306,
-          "COMMERCIAL": 306,
-          "AUTO": 306
-        },
-        "windBias": null,
-        "windCorrection": 1.0,
-        "observedWindMultiplier": null
       }
     ],
     "segments": {
       "RESIDENTIAL": {
         "status": "fitted",
-        "nObs": 2398,
+        "nObs": 1092,
         "events": [
           "AL022024",
-          "AL042024",
-          "AL062018",
-          "AL092020",
           "AL092021",
           "AL092022",
-          "AL092024",
           "AL112017",
           "AL132020",
           "AL142018",
-          "AL142024",
-          "AL192020",
-          "AL262020",
-          "AL282020"
+          "AL142024"
         ],
-        "iterations": 954,
-        "objective": 2.436695100096179,
-        "countyLogRmsInSample": 1.6448297213355871,
-        "countyLogRmsHoldout": 1.711339687431899,
+        "iterations": 917,
+        "objective": 1.7051979306042808,
+        "countyLogRmsInSample": 1.585951675885513,
+        "countyLogRmsHoldout": 1.6354231453403845,
         "eventLogErrorInSample": {
-          "AL022024": 0.8951131048719321,
-          "AL042024": 1.2461207700411958,
-          "AL062018": -0.26496623503135047,
-          "AL092020": 1.8782832163332113,
-          "AL092021": -0.8911839468421033,
-          "AL092022": 0.41212499182389056,
-          "AL092024": -0.3751419470277328,
-          "AL112017": -0.389052563536445,
-          "AL132020": -0.21085050954340417,
-          "AL142018": -0.09002050443000349,
-          "AL142024": 0.48547203457432647,
-          "AL192020": -0.4483571794916256,
-          "AL262020": -0.8328619508894376,
-          "AL282020": 1.1139498221134387
+          "AL022024": 1.0809763855587096,
+          "AL092021": -0.6783665748657877,
+          "AL092022": 0.4084356657166134,
+          "AL112017": -0.2505577821472358,
+          "AL132020": -0.23777727991926256,
+          "AL142018": 0.039862508157016564,
+          "AL142024": 0.5633873073964567
         },
         "eventLogErrorHoldout": {
-          "AL022024": 0.9915363890252877,
-          "AL042024": 1.483730069293036,
-          "AL062018": -0.2989258560921964,
-          "AL092020": 2.160170623376732,
-          "AL092021": -0.9840228518109791,
-          "AL092022": 0.6477318349128763,
-          "AL092024": -0.4530749013607143,
-          "AL112017": -0.4711727003844129,
-          "AL132020": -0.2486191047645251,
-          "AL142018": -0.12932497474565013,
-          "AL142024": 0.5807587863652118,
-          "AL192020": -0.508330449195675,
-          "AL262020": -0.9205186576236319,
-          "AL282020": 1.2313578024215288
+          "AL022024": 1.3192182376222283,
+          "AL092021": -0.8029444133410444,
+          "AL092022": 0.6246095412155306,
+          "AL112017": -0.3649016214590188,
+          "AL132020": -0.30189417640795063,
+          "AL142018": 0.08814639984272786,
+          "AL142024": 0.770549825045205
         },
         "bandWeight": [
-          0.6022,
-          0.3094,
-          0.0623,
-          0.0141,
-          0.006,
+          0.5695,
+          0.2892,
+          0.1026,
+          0.0177,
+          0.0097,
+          0.0028,
+          0.0067,
           0.0016,
-          0.0035,
-          0.0008,
           0.0001,
           0.0,
           0.0,
@@ -543,24 +829,17 @@
         "impliedDrByBand": [
           {
             "curveMph": 55.5,
-            "n": 188,
-            "median": 0.0008547589158120732,
+            "n": 53,
+            "median": 0.0052088086966857825,
             "min": 5.094455111929509e-05,
             "max": 0.06826697932720655
           },
           {
             "curveMph": 65.5,
-            "n": 18,
-            "median": 0.014952653388020109,
-            "min": 0.00030130055210796986,
+            "n": 8,
+            "median": 0.035056100442023785,
+            "min": 0.003309884754513099,
             "max": 0.07683067000450175
-          },
-          {
-            "curveMph": 75.5,
-            "n": 2,
-            "median": 0.03755654620512081,
-            "min": 0.004348473354465691,
-            "max": 0.03755654620512081
           },
           {
             "curveMph": 105.5,
@@ -573,69 +852,48 @@
       },
       "COMMERCIAL": {
         "status": "fitted",
-        "nObs": 2398,
+        "nObs": 1092,
         "events": [
           "AL022024",
-          "AL042024",
-          "AL062018",
-          "AL092020",
           "AL092021",
           "AL092022",
-          "AL092024",
           "AL112017",
           "AL132020",
           "AL142018",
-          "AL142024",
-          "AL192020",
-          "AL262020",
-          "AL282020"
+          "AL142024"
         ],
-        "iterations": 409,
-        "objective": 3.525407072196447,
-        "countyLogRmsInSample": 1.9293145438050012,
-        "countyLogRmsHoldout": 2.060553020096154,
+        "iterations": 856,
+        "objective": 2.278973007605691,
+        "countyLogRmsInSample": 1.6392610099522174,
+        "countyLogRmsHoldout": 1.6788630882936066,
         "eventLogErrorInSample": {
-          "AL022024": 1.544718634618684,
-          "AL042024": 1.9023754017180803,
-          "AL062018": -0.6009932004690359,
-          "AL092020": 2.6251234065888465,
-          "AL092021": -0.8905039902934424,
-          "AL092022": -0.1357812730516418,
-          "AL092024": -0.44048684784578307,
-          "AL112017": -0.30480121810469957,
-          "AL132020": 0.13500239256281782,
-          "AL142018": 0.4004486123450432,
-          "AL142024": -0.44030353951659745,
-          "AL192020": -0.3828325209905558,
-          "AL262020": -0.3984650742174025,
-          "AL282020": 1.9040476668215884
+          "AL022024": 1.9738931351051898,
+          "AL092021": -0.4505307217414161,
+          "AL092022": -0.12328756160618416,
+          "AL112017": 0.026958430524358767,
+          "AL132020": 0.059288012501629454,
+          "AL142018": 0.49840139679761547,
+          "AL142024": -0.22544123958500056
         },
         "eventLogErrorHoldout": {
-          "AL022024": 1.697288915376437,
-          "AL042024": 2.3969253441393326,
-          "AL062018": -0.6668524577833226,
-          "AL092020": 3.0856744876274624,
-          "AL092021": -1.0001923066863305,
-          "AL092022": -0.10909330704881127,
-          "AL092024": -0.4984592220862056,
-          "AL112017": -0.34244233140261193,
-          "AL132020": 0.2359608986759845,
-          "AL142018": 0.6771174484832556,
-          "AL142024": -0.5185356635961029,
-          "AL192020": -0.4327835364991956,
-          "AL262020": -0.46937277207054534,
-          "AL282020": 2.1679999648144372
+          "AL022024": 2.3903267337493426,
+          "AL092021": -0.5372761040565817,
+          "AL092022": -0.17573950695963136,
+          "AL112017": 0.05187780910475128,
+          "AL132020": 0.16261803912750056,
+          "AL142018": 0.6650924562286398,
+          "AL142024": -0.31269069265726296
         },
         "bandWeight": [
-          0.6245,
-          0.2946,
-          0.0567,
-          0.0134,
-          0.0054,
-          0.0016,
-          0.0029,
-          0.0008,
-          0.0001,
+          0.6136,
+          0.2586,
+          0.0943,
+          0.0153,
+          0.0083,
+          0.0027,
+          0.0056,
+          0.0015,
+          0.0002,
           0.0,
           0.0,
           0.0,
@@ -644,24 +902,17 @@
         "impliedDrByBand": [
           {
             "curveMph": 55.5,
-            "n": 116,
-            "median": 0.002444394646692602,
-            "min": 2.4566281046039815e-05,
+            "n": 41,
+            "median": 0.005506964971934064,
+            "min": 3.437856269918841e-05,
             "max": 0.04876871685733478
           },
           {
             "curveMph": 65.5,
-            "n": 16,
-            "median": 0.00439638233537284,
+            "n": 8,
+            "median": 0.004669663644650493,
             "min": 0.00020526603244833822,
             "max": 0.035112339176420565
-          },
-          {
-            "curveMph": 75.5,
-            "n": 2,
-            "median": 0.02301184646645683,
-            "min": 0.0010490306317671489,
-            "max": 0.02301184646645683
           },
           {
             "curveMph": 105.5,
@@ -674,68 +925,47 @@
       },
       "AUTO": {
         "status": "fitted",
-        "nObs": 2398,
+        "nObs": 1092,
         "events": [
           "AL022024",
-          "AL042024",
-          "AL062018",
-          "AL092020",
           "AL092021",
           "AL092022",
-          "AL092024",
           "AL112017",
           "AL132020",
           "AL142018",
-          "AL142024",
-          "AL192020",
-          "AL262020",
-          "AL282020"
+          "AL142024"
         ],
-        "iterations": 653,
-        "objective": 2.4249652075825416,
-        "countyLogRmsInSample": 1.3623240906121057,
-        "countyLogRmsHoldout": 1.4341079730550923,
+        "iterations": 564,
+        "objective": 1.817007397832844,
+        "countyLogRmsInSample": 1.3253241838124206,
+        "countyLogRmsHoldout": 1.4571073822349832,
         "eventLogErrorInSample": {
-          "AL022024": 0.5834537609844167,
-          "AL042024": 0.6415186584506225,
-          "AL062018": 0.11728630438584337,
-          "AL092020": 1.2608679712347552,
-          "AL092021": -1.00112321554995,
-          "AL092022": -0.4358707046953957,
-          "AL092024": -1.0862674539475383,
-          "AL112017": 0.5966132178394167,
-          "AL132020": -0.3806187446486354,
-          "AL142018": 0.48696588115844325,
-          "AL142024": 0.15030175352328914,
-          "AL192020": -1.4068998788599523,
-          "AL262020": -0.29938292981093867,
-          "AL282020": 1.4548045487578525
+          "AL022024": 0.4772258570571947,
+          "AL092021": -0.8272908480147544,
+          "AL092022": -0.36531584973751263,
+          "AL112017": 0.4931754012232797,
+          "AL132020": -0.3143701604426673,
+          "AL142018": 0.6123112106335982,
+          "AL142024": 0.04229711246281165
         },
         "eventLogErrorHoldout": {
-          "AL022024": 0.6429554365640668,
-          "AL042024": 0.7482656561933567,
-          "AL062018": 0.11719366315351698,
-          "AL092020": 1.4362372871396478,
-          "AL092021": -1.1923204513891652,
-          "AL092022": -0.5285135579778321,
-          "AL092024": -1.2527963105196804,
-          "AL112017": 0.6881691690310063,
-          "AL132020": -0.47797550407661227,
-          "AL142018": 0.5589294034154133,
-          "AL142024": 0.1790544452431111,
-          "AL192020": -1.5628100890629562,
-          "AL262020": -0.32883072897813287,
-          "AL282020": 1.5697495641088213
+          "AL022024": 0.5702660128602459,
+          "AL092021": -1.3850458841133522,
+          "AL092022": -0.5115358623433102,
+          "AL112017": 0.6423666450482353,
+          "AL132020": -0.408294256298627,
+          "AL142018": 0.8016990504518283,
+          "AL142024": 0.040260693915320556
         },
         "bandWeight": [
-          0.5917,
-          0.3109,
-          0.0683,
-          0.0157,
-          0.0067,
-          0.0018,
-          0.0039,
-          0.001,
+          0.5423,
+          0.3073,
+          0.1082,
+          0.0196,
+          0.0105,
+          0.003,
+          0.007,
+          0.0019,
           0.0001,
           0.0,
           0.0,
@@ -745,24 +975,17 @@
         "impliedDrByBand": [
           {
             "curveMph": 55.5,
-            "n": 139,
-            "median": 0.0029036877157073136,
-            "min": 0.0001518653626463019,
-            "max": 0.05148322727815946
+            "n": 46,
+            "median": 0.0038776029691757357,
+            "min": 0.00021153765783951328,
+            "max": 0.037375431488411465
           },
           {
             "curveMph": 65.5,
-            "n": 17,
+            "n": 8,
             "median": 0.009039516298153305,
             "min": 0.0009899432685032022,
-            "max": 0.02952895740300009
-          },
-          {
-            "curveMph": 75.5,
-            "n": 2,
-            "median": 0.024402644410251768,
-            "min": 0.0023570645065321685,
-            "max": 0.024402644410251768
+            "max": 0.023816379287924315
           },
           {
             "curveMph": 105.5,
